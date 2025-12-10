@@ -37,7 +37,7 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   return (
     <header className="h-16 border-b border-border/50 bg-card/30 backdrop-blur-xl flex items-center justify-between px-4 lg:px-6">
       <div className="flex items-center gap-4">
-        <SidebarTrigger className="lg:hidden" />
+        <SidebarTrigger />
         
         {/* Global Search */}
         <div className="relative hidden sm:block">
