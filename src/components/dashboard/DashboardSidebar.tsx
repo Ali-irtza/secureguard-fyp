@@ -1,4 +1,4 @@
-import { Shield, LayoutDashboard, Plus, FolderKanban, FileBarChart, Settings, LogOut } from "lucide-react";
+import { Shield, LayoutDashboard, Plus, FolderKanban, FileBarChart, Settings, LogOut, HelpCircle, FileText } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
   Sidebar,
@@ -18,9 +18,11 @@ const mainNavItems = [
   { title: "New Scan", url: "/new-scan", icon: Plus, isPrimary: true },
   { title: "Projects", url: "/projects", icon: FolderKanban },
   { title: "Scan History", url: "/scan-history", icon: FileBarChart },
+  { title: "Reports", url: "/reports", icon: FileText },
 ];
 
 const bottomNavItems = [
+  { title: "Help", url: "/help", icon: HelpCircle },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
