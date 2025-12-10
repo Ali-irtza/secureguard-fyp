@@ -171,7 +171,18 @@ const ScanHistory = () => {
     setFailureDialogOpen(true);
   };
 
-  const exportToCSV = () => {
+  const getFilterSummary = () => {
+    const filters: string[] = [];
+    if (searchQuery) filters.push(`Search: "${searchQuery}"`);
+    if (statusFilter !== "all") filters.push(`Status: ${statusFilter}`);
+    if (dateRange.from) filters.push(`From: ${format(dateRange.from, "PP")}`);
+    if (dateRange.to) filters.push(`To: ${format(dateRange.to, "PP")}`);
+    return filters.length > 0 ? filters.join(" | ") : "None";
+  };
+
+  const exportToCSV = async () => {
+    const { generateCSVWithHeader } = await import("@/lib/report-config");
+    
     const headers = ["Project Name", "Date", "Duration (s)", "Critical", "High", "Medium", "Low", "Total Vulnerabilities", "Status"];
     const rows = sortedScans.map(scan => [
       scan.projectName,
@@ -185,84 +196,95 @@ const ScanHistory = () => {
       scan.status
     ]);
 
-    const csvContent = [headers, ...rows].map(row => row.join(",")).join("\n");
+    const csvContent = generateCSVWithHeader(
+      headers,
+      rows,
+      {
+        reportTitle: "Scan History Report",
+        generatedAt: format(new Date(), "PPpp"),
+        filterSummary: getFilterSummary(),
+        recordCount: sortedScans.length,
+      },
+      {
+        totalScans: stats.totalScans,
+        successRate: stats.successRate,
+        totalVulns: stats.totalVulns,
+        avgDuration: formatDuration(stats.avgDuration),
+      }
+    );
+
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `scan-history-${format(new Date(), "yyyy-MM-dd")}.csv`;
+    link.download = `secureguard-scan-history-${format(new Date(), "yyyy-MM-dd")}.csv`;
     link.click();
-    toast.success("Exported scan history to CSV");
+    toast.success("Exported branded report to CSV");
   };
 
-  const exportToPDF = () => {
-    // Create a simple HTML table for printing
+  const exportToPDF = async () => {
+    const { generatePDFTemplate } = await import("@/lib/report-config");
+    
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       toast.error("Please allow popups to export PDF");
       return;
     }
 
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Scan History Report</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
-            h1 { color: #333; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            th { background-color: #f4f4f4; font-weight: bold; }
-            tr:nth-child(even) { background-color: #f9f9f9; }
-            .critical { color: #dc2626; font-weight: bold; }
-            .high { color: #ea580c; }
-            .completed { color: #16a34a; }
-            .failed { color: #dc2626; }
-            .in_progress { color: #ca8a04; }
-            .meta { color: #666; font-size: 12px; margin-top: 10px; }
-          </style>
-        </head>
-        <body>
-          <h1>Scan History Report</h1>
-          <p class="meta">Generated on ${format(new Date(), "PPpp")}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Project Name</th>
-                <th>Date</th>
-                <th>Duration</th>
-                <th>Vulnerabilities</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sortedScans.map(scan => `
-                <tr>
-                  <td>${scan.projectName}</td>
-                  <td>${format(scan.date, "PPp")}</td>
-                  <td>${formatDuration(scan.duration)}</td>
-                  <td>
-                    ${scan.status === "completed" 
-                      ? `${getTotalVulnerabilities(scan.vulnerabilities)} total 
-                         ${scan.vulnerabilities.critical > 0 ? `<span class="critical">(${scan.vulnerabilities.critical} critical)</span>` : ""}
-                         ${scan.vulnerabilities.high > 0 ? `<span class="high">(${scan.vulnerabilities.high} high)</span>` : ""}`
-                      : "—"}
-                  </td>
-                  <td class="${scan.status}">${scan.status.replace("_", " ")}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </body>
-      </html>
+    const tableContent = `
+      <table>
+        <thead>
+          <tr>
+            <th>Project Name</th>
+            <th>Date</th>
+            <th>Duration</th>
+            <th>Vulnerabilities</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${sortedScans.map(scan => `
+            <tr>
+              <td><strong>${scan.projectName}</strong></td>
+              <td>${format(scan.date, "PPp")}</td>
+              <td>${formatDuration(scan.duration)}</td>
+              <td>
+                ${scan.status === "completed" 
+                  ? `<span class="vuln-total">${getTotalVulnerabilities(scan.vulnerabilities)} total</span>
+                     ${scan.vulnerabilities.critical > 0 ? `<span class="vuln-badge vuln-critical">${scan.vulnerabilities.critical} Critical</span>` : ""}
+                     ${scan.vulnerabilities.high > 0 ? `<span class="vuln-badge vuln-high">${scan.vulnerabilities.high} High</span>` : ""}
+                     ${scan.vulnerabilities.medium > 0 ? `<span class="vuln-badge vuln-medium">${scan.vulnerabilities.medium} Medium</span>` : ""}
+                     ${scan.vulnerabilities.low > 0 ? `<span class="vuln-badge vuln-low">${scan.vulnerabilities.low} Low</span>` : ""}`
+                  : "—"}
+              </td>
+              <td><span class="badge badge-${scan.status}">${scan.status.replace("_", " ")}</span></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
     `;
+
+    const htmlContent = generatePDFTemplate(
+      tableContent,
+      "Scan History Report",
+      {
+        generatedAt: format(new Date(), "PPpp"),
+        filterSummary: getFilterSummary(),
+        recordCount: sortedScans.length,
+      },
+      {
+        totalScans: stats.totalScans,
+        successRate: stats.successRate,
+        totalVulns: stats.totalVulns,
+        avgDuration: formatDuration(stats.avgDuration),
+      }
+    );
 
     printWindow.document.write(htmlContent);
     printWindow.document.close();
     printWindow.onload = () => {
       printWindow.print();
     };
-    toast.success("Opening print dialog for PDF export");
+    toast.success("Opening branded PDF report");
   };
 
   const filteredScans = mockScanHistory.filter((scan) => {
