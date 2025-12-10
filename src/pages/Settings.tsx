@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera } from "lucide-react";
+import { useTheme } from "next-themes";
+import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera, Palette, Sun, Moon, Monitor } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,8 +21,19 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+
+const accentColors = [
+  { value: "emerald", label: "Emerald", hsl: "160 84% 39%" },
+  { value: "blue", label: "Blue", hsl: "221 83% 53%" },
+  { value: "purple", label: "Purple", hsl: "262 83% 58%" },
+  { value: "orange", label: "Orange", hsl: "24 95% 53%" },
+  { value: "crimson", label: "Crimson", hsl: "348 83% 47%" },
+];
 
 const Settings = () => {
+  const { theme, setTheme } = useTheme();
+  
   // Profile state
   const [name, setName] = useState("Alex Johnson");
   const [email, setEmail] = useState("alex.johnson@secureguard.io");
@@ -37,6 +49,10 @@ const Settings = () => {
     scanCompleted: false,
     newProject: false,
   });
+
+  // Appearance state
+  const [accentColor, setAccentColor] = useState("emerald");
+  const [density, setDensity] = useState("comfortable");
 
   const handleSaveProfile = () => {
     toast.success("Profile updated successfully");
@@ -88,6 +104,13 @@ const Settings = () => {
             >
               <Bell className="h-4 w-4" />
               Notifications
+            </TabsTrigger>
+            <TabsTrigger
+              value="appearance"
+              className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+            >
+              <Palette className="h-4 w-4" />
+              Appearance
             </TabsTrigger>
           </TabsList>
 
@@ -298,6 +321,99 @@ const Settings = () => {
                   </div>
 
                   <Button onClick={() => toast.success("Notification preferences saved")} className="bg-primary hover:bg-primary/90">
+                    Save Preferences
+                  </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Appearance Tab */}
+            <TabsContent value="appearance" className="mt-0">
+              <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+                <CardHeader>
+                  <CardTitle>Appearance Settings</CardTitle>
+                  <CardDescription>Customize the look and feel of your dashboard</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Theme Selector */}
+                  <div className="space-y-3">
+                    <Label>Theme</Label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { value: "light", label: "Light", icon: Sun },
+                        { value: "dark", label: "Dark", icon: Moon },
+                        { value: "system", label: "System", icon: Monitor },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          onClick={() => setTheme(option.value)}
+                          className={`flex flex-col items-center gap-2 p-4 rounded-xl border transition-all ${
+                            theme === option.value
+                              ? "border-primary bg-primary/10"
+                              : "border-border/50 hover:border-border"
+                          }`}
+                        >
+                          <option.icon className={`h-6 w-6 ${theme === option.value ? "text-primary" : "text-muted-foreground"}`} />
+                          <span className={`text-sm font-medium ${theme === option.value ? "text-primary" : "text-muted-foreground"}`}>
+                            {option.label}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Accent Color */}
+                  <div className="space-y-3">
+                    <Label>Accent Color</Label>
+                    <div className="flex flex-wrap gap-3">
+                      {accentColors.map((color) => (
+                        <button
+                          key={color.value}
+                          onClick={() => {
+                            setAccentColor(color.value);
+                            toast.success(`Accent color changed to ${color.label}`);
+                          }}
+                          className={`w-10 h-10 rounded-full border-2 transition-all hover:scale-110 ${
+                            accentColor === color.value ? "border-foreground ring-2 ring-offset-2 ring-offset-background" : "border-transparent"
+                          }`}
+                          style={{ backgroundColor: `hsl(${color.hsl})` }}
+                          title={color.label}
+                        />
+                      ))}
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Choose an accent color for buttons and highlights
+                    </p>
+                  </div>
+
+                  {/* UI Density */}
+                  <div className="space-y-3">
+                    <Label>UI Density</Label>
+                    <RadioGroup value={density} onValueChange={setDensity} className="flex gap-4">
+                      {[
+                        { value: "comfortable", label: "Comfortable", desc: "More spacing, easier to read" },
+                        { value: "compact", label: "Compact", desc: "Denser layout, more content visible" },
+                      ].map((option) => (
+                        <Label
+                          key={option.value}
+                          htmlFor={option.value}
+                          className={`flex-1 flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all ${
+                            density === option.value
+                              ? "border-primary bg-primary/10"
+                              : "border-border/50 hover:border-border"
+                          }`}
+                        >
+                          <RadioGroupItem value={option.value} id={option.value} className="mt-1" />
+                          <div>
+                            <p className="font-medium text-foreground">{option.label}</p>
+                            <p className="text-sm text-muted-foreground">{option.desc}</p>
+                          </div>
+                        </Label>
+                      ))}
+                    </RadioGroup>
+                  </div>
+
+                  <Button onClick={() => toast.success("Appearance settings saved")} className="bg-primary hover:bg-primary/90">
                     Save Preferences
                   </Button>
                 </CardContent>
