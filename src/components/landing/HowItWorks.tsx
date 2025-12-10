@@ -1,4 +1,5 @@
 import { Upload, Shield, FileText, ArrowRight } from "lucide-react";
+import { useInView } from "@/hooks/use-in-view";
 
 const steps = [
   {
@@ -21,6 +22,52 @@ const steps = [
   },
 ];
 
+const StepCard = ({ step, index }: { step: typeof steps[0]; index: number }) => {
+  const { ref, isInView } = useInView({ threshold: 0.2 });
+
+  return (
+    <div 
+      ref={ref}
+      className="relative group"
+    >
+      {/* Step Card */}
+      <div 
+        className={`glass-card p-8 text-center relative z-10 transition-all duration-500 hover:scale-[1.02] hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10 ${
+          isInView 
+            ? "opacity-100 translate-y-0" 
+            : "opacity-0 translate-y-8"
+        }`}
+        style={{ transitionDelay: `${index * 150}ms` }}
+      >
+        {/* Number Badge */}
+        <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-3 py-1 bg-primary text-primary-foreground text-sm font-bold rounded-full transition-transform duration-300 group-hover:scale-110">
+          {step.number}
+        </div>
+
+        {/* Icon */}
+        <div className="w-20 h-20 mx-auto rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 mt-4 transition-all duration-300 group-hover:bg-primary/20 group-hover:border-primary/40">
+          <step.icon className="h-10 w-10 text-primary transition-transform duration-300 group-hover:scale-110" />
+        </div>
+
+        {/* Content */}
+        <h3 className="text-xl font-semibold text-foreground mb-3">
+          {step.title}
+        </h3>
+        <p className="text-muted-foreground">
+          {step.description}
+        </p>
+      </div>
+
+      {/* Arrow (Mobile) */}
+      {index < steps.length - 1 && (
+        <div className="md:hidden flex justify-center my-4">
+          <ArrowRight className="h-6 w-6 text-primary rotate-90" />
+        </div>
+      )}
+    </div>
+  );
+};
+
 const HowItWorks = () => {
   return (
     <section id="how-it-works" className="py-24 bg-muted/30 scroll-mt-16">
@@ -41,41 +88,7 @@ const HowItWorks = () => {
           <div className="hidden md:block absolute top-24 left-1/3 right-1/3 h-px bg-gradient-to-r from-primary/50 via-primary to-primary/50" />
 
           {steps.map((step, index) => (
-            <div 
-              key={index} 
-              className="relative group"
-              style={{ animationDelay: `${index * 150}ms` }}
-            >
-              {/* Step Card */}
-              <div className="glass-card p-8 text-center relative z-10 animate-fade-in opacity-0 [animation-fill-mode:forwards] transition-all duration-300 hover:scale-[1.02] hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10"
-                style={{ animationDelay: `${index * 150}ms` }}
-              >
-                {/* Number Badge */}
-                <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-3 py-1 bg-primary text-primary-foreground text-sm font-bold rounded-full transition-transform duration-300 group-hover:scale-110">
-                  {step.number}
-                </div>
-
-                {/* Icon */}
-                <div className="w-20 h-20 mx-auto rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 mt-4 transition-all duration-300 group-hover:bg-primary/20 group-hover:border-primary/40">
-                  <step.icon className="h-10 w-10 text-primary transition-transform duration-300 group-hover:scale-110" />
-                </div>
-
-                {/* Content */}
-                <h3 className="text-xl font-semibold text-foreground mb-3">
-                  {step.title}
-                </h3>
-                <p className="text-muted-foreground">
-                  {step.description}
-                </p>
-              </div>
-
-              {/* Arrow (Mobile) */}
-              {index < steps.length - 1 && (
-                <div className="md:hidden flex justify-center my-4">
-                  <ArrowRight className="h-6 w-6 text-primary rotate-90" />
-                </div>
-              )}
-            </div>
+            <StepCard key={index} step={step} index={index} />
           ))}
         </div>
       </div>
