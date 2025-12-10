@@ -32,10 +32,10 @@ const AnimatedFeaturesGrid = () => {
             isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
           }`}
         >
-          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
             Powerful Security Features
           </h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+          <p className="text-lg text-gray-400 max-w-2xl mx-auto">
             Enterprise-grade vulnerability detection powered by cutting-edge AI technology
           </p>
         </div>
@@ -45,19 +45,19 @@ const AnimatedFeaturesGrid = () => {
           {features.map((feature, index) => (
             <Card 
               key={index} 
-              className={`group feature-card-hover backdrop-blur-sm bg-card/60 border-primary/10 hover:border-primary/30 transition-all duration-500 ${
+              className={`group feature-card-hover backdrop-blur-sm bg-white/5 border-white/10 hover:border-emerald-500/30 transition-all duration-500 ${
                 isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
               }`}
               style={{ transitionDelay: `${200 + index * 150}ms` }}
             >
               <CardHeader>
-                <div className="w-14 h-14 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-all duration-300 group-hover:scale-110">
-                  <feature.icon className="h-7 w-7 text-primary transition-transform duration-500 group-hover:rotate-12" />
+                <div className="w-14 h-14 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4 group-hover:bg-emerald-500/20 transition-all duration-300 group-hover:scale-110">
+                  <feature.icon className="h-7 w-7 text-emerald-400 transition-transform duration-500 group-hover:rotate-12" />
                 </div>
-                <CardTitle className="text-xl">{feature.title}</CardTitle>
+                <CardTitle className="text-xl text-white">{feature.title}</CardTitle>
               </CardHeader>
               <CardContent>
-                <CardDescription className="text-base">
+                <CardDescription className="text-base text-gray-400">
                   {feature.description}
                 </CardDescription>
               </CardContent>
