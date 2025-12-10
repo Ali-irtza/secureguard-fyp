@@ -17,7 +17,7 @@ const mainNavItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "New Scan", url: "/new-scan", icon: Plus, isPrimary: true },
   { title: "Projects", url: "/projects", icon: FolderKanban },
-  { title: "Reports", url: "/reports", icon: FileBarChart },
+  { title: "Scan History", url: "/scan-history", icon: FileBarChart },
 ];
 
 const bottomNavItems = [
