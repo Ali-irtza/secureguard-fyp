@@ -71,8 +71,8 @@ const GenerateReportDialog = ({ open, onOpenChange }: GenerateReportDialogProps)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px] max-h-[85vh] flex flex-col bg-card border-border">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[500px] max-h-[85vh] flex flex-col bg-card border-border overflow-hidden">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" />
             Generate New Report
@@ -82,7 +82,7 @@ const GenerateReportDialog = ({ open, onOpenChange }: GenerateReportDialogProps)
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 max-h-[60vh] pr-4">
+        <div className="flex-1 overflow-y-auto pr-2 min-h-0">
           <div className="space-y-6 py-4">
           {/* Report Type */}
           <div className="space-y-2">
@@ -210,9 +210,9 @@ const GenerateReportDialog = ({ open, onOpenChange }: GenerateReportDialogProps)
             </div>
           )}
           </div>
-        </ScrollArea>
+        </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-shrink-0 pt-4 border-t border-border/30">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
