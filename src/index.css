@@ -21,9 +21,9 @@
     --popover: 20 5% 90%;
     --popover-foreground: 24 9% 10%;
 
-    /* Primary: Emerald Green - Safe/Verified */
-    --primary: 37 92% 50%;
-    --primary-foreground: 47 100% 96%;
+    /* Primary: Neon Emerald Green - Cybersecurity */
+    --primary: 160 84% 39%;
+    --primary-foreground: 160 100% 97%;
 
     /* Secondary: Slate for UI elements */
     --secondary: 24 5% 44%;
@@ -41,19 +41,19 @@
 
     --border: 23 5% 82%;
     --input: 23 5% 82%;
-    --ring: 37 92% 50%;
+    --ring: 160 84% 39%;
 
     --radius: 1rem;
 
     /* Sidebar - Darker variant */
     --sidebar-background: 222 47% 4%;
     --sidebar-foreground: 24 9% 10%;
-    --sidebar-primary: 37 92% 50%;
-    --sidebar-primary-foreground: 47 100% 96%;
+    --sidebar-primary: 160 84% 39%;
+    --sidebar-primary-foreground: 160 100% 97%;
     --sidebar-accent: 24 5% 44%;
     --sidebar-accent-foreground: 60 9% 97%;
     --sidebar-border: 23 5% 82%;
-    --sidebar-ring: 37 92% 50%;
+    --sidebar-ring: 160 84% 39%;
 
     /* Custom SecureGuard Colors */
     --emerald: 160 84% 39%;
@@ -66,10 +66,10 @@
     /* Glassmorphism */
     --glass-bg: 222 47% 8%;
     --glass-border: 215 28% 20%;
-    --chart-1: 45 96% 64%;
-    --chart-2: 47 95% 53%;
-    --chart-3: 43 96% 56%;
-    --chart-4: 37 92% 50%;
+    --chart-1: 160 84% 45%;
+    --chart-2: 160 70% 55%;
+    --chart-3: 160 60% 65%;
+    --chart-4: 160 50% 35%;
     --chart-5: 24 5% 44%;
     --sidebar: 60 9% 97%;
     --font-sans: 'Source Sans Pro', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
@@ -98,8 +98,8 @@
     --popover: 30 6% 25%;
     --popover-foreground: 60 9% 97%;
 
-    --primary: 43 96% 56%;
-    --primary-foreground: 20 91% 14%;
+    --primary: 160 84% 45%;
+    --primary-foreground: 160 10% 10%;
 
     --secondary: 24 5% 44%;
     --secondary-foreground: 60 9% 97%;
@@ -115,20 +115,20 @@
 
     --border: 33 5% 32%;
     --input: 33 5% 32%;
-    --ring: 43 96% 56%;
+    --ring: 160 84% 45%;
 
     --sidebar-background: 222 47% 4%;
     --sidebar-foreground: 60 9% 97%;
-    --sidebar-primary: 43 96% 56%;
-    --sidebar-primary-foreground: 20 91% 14%;
-    --sidebar-accent: 47 95% 53%;
-    --sidebar-accent-foreground: 25 83% 14%;
+    --sidebar-primary: 160 84% 45%;
+    --sidebar-primary-foreground: 160 10% 10%;
+    --sidebar-accent: 160 60% 35%;
+    --sidebar-accent-foreground: 160 100% 97%;
     --sidebar-border: 33 5% 32%;
-    --sidebar-ring: 43 96% 56%;
-    --chart-1: 45 96% 64%;
-    --chart-2: 48 96% 76%;
-    --chart-3: 43 96% 56%;
-    --chart-4: 37 92% 50%;
+    --sidebar-ring: 160 84% 45%;
+    --chart-1: 160 84% 50%;
+    --chart-2: 160 70% 60%;
+    --chart-3: 160 60% 70%;
+    --chart-4: 160 50% 40%;
     --chart-5: 33 5% 32%;
     --sidebar: 12 6% 15%;
     --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
