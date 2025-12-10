@@ -41,17 +41,23 @@ const HowItWorks = () => {
           <div className="hidden md:block absolute top-24 left-1/3 right-1/3 h-px bg-gradient-to-r from-primary/50 via-primary to-primary/50" />
 
           {steps.map((step, index) => (
-            <div key={index} className="relative">
+            <div 
+              key={index} 
+              className="relative group"
+              style={{ animationDelay: `${index * 150}ms` }}
+            >
               {/* Step Card */}
-              <div className="glass-card p-8 text-center relative z-10">
+              <div className="glass-card p-8 text-center relative z-10 animate-fade-in opacity-0 [animation-fill-mode:forwards] transition-all duration-300 hover:scale-[1.02] hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10"
+                style={{ animationDelay: `${index * 150}ms` }}
+              >
                 {/* Number Badge */}
-                <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-3 py-1 bg-primary text-primary-foreground text-sm font-bold rounded-full">
+                <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-3 py-1 bg-primary text-primary-foreground text-sm font-bold rounded-full transition-transform duration-300 group-hover:scale-110">
                   {step.number}
                 </div>
 
                 {/* Icon */}
-                <div className="w-20 h-20 mx-auto rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 mt-4">
-                  <step.icon className="h-10 w-10 text-primary" />
+                <div className="w-20 h-20 mx-auto rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 mt-4 transition-all duration-300 group-hover:bg-primary/20 group-hover:border-primary/40">
+                  <step.icon className="h-10 w-10 text-primary transition-transform duration-300 group-hover:scale-110" />
                 </div>
 
                 {/* Content */}
