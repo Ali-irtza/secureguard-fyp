@@ -1,0 +1,104 @@
+import { Shield, LayoutDashboard, Plus, FolderKanban, FileBarChart, Settings, LogOut } from "lucide-react";
+import { NavLink } from "@/components/NavLink";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarHeader,
+  SidebarFooter,
+  SidebarSeparator,
+} from "@/components/ui/sidebar";
+
+const mainNavItems = [
+  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "New Scan", url: "/new-scan", icon: Plus, isPrimary: true },
+  { title: "Projects", url: "/projects", icon: FolderKanban },
+  { title: "Reports", url: "/reports", icon: FileBarChart },
+];
+
+const bottomNavItems = [
+  { title: "Settings", url: "/settings", icon: Settings },
+];
+
+const DashboardSidebar = () => {
+  return (
+    <Sidebar className="border-r border-border/50 bg-card/50 backdrop-blur-xl">
+      <SidebarHeader className="p-6">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Shield className="h-8 w-8 text-primary" />
+            <div className="absolute inset-0 h-8 w-8 bg-primary/20 blur-lg rounded-full" />
+          </div>
+          <div className="flex flex-col">
+            <span className="font-bold text-lg text-foreground">SecureGuard</span>
+            <span className="text-xs text-muted-foreground">Pro Edition</span>
+          </div>
+        </div>
+      </SidebarHeader>
+
+      <SidebarContent className="px-3">
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {mainNavItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton asChild>
+                    <NavLink
+                      to={item.url}
+                      className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+                        item.isPrimary
+                          ? "bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 glow-emerald"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                      }`}
+                      activeClassName="bg-primary/20 text-primary border-primary/50"
+                    >
+                      <item.icon className="h-5 w-5" />
+                      <span className="font-medium">{item.title}</span>
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter className="px-3 pb-6">
+        <SidebarSeparator className="mb-4" />
+        <SidebarMenu>
+          {bottomNavItems.map((item) => (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton asChild>
+                <NavLink
+                  to={item.url}
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all duration-200"
+                  activeClassName="bg-muted text-foreground"
+                >
+                  <item.icon className="h-5 w-5" />
+                  <span className="font-medium">{item.title}</span>
+                </NavLink>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild>
+              <button
+                onClick={() => console.log("Logout")}
+                className="flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-200 w-full"
+              >
+                <LogOut className="h-5 w-5" />
+                <span className="font-medium">Logout</span>
+              </button>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
+  );
+};
+
+export default DashboardSidebar;

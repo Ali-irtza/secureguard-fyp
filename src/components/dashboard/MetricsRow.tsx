@@ -1,0 +1,84 @@
+import { Shield, ShieldAlert, Activity, Clock } from "lucide-react";
+import RadialProgress from "./RadialProgress";
+
+interface MetricCardProps {
+  title: string;
+  value: string | number;
+  icon: React.ReactNode;
+  variant?: "default" | "critical" | "warning" | "success";
+  children?: React.ReactNode;
+}
+
+const MetricCard = ({ title, value, icon, variant = "default", children }: MetricCardProps) => {
+  const variantStyles = {
+    default: "border-primary/20",
+    critical: "border-destructive/30",
+    warning: "border-yellow-500/30",
+    success: "border-primary/30",
+  };
+
+  const valueStyles = {
+    default: "text-foreground",
+    critical: "text-destructive",
+    warning: "text-yellow-500",
+    success: "text-primary",
+  };
+
+  return (
+    <div className={`glass-card p-6 hover-glow animate-fade-in ${variantStyles[variant]}`}>
+      <div className="flex items-start justify-between">
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">{title}</p>
+          {children || (
+            <p className={`text-3xl font-bold ${valueStyles[variant]}`}>{value}</p>
+          )}
+        </div>
+        <div className={`p-3 rounded-xl bg-muted/50 ${variant === "critical" ? "text-destructive" : "text-primary"}`}>
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+interface MetricsRowProps {
+  totalScans: number;
+  criticalVulns: number;
+  healthScore: number;
+  pendingScans: number;
+}
+
+const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: MetricsRowProps) => {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <MetricCard
+        title="Total Scans"
+        value={totalScans}
+        icon={<Shield className="h-6 w-6" />}
+        variant="default"
+      />
+      <MetricCard
+        title="Critical Vulns"
+        value={criticalVulns}
+        icon={<ShieldAlert className="h-6 w-6" />}
+        variant="critical"
+      />
+      <MetricCard
+        title="Health Score"
+        value=""
+        icon={<Activity className="h-6 w-6" />}
+        variant="success"
+      >
+        <RadialProgress value={healthScore} />
+      </MetricCard>
+      <MetricCard
+        title="Pending Scans"
+        value={pendingScans}
+        icon={<Clock className="h-6 w-6" />}
+        variant="warning"
+      />
+    </div>
+  );
+};
+
+export default MetricsRow;
