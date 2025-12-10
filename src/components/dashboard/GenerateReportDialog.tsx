@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -70,7 +71,7 @@ const GenerateReportDialog = ({ open, onOpenChange }: GenerateReportDialogProps)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px] bg-card border-border">
+      <DialogContent className="sm:max-w-[500px] max-h-[85vh] flex flex-col bg-card border-border">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" />
@@ -81,7 +82,8 @@ const GenerateReportDialog = ({ open, onOpenChange }: GenerateReportDialogProps)
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
+        <ScrollArea className="flex-1 max-h-[60vh] pr-4">
+          <div className="space-y-6 py-4">
           {/* Report Type */}
           <div className="space-y-2">
             <Label>Report Type</Label>
@@ -207,7 +209,8 @@ const GenerateReportDialog = ({ open, onOpenChange }: GenerateReportDialogProps)
               </Select>
             </div>
           )}
-        </div>
+          </div>
+        </ScrollArea>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
