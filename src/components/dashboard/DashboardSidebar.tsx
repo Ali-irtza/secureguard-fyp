@@ -1,4 +1,6 @@
 import { Shield, LayoutDashboard, Plus, FolderKanban, FileBarChart, Settings, LogOut, HelpCircle, FileText } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { NavLink } from "@/components/NavLink";
 import {
   Sidebar,
@@ -27,6 +29,14 @@ const bottomNavItems = [
 ];
 
 const DashboardSidebar = () => {
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    localStorage.removeItem("dev_authenticated");
+    localStorage.removeItem("dev_user_email");
+    toast.success("You've been logged out");
+    navigate("/auth");
+  };
   return (
     <Sidebar className="border-r border-border/50 bg-card/50 backdrop-blur-xl">
       <SidebarHeader className="p-6">
@@ -89,7 +99,7 @@ const DashboardSidebar = () => {
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
               <button
-                onClick={() => console.log("Logout")}
+                onClick={handleLogout}
                 className="group flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:pl-5 transition-all duration-200 w-full"
               >
                 <LogOut className="h-5 w-5 transition-transform duration-200 group-hover:scale-110" />
