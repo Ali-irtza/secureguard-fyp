@@ -486,17 +486,6 @@ const Projects = () => {
                               <TooltipContent>Not scanned in 7+ days</TooltipContent>
                             </Tooltip>
                           )}
-                          {staleStatus === "critical" && (
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/30 text-xs">
-                                  <AlertTriangle className="w-3 h-3 mr-1" />
-                                  Outdated
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>Not scanned in 14+ days</TooltipContent>
-                            </Tooltip>
-                          )}
                         </div>
                       </TableCell>
                       <TableCell>
