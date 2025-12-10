@@ -23,7 +23,7 @@ const technologies = [
 
 const TechStack = () => {
   return (
-    <section className="py-24">
+    <section className="py-24 relative z-10">
       <div className="container mx-auto px-4">
         {/* Section Header */}
         <div className="text-center mb-16">

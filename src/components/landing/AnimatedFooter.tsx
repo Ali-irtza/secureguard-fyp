@@ -7,7 +7,7 @@ const AnimatedFooter = () => {
   return (
     <footer 
       ref={ref}
-      className={`py-12 border-t border-white/10 transition-all duration-1000 ${
+      className={`py-12 border-t border-white/10 transition-all duration-1000 relative z-10 ${
         isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
       }`}
     >
