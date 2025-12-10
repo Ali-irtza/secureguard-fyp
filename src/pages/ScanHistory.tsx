@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer } from "lucide-react";
+import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info } from "lucide-react";
 import { format } from "date-fns";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -32,6 +32,25 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -48,6 +67,8 @@ interface ScanRecord {
     low: number;
   };
   status: "completed" | "failed" | "in_progress";
+  errorMessage?: string;
+  errorDetails?: string;
 }
 
 type SortKey = "projectName" | "date" | "duration" | "vulnerabilities" | "status";
@@ -58,13 +79,13 @@ const mockScanHistory: ScanRecord[] = [
   { id: "2", projectName: "Banking API", date: new Date("2024-12-10T12:15:00"), duration: 128, vulnerabilities: { critical: 1, high: 3, medium: 8, low: 15 }, status: "completed" },
   { id: "3", projectName: "Healthcare Portal", date: new Date("2024-12-10T10:00:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "in_progress" },
   { id: "4", projectName: "Mobile Backend", date: new Date("2024-12-09T18:45:00"), duration: 67, vulnerabilities: { critical: 0, high: 1, medium: 3, low: 8 }, status: "completed" },
-  { id: "5", projectName: "Legacy System", date: new Date("2024-12-09T16:20:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed" },
+  { id: "5", projectName: "Legacy System", date: new Date("2024-12-09T16:20:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed", errorMessage: "Connection timeout", errorDetails: "Failed to establish connection to the target server after 30 seconds. The server may be offline or behind a firewall that blocks scanning requests. Please verify network connectivity and firewall rules." },
   { id: "6", projectName: "E-Commerce Platform", date: new Date("2024-12-09T14:00:00"), duration: 52, vulnerabilities: { critical: 1, high: 4, medium: 7, low: 10 }, status: "completed" },
   { id: "7", projectName: "Data Analytics Dashboard", date: new Date("2024-12-08T22:30:00"), duration: 195, vulnerabilities: { critical: 0, high: 0, medium: 2, low: 5 }, status: "completed" },
   { id: "8", projectName: "Banking API", date: new Date("2024-12-08T15:45:00"), duration: 135, vulnerabilities: { critical: 2, high: 5, medium: 10, low: 18 }, status: "completed" },
   { id: "9", projectName: "Internal Tools", date: new Date("2024-12-08T11:20:00"), duration: 38, vulnerabilities: { critical: 0, high: 0, medium: 1, low: 3 }, status: "completed" },
   { id: "10", projectName: "Healthcare Portal", date: new Date("2024-12-07T20:00:00"), duration: 89, vulnerabilities: { critical: 0, high: 2, medium: 6, low: 14 }, status: "completed" },
-  { id: "11", projectName: "Mobile Backend", date: new Date("2024-12-07T14:30:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed" },
+  { id: "11", projectName: "Mobile Backend", date: new Date("2024-12-07T14:30:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed", errorMessage: "Authentication failed", errorDetails: "Unable to authenticate with the provided API credentials. The API key may have expired or been revoked. Please update your credentials in project settings and retry the scan." },
   { id: "12", projectName: "E-Commerce Platform", date: new Date("2024-12-06T16:45:00"), duration: 48, vulnerabilities: { critical: 0, high: 3, medium: 6, low: 11 }, status: "completed" },
   { id: "13", projectName: "Data Analytics Dashboard", date: new Date("2024-12-06T10:15:00"), duration: 210, vulnerabilities: { critical: 0, high: 1, medium: 4, low: 9 }, status: "completed" },
   { id: "14", projectName: "Legacy System", date: new Date("2024-12-05T18:00:00"), duration: 156, vulnerabilities: { critical: 3, high: 8, medium: 15, low: 22 }, status: "completed" },
@@ -84,6 +105,8 @@ const ScanHistory = () => {
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
+  const [failureDialogOpen, setFailureDialogOpen] = useState(false);
+  const [selectedFailedScan, setSelectedFailedScan] = useState<ScanRecord | null>(null);
 
   const formatDuration = (seconds: number): string => {
     if (seconds === 0) return "—";
@@ -140,6 +163,106 @@ const ScanHistory = () => {
     if (scan.status === "completed") {
       navigate(`/reports/${scan.id}`);
     }
+  };
+
+  const handleViewFailureDetails = (e: React.MouseEvent, scan: ScanRecord) => {
+    e.stopPropagation();
+    setSelectedFailedScan(scan);
+    setFailureDialogOpen(true);
+  };
+
+  const exportToCSV = () => {
+    const headers = ["Project Name", "Date", "Duration (s)", "Critical", "High", "Medium", "Low", "Total Vulnerabilities", "Status"];
+    const rows = sortedScans.map(scan => [
+      scan.projectName,
+      format(scan.date, "yyyy-MM-dd HH:mm:ss"),
+      scan.duration.toString(),
+      scan.vulnerabilities.critical.toString(),
+      scan.vulnerabilities.high.toString(),
+      scan.vulnerabilities.medium.toString(),
+      scan.vulnerabilities.low.toString(),
+      getTotalVulnerabilities(scan.vulnerabilities).toString(),
+      scan.status
+    ]);
+
+    const csvContent = [headers, ...rows].map(row => row.join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `scan-history-${format(new Date(), "yyyy-MM-dd")}.csv`;
+    link.click();
+    toast.success("Exported scan history to CSV");
+  };
+
+  const exportToPDF = () => {
+    // Create a simple HTML table for printing
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      toast.error("Please allow popups to export PDF");
+      return;
+    }
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Scan History Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { color: #333; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f4f4f4; font-weight: bold; }
+            tr:nth-child(even) { background-color: #f9f9f9; }
+            .critical { color: #dc2626; font-weight: bold; }
+            .high { color: #ea580c; }
+            .completed { color: #16a34a; }
+            .failed { color: #dc2626; }
+            .in_progress { color: #ca8a04; }
+            .meta { color: #666; font-size: 12px; margin-top: 10px; }
+          </style>
+        </head>
+        <body>
+          <h1>Scan History Report</h1>
+          <p class="meta">Generated on ${format(new Date(), "PPpp")}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Project Name</th>
+                <th>Date</th>
+                <th>Duration</th>
+                <th>Vulnerabilities</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sortedScans.map(scan => `
+                <tr>
+                  <td>${scan.projectName}</td>
+                  <td>${format(scan.date, "PPp")}</td>
+                  <td>${formatDuration(scan.duration)}</td>
+                  <td>
+                    ${scan.status === "completed" 
+                      ? `${getTotalVulnerabilities(scan.vulnerabilities)} total 
+                         ${scan.vulnerabilities.critical > 0 ? `<span class="critical">(${scan.vulnerabilities.critical} critical)</span>` : ""}
+                         ${scan.vulnerabilities.high > 0 ? `<span class="high">(${scan.vulnerabilities.high} high)</span>` : ""}`
+                      : "—"}
+                  </td>
+                  <td class="${scan.status}">${scan.status.replace("_", " ")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.print();
+    };
+    toast.success("Opening print dialog for PDF export");
   };
 
   const filteredScans = mockScanHistory.filter((scan) => {
@@ -364,9 +487,28 @@ const ScanHistory = () => {
 
         {/* Table */}
         <Card className="bg-card/50 backdrop-blur-xl border-border/50">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">All Scans</CardTitle>
-            <CardDescription>{sortedScans.length} records found</CardDescription>
+          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">All Scans</CardTitle>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Download className="h-4 w-4" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={exportToCSV} className="gap-2 cursor-pointer">
+                  <FileSpreadsheet className="h-4 w-4" />
+                  Export as CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={exportToPDF} className="gap-2 cursor-pointer">
+                  <FileText className="h-4 w-4" />
+                  Export as PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </CardHeader>
           <CardContent>
             <div className="rounded-lg border border-border/50 overflow-hidden">
@@ -468,7 +610,29 @@ const ScanHistory = () => {
                         )}
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={scan.status} />
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={scan.status} />
+                          {scan.status === "failed" && scan.errorMessage && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 text-red-400 hover:text-red-300"
+                                    onClick={(e) => handleViewFailureDetails(e, scan)}
+                                  >
+                                    <Info className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-[200px]">
+                                  <p className="text-xs">{scan.errorMessage}</p>
+                                  <p className="text-xs text-muted-foreground mt-1">Click for details</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
@@ -533,6 +697,58 @@ const ScanHistory = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* Failure Details Dialog */}
+        <Dialog open={failureDialogOpen} onOpenChange={setFailureDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-red-400">
+                <XCircle className="h-5 w-5" />
+                Scan Failed
+              </DialogTitle>
+              <DialogDescription>
+                {selectedFailedScan?.projectName} • {selectedFailedScan && format(selectedFailedScan.date, "PPp")}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-medium text-foreground mb-1">Error</h4>
+                <p className="text-sm text-red-400 bg-red-500/10 px-3 py-2 rounded-md border border-red-500/20">
+                  {selectedFailedScan?.errorMessage}
+                </p>
+              </div>
+              {selectedFailedScan?.errorDetails && (
+                <div>
+                  <h4 className="text-sm font-medium text-foreground mb-1">Details</h4>
+                  <p className="text-sm text-muted-foreground bg-muted/30 px-3 py-2 rounded-md">
+                    {selectedFailedScan.errorDetails}
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setFailureDialogOpen(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  className="flex-1 gap-2"
+                  onClick={(e) => {
+                    if (selectedFailedScan) {
+                      handleRerunScan(e, selectedFailedScan);
+                      setFailureDialogOpen(false);
+                    }
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry Scan
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );
