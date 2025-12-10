@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import NewScan from "./pages/NewScan";
 import Projects from "./pages/Projects";
 import ScanHistory from "./pages/ScanHistory";
+import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ const App = () => (
           <Route path="/new-scan" element={<NewScan />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/scan-history" element={<ScanHistory />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/design-system" element={<Index />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
