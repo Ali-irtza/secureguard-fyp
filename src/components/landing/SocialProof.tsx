@@ -34,7 +34,7 @@ const logos = [
 const SocialProof = () => {
   return <section className="py-20 border-y border-white/10 mx-0 px-0 my-[10px] overflow-hidden">
       <div className="container mx-auto px-4">
-        <p className="text-center text-sm mb-12 uppercase tracking-widest text-emerald-50">
+        <p className="text-center text-sm mb-12 uppercase tracking-widest text-gray-300">
           Trusted by security researchers at leading companies worldwide
         </p>
         
