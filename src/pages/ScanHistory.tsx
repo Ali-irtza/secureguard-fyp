@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight } from "lucide-react";
+import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer } from "lucide-react";
+import { format } from "date-fns";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,7 +27,14 @@ import {
   PaginationContent,
   PaginationItem,
 } from "@/components/ui/pagination";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface ScanRecord {
   id: string;
@@ -41,6 +49,9 @@ interface ScanRecord {
   };
   status: "completed" | "failed" | "in_progress";
 }
+
+type SortKey = "projectName" | "date" | "duration" | "vulnerabilities" | "status";
+type SortDirection = "asc" | "desc";
 
 const mockScanHistory: ScanRecord[] = [
   { id: "1", projectName: "E-Commerce Platform", date: new Date("2024-12-10T14:34:00"), duration: 45, vulnerabilities: { critical: 0, high: 2, medium: 5, low: 12 }, status: "completed" },
@@ -70,6 +81,9 @@ const ScanHistory = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
 
   const formatDuration = (seconds: number): string => {
     if (seconds === 0) return "—";
@@ -99,6 +113,24 @@ const ScanHistory = () => {
     return vuln.critical + vuln.high + vuln.medium + vuln.low;
   };
 
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDirection("desc");
+    }
+  };
+
+  const SortIcon = ({ columnKey }: { columnKey: SortKey }) => {
+    if (sortKey !== columnKey) {
+      return <ArrowUpDown className="h-3.5 w-3.5 ml-1 opacity-50" />;
+    }
+    return sortDirection === "asc" 
+      ? <ArrowUp className="h-3.5 w-3.5 ml-1" />
+      : <ArrowDown className="h-3.5 w-3.5 ml-1" />;
+  };
+
   const handleRerunScan = (e: React.MouseEvent, scan: ScanRecord) => {
     e.stopPropagation();
     toast.success(`Re-running scan for ${scan.projectName}`);
@@ -113,11 +145,49 @@ const ScanHistory = () => {
   const filteredScans = mockScanHistory.filter((scan) => {
     const matchesSearch = scan.projectName.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === "all" || scan.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesDateFrom = !dateRange.from || scan.date >= dateRange.from;
+    const matchesDateTo = !dateRange.to || scan.date <= new Date(dateRange.to.getTime() + 86400000);
+    return matchesSearch && matchesStatus && matchesDateFrom && matchesDateTo;
   });
 
-  const totalPages = Math.ceil(filteredScans.length / ITEMS_PER_PAGE);
-  const paginatedScans = filteredScans.slice(
+  const sortedScans = useMemo(() => {
+    return [...filteredScans].sort((a, b) => {
+      let comparison = 0;
+      switch (sortKey) {
+        case "projectName":
+          comparison = a.projectName.localeCompare(b.projectName);
+          break;
+        case "date":
+          comparison = a.date.getTime() - b.date.getTime();
+          break;
+        case "duration":
+          comparison = a.duration - b.duration;
+          break;
+        case "vulnerabilities":
+          comparison = getTotalVulnerabilities(a.vulnerabilities) - getTotalVulnerabilities(b.vulnerabilities);
+          break;
+        case "status":
+          comparison = a.status.localeCompare(b.status);
+          break;
+      }
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [filteredScans, sortKey, sortDirection]);
+
+  // Quick stats calculations
+  const stats = useMemo(() => {
+    const completedScans = mockScanHistory.filter(s => s.status === "completed");
+    const totalScans = mockScanHistory.length;
+    const successRate = totalScans > 0 ? Math.round((completedScans.length / totalScans) * 100) : 0;
+    const totalVulns = completedScans.reduce((acc, s) => acc + getTotalVulnerabilities(s.vulnerabilities), 0);
+    const avgDuration = completedScans.length > 0 
+      ? Math.round(completedScans.reduce((acc, s) => acc + s.duration, 0) / completedScans.length)
+      : 0;
+    return { totalScans, successRate, totalVulns, avgDuration };
+  }, []);
+
+  const totalPages = Math.ceil(sortedScans.length / ITEMS_PER_PAGE);
+  const paginatedScans = sortedScans.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
@@ -158,6 +228,54 @@ const ScanHistory = () => {
           <p className="text-muted-foreground mt-1">Audit log of all security scans</p>
         </div>
 
+        {/* Quick Stats */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="bg-card/50 backdrop-blur-xl border-border/50">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-primary/10">
+                <Shield className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-foreground">{stats.totalScans}</p>
+                <p className="text-xs text-muted-foreground">Total Scans</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-card/50 backdrop-blur-xl border-border/50">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-emerald-500/10">
+                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-foreground">{stats.successRate}%</p>
+                <p className="text-xs text-muted-foreground">Success Rate</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-card/50 backdrop-blur-xl border-border/50">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-amber-500/10">
+                <AlertTriangle className="h-5 w-5 text-amber-400" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-foreground">{stats.totalVulns}</p>
+                <p className="text-xs text-muted-foreground">Vulnerabilities Found</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-card/50 backdrop-blur-xl border-border/50">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-blue-500/10">
+                <Timer className="h-5 w-5 text-blue-400" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-foreground">{formatDuration(stats.avgDuration)}</p>
+                <p className="text-xs text-muted-foreground">Avg. Duration</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
         {/* Filters */}
         <Card className="bg-card/50 backdrop-blur-xl border-border/50">
           <CardContent className="p-4">
@@ -191,6 +309,55 @@ const ScanHistory = () => {
                   <SelectItem value="in_progress">In Progress</SelectItem>
                 </SelectContent>
               </Select>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "w-full sm:w-[240px] justify-start text-left font-normal bg-background/50 border-border/50",
+                      !dateRange.from && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateRange.from ? (
+                      dateRange.to ? (
+                        <>
+                          {format(dateRange.from, "LLL dd")} - {format(dateRange.to, "LLL dd")}
+                        </>
+                      ) : (
+                        format(dateRange.from, "LLL dd, y")
+                      )
+                    ) : (
+                      "Date range"
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    initialFocus
+                    mode="range"
+                    defaultMonth={dateRange.from}
+                    selected={{ from: dateRange.from, to: dateRange.to }}
+                    onSelect={(range) => {
+                      setDateRange({ from: range?.from, to: range?.to });
+                      setCurrentPage(1);
+                    }}
+                    numberOfMonths={2}
+                  />
+                  {(dateRange.from || dateRange.to) && (
+                    <div className="p-3 border-t border-border">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => setDateRange({})}
+                      >
+                        Clear dates
+                      </Button>
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
             </div>
           </CardContent>
         </Card>
@@ -199,18 +366,58 @@ const ScanHistory = () => {
         <Card className="bg-card/50 backdrop-blur-xl border-border/50">
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">All Scans</CardTitle>
-            <CardDescription>{filteredScans.length} records found</CardDescription>
+            <CardDescription>{sortedScans.length} records found</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="rounded-lg border border-border/50 overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/30 hover:bg-muted/30">
-                    <TableHead className="font-semibold">Project Name</TableHead>
-                    <TableHead className="font-semibold">Date</TableHead>
-                    <TableHead className="font-semibold">Duration</TableHead>
-                    <TableHead className="font-semibold">Vulnerabilities</TableHead>
-                    <TableHead className="font-semibold">Status</TableHead>
+                    <TableHead 
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      onClick={() => handleSort("projectName")}
+                    >
+                      <span className="flex items-center">
+                        Project Name
+                        <SortIcon columnKey="projectName" />
+                      </span>
+                    </TableHead>
+                    <TableHead 
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      onClick={() => handleSort("date")}
+                    >
+                      <span className="flex items-center">
+                        Date
+                        <SortIcon columnKey="date" />
+                      </span>
+                    </TableHead>
+                    <TableHead 
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      onClick={() => handleSort("duration")}
+                    >
+                      <span className="flex items-center">
+                        Duration
+                        <SortIcon columnKey="duration" />
+                      </span>
+                    </TableHead>
+                    <TableHead 
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      onClick={() => handleSort("vulnerabilities")}
+                    >
+                      <span className="flex items-center">
+                        Vulnerabilities
+                        <SortIcon columnKey="vulnerabilities" />
+                      </span>
+                    </TableHead>
+                    <TableHead 
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      onClick={() => handleSort("status")}
+                    >
+                      <span className="flex items-center">
+                        Status
+                        <SortIcon columnKey="status" />
+                      </span>
+                    </TableHead>
                     <TableHead className="font-semibold text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
