@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Shield, Zap, Target } from "lucide-react";
 import { useInView } from "@/hooks/use-in-view";
@@ -48,6 +49,7 @@ const AnimatedCounter = ({ end, suffix = "", duration = 2000 }: AnimatedCounterP
 
 const AnimatedHero = () => {
   const [isLoaded, setIsLoaded] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Trigger animations after mount
@@ -134,6 +136,7 @@ const AnimatedHero = () => {
             <Button 
               size="lg" 
               className="glow-emerald text-lg px-10 py-6 group relative overflow-hidden bg-gradient-animated-btn"
+              onClick={() => navigate("/new-scan")}
             >
               <span className="relative z-10 flex items-center">
                 Scan Code Now
