@@ -1,7 +1,10 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Search, Bell } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +19,21 @@ interface DashboardTopBarProps {
 }
 
 const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
+  const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const handleSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && searchQuery.trim()) {
+      navigate(`/scan-history?search=${encodeURIComponent(searchQuery.trim())}`);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.clear();
+    toast.success("Logged out successfully");
+    navigate("/auth");
+  };
+
   return (
     <header className="h-16 border-b border-border/50 bg-card/30 backdrop-blur-xl flex items-center justify-between px-4 lg:px-6">
       <div className="flex items-center gap-4">
@@ -27,6 +45,9 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
           <Input
             type="search"
             placeholder="Search scans, reports, vulnerabilities..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearch}
             className="w-64 lg:w-96 pl-10 bg-muted/30 border-border/50 focus:border-primary/50 focus:ring-primary/20"
           />
         </div>
@@ -61,7 +82,10 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
               <span className="text-xs text-muted-foreground">frontend-app scan finished • 15m ago</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-center text-primary justify-center">
+            <DropdownMenuItem 
+              className="text-center text-primary justify-center cursor-pointer"
+              onClick={() => navigate("/notifications")}
+            >
               View all notifications
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -84,10 +108,25 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
           <DropdownMenuContent align="end" className="w-56 glass-card border-border/50">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Profile Settings</DropdownMenuItem>
-            <DropdownMenuItem>API Keys</DropdownMenuItem>
+            <DropdownMenuItem 
+              className="cursor-pointer"
+              onClick={() => navigate("/settings?tab=profile")}
+            >
+              Profile Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem 
+              className="cursor-pointer"
+              onClick={() => navigate("/settings?tab=api-keys")}
+            >
+              API Keys
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive">Log out</DropdownMenuItem>
+            <DropdownMenuItem 
+              className="text-destructive cursor-pointer"
+              onClick={handleLogout}
+            >
+              Log out
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

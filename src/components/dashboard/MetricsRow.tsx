@@ -25,13 +25,15 @@ const MetricCard = ({ title, value, icon, variant = "default", children }: Metri
   };
 
   return (
-    <div className={`glass-card p-6 hover-glow animate-fade-in ${variantStyles[variant]}`}>
-      <div className="flex items-start justify-between">
-        <div className="space-y-2">
+    <div className={`glass-card p-6 hover-glow animate-fade-in min-h-[140px] ${variantStyles[variant]}`}>
+      <div className="flex items-start justify-between h-full">
+        <div className="flex flex-col justify-between h-full">
           <p className="text-sm text-muted-foreground">{title}</p>
-          {children || (
-            <p className={`text-3xl font-bold ${valueStyles[variant]}`}>{value}</p>
-          )}
+          <div className="mt-2">
+            {children || (
+              <p className={`text-3xl font-bold ${valueStyles[variant]}`}>{value}</p>
+            )}
+          </div>
         </div>
         <div className={`p-3 rounded-xl bg-muted/50 ${variant === "critical" ? "text-destructive" : "text-primary"}`}>
           {icon}
