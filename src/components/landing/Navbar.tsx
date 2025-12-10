@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Shield, Menu, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
 const Navbar = () => {
@@ -31,7 +32,9 @@ const Navbar = () => {
             <button onClick={() => scrollTo("faq")} className="text-muted-foreground hover:text-foreground transition-colors">
               FAQ
             </button>
-            <Button className="glow-emerald">Get Started</Button>
+            <Button asChild className="glow-emerald">
+              <Link to="/auth">Get Started</Link>
+            </Button>
           </div>
 
           {/* Mobile Menu Button */}
@@ -53,7 +56,9 @@ const Navbar = () => {
               <button onClick={() => scrollTo("faq")} className="text-muted-foreground hover:text-foreground transition-colors text-left">
                 FAQ
               </button>
-              <Button className="glow-emerald w-full">Get Started</Button>
+              <Button asChild className="glow-emerald w-full">
+                <Link to="/auth">Get Started</Link>
+              </Button>
             </div>
           </div>
         )}
