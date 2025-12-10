@@ -8,7 +8,7 @@ import AnimatedFeaturesGrid from "@/components/landing/AnimatedFeaturesGrid";
 import HowItWorks from "@/components/landing/HowItWorks";
 import TechStack from "@/components/landing/TechStack";
 import FAQ from "@/components/landing/FAQ";
-import Footer from "@/components/landing/Footer";
+import AnimatedFooter from "@/components/landing/AnimatedFooter";
 
 const Landing = () => {
   return (
@@ -26,7 +26,7 @@ const Landing = () => {
       <HowItWorks />
       <TechStack />
       <FAQ />
-      <Footer />
+      <AnimatedFooter />
     </div>
   );
 };
