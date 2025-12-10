@@ -46,19 +46,19 @@ const DashboardSidebar = () => {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {mainNavItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
+              {mainNavItems.map((item, index) => (
+                <SidebarMenuItem key={item.title} className={`animate-slide-up stagger-${index + 1}`}>
                   <SidebarMenuButton asChild>
                     <NavLink
                       to={item.url}
-                      className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+                      className={`group flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
                         item.isPrimary
                           ? "bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 glow-emerald"
-                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50 hover:pl-5"
                       }`}
                       activeClassName="bg-primary/20 text-primary border-primary/50"
                     >
-                      <item.icon className="h-5 w-5" />
+                      <item.icon className="h-5 w-5 transition-transform duration-200 group-hover:scale-110" />
                       <span className="font-medium">{item.title}</span>
                     </NavLink>
                   </SidebarMenuButton>
@@ -77,10 +77,10 @@ const DashboardSidebar = () => {
               <SidebarMenuButton asChild>
                 <NavLink
                   to={item.url}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all duration-200"
+                  className="group flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 hover:pl-5 transition-all duration-200"
                   activeClassName="bg-muted text-foreground"
                 >
-                  <item.icon className="h-5 w-5" />
+                  <item.icon className="h-5 w-5 transition-transform duration-200 group-hover:scale-110" />
                   <span className="font-medium">{item.title}</span>
                 </NavLink>
               </SidebarMenuButton>
@@ -90,9 +90,9 @@ const DashboardSidebar = () => {
             <SidebarMenuButton asChild>
               <button
                 onClick={() => console.log("Logout")}
-                className="flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all duration-200 w-full"
+                className="group flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:pl-5 transition-all duration-200 w-full"
               >
-                <LogOut className="h-5 w-5" />
+                <LogOut className="h-5 w-5 transition-transform duration-200 group-hover:scale-110" />
                 <span className="font-medium">Logout</span>
               </button>
             </SidebarMenuButton>

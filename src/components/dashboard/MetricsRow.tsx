@@ -51,32 +51,40 @@ interface MetricsRowProps {
 const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: MetricsRowProps) => {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      <MetricCard
-        title="Total Scans"
-        value={totalScans}
-        icon={<Shield className="h-6 w-6" />}
-        variant="default"
-      />
-      <MetricCard
-        title="Critical Vulns"
-        value={criticalVulns}
-        icon={<ShieldAlert className="h-6 w-6" />}
-        variant="critical"
-      />
-      <MetricCard
-        title="Health Score"
-        value=""
-        icon={<Activity className="h-6 w-6" />}
-        variant="success"
-      >
-        <RadialProgress value={healthScore} />
-      </MetricCard>
-      <MetricCard
-        title="Pending Scans"
-        value={pendingScans}
-        icon={<Clock className="h-6 w-6" />}
-        variant="warning"
-      />
+      <div className="animate-slide-up stagger-1">
+        <MetricCard
+          title="Total Scans"
+          value={totalScans}
+          icon={<Shield className="h-6 w-6" />}
+          variant="default"
+        />
+      </div>
+      <div className="animate-slide-up stagger-2">
+        <MetricCard
+          title="Critical Vulns"
+          value={criticalVulns}
+          icon={<ShieldAlert className="h-6 w-6" />}
+          variant="critical"
+        />
+      </div>
+      <div className="animate-slide-up stagger-3">
+        <MetricCard
+          title="Health Score"
+          value=""
+          icon={<Activity className="h-6 w-6" />}
+          variant="success"
+        >
+          <RadialProgress value={healthScore} />
+        </MetricCard>
+      </div>
+      <div className="animate-slide-up stagger-4">
+        <MetricCard
+          title="Pending Scans"
+          value={pendingScans}
+          icon={<Clock className="h-6 w-6" />}
+          variant="warning"
+        />
+      </div>
     </div>
   );
 };
