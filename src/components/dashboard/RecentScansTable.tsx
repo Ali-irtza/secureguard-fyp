@@ -74,12 +74,13 @@ const RecentScansTable = ({ scans }: RecentScansTableProps) => {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {scans.map((scan) => (
+          {scans.map((scan, index) => (
             <TableRow
               key={scan.id}
-              className="border-border/50 hover:bg-muted/30 transition-colors"
+              className={`border-border/50 transition-all duration-200 hover:bg-muted/40 hover:pl-2 animate-slide-up stagger-${Math.min(index + 1, 5)}`}
+              style={{ animationDelay: `${index * 50}ms` }}
             >
-              <TableCell className="font-medium text-foreground">
+              <TableCell className="font-medium text-foreground transition-all duration-200">
                 {scan.projectName}
               </TableCell>
               <TableCell className="text-muted-foreground">
@@ -91,12 +92,12 @@ const RecentScansTable = ({ scans }: RecentScansTableProps) => {
               <TableCell>
                 <div className="flex items-center gap-2">
                   {scan.vulnerabilities.critical > 0 && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-destructive/20 text-destructive font-medium">
+                    <span className="text-xs px-2 py-0.5 rounded bg-destructive/20 text-destructive font-medium transition-transform duration-200 hover:scale-105">
                       {scan.vulnerabilities.critical} Critical
                     </span>
                   )}
                   {scan.vulnerabilities.high > 0 && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-orange-500/20 text-orange-400 font-medium">
+                    <span className="text-xs px-2 py-0.5 rounded bg-warning/20 text-warning font-medium transition-transform duration-200 hover:scale-105">
                       {scan.vulnerabilities.high} High
                     </span>
                   )}
@@ -111,9 +112,9 @@ const RecentScansTable = ({ scans }: RecentScansTableProps) => {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-emerald hover:text-emerald-glow hover:bg-emerald/10 font-medium"
+                  className="text-emerald hover:text-emerald-glow hover:bg-emerald/10 font-medium group"
                 >
-                  <FileText className="h-4 w-4 mr-1.5" />
+                  <FileText className="h-4 w-4 mr-1.5 transition-transform duration-200 group-hover:scale-110" />
                   View Report
                 </Button>
               </TableCell>

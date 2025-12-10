@@ -258,4 +258,71 @@
   .animate-pulse-glow {
     animation: pulse-glow 2s ease-in-out infinite;
   }
+
+  /* Micro-interaction utilities */
+  .hover-lift {
+    @apply transition-all duration-300 ease-out;
+  }
+  
+  .hover-lift:hover {
+    @apply -translate-y-1;
+    box-shadow: 0 10px 40px -10px hsl(var(--primary) / 0.2);
+  }
+
+  .press-effect {
+    @apply transition-transform duration-150 active:scale-[0.97];
+  }
+
+  .icon-bounce {
+    @apply transition-transform duration-200;
+  }
+
+  .group:hover .icon-bounce {
+    @apply animate-bounce-subtle;
+  }
+
+  /* Stagger animation delays for lists */
+  .stagger-1 { animation-delay: 0ms; }
+  .stagger-2 { animation-delay: 50ms; }
+  .stagger-3 { animation-delay: 100ms; }
+  .stagger-4 { animation-delay: 150ms; }
+  .stagger-5 { animation-delay: 200ms; }
+
+  /* Row hover effect */
+  .row-hover {
+    @apply transition-all duration-200;
+  }
+
+  .row-hover:hover {
+    @apply bg-muted/40 pl-2;
+  }
+
+  /* Shimmer loading effect */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted-foreground) / 0.1) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    .hover-lift,
+    .press-effect,
+    .icon-bounce,
+    .row-hover {
+      @apply transition-none transform-none;
+    }
+    
+    .animate-fade-in,
+    .animate-slide-up,
+    .animate-scale-up,
+    .animate-bounce-subtle {
+      animation: none;
+    }
+  }
 }
