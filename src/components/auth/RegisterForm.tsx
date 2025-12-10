@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Eye, EyeOff, Github, Mail, Lock, Check, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -31,6 +32,7 @@ const RegisterForm = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
@@ -52,11 +54,18 @@ const RegisterForm = () => {
 
   const onSubmit = async (data: RegisterFormValues) => {
     setIsLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    
+    // Mock auth - accept any valid credentials
+    localStorage.setItem("dev_authenticated", "true");
+    localStorage.setItem("dev_user_email", data.email);
+    
     toast({
-      title: "Registration attempted",
-      description: "Connect Supabase to enable real authentication.",
+      title: "Account created!",
+      description: "Welcome to the platform.",
     });
+    
+    navigate("/dashboard");
     setIsLoading(false);
   };
 
