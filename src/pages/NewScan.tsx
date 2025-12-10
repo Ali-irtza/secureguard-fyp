@@ -351,10 +351,8 @@ const NewScan = () => {
                         <SelectContent>
                           <SelectItem value="auto">Auto-detect</SelectItem>
                           <SelectItem value="python">Python</SelectItem>
-                          <SelectItem value="cpp">C/C++</SelectItem>
-                          <SelectItem value="javascript">JavaScript/TypeScript</SelectItem>
-                          <SelectItem value="java">Java</SelectItem>
-                          <SelectItem value="go">Go</SelectItem>
+                          <SelectItem value="c">C</SelectItem>
+                          <SelectItem value="cpp">C++</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
