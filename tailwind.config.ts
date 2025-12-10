@@ -218,6 +218,22 @@ export default {
 				'100%': {
 					backgroundPosition: '200% 0'
 				}
+			},
+			'float': {
+				'0%, 100%': {
+					transform: 'translateY(0)'
+				},
+				'50%': {
+					transform: 'translateY(-8px)'
+				}
+			},
+			'slow-spin': {
+				from: {
+					transform: 'rotate(0deg)'
+				},
+				to: {
+					transform: 'rotate(360deg)'
+				}
 			}
 		},
 		animation: {
@@ -232,7 +248,9 @@ export default {
 			'bounce-subtle': 'bounce-subtle 0.3s ease-out',
 			'scale-up': 'scale-up 0.2s ease-out',
 			'slide-up': 'slide-up 0.3s ease-out forwards',
-			'shimmer': 'shimmer 2s linear infinite'
+			'shimmer': 'shimmer 2s linear infinite',
+			'float': 'float 4s ease-in-out infinite',
+			'slow-spin': 'slow-spin 20s linear infinite',
 		},
   		backdropBlur: {
   			xs: '2px'
