@@ -11,67 +11,67 @@
 
 @layer base {
   :root {
-    /* Dark theme is the only theme - cybersecurity aesthetic */
-    --background: 60 4% 95%;
-    --foreground: 24 9% 10%;
+    /* Light theme - Clean and readable */
+    --background: 0 0% 98%;
+    --foreground: 222 47% 11%;
 
-    --card: 60 9% 97%;
-    --card-foreground: 24 9% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
 
-    --popover: 20 5% 90%;
-    --popover-foreground: 24 9% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
 
-    /* Primary: Neon Emerald Green - Cybersecurity */
-    --primary: 160 84% 39%;
-    --primary-foreground: 160 100% 97%;
+    /* Primary: Emerald Green */
+    --primary: 160 84% 35%;
+    --primary-foreground: 0 0% 100%;
 
-    /* Secondary: Slate for UI elements */
-    --secondary: 24 5% 44%;
-    --secondary-foreground: 60 9% 97%;
+    /* Secondary: Light gray for UI elements */
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
 
-    --muted: 23 5% 82%;
-    --muted-foreground: 24 9% 10%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
 
-    --accent: 47 100% 96%;
-    --accent-foreground: 37 92% 50%;
+    --accent: 160 84% 95%;
+    --accent-foreground: 160 84% 25%;
 
-    /* Destructive: Crimson Red - Critical/Danger */
+    /* Destructive: Crimson Red */
     --destructive: 0 72% 50%;
-    --destructive-foreground: 0 85% 97%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 23 5% 82%;
-    --input: 23 5% 82%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
     --ring: 160 84% 39%;
 
     --radius: 1rem;
 
-    /* Sidebar - Darker variant */
-    --sidebar-background: 222 47% 4%;
-    --sidebar-foreground: 24 9% 10%;
-    --sidebar-primary: 160 84% 39%;
-    --sidebar-primary-foreground: 160 100% 97%;
-    --sidebar-accent: 24 5% 44%;
-    --sidebar-accent-foreground: 60 9% 97%;
-    --sidebar-border: 23 5% 82%;
+    /* Sidebar - Light mode */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-primary: 160 84% 35%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 160 84% 95%;
+    --sidebar-accent-foreground: 160 84% 25%;
+    --sidebar-border: 220 13% 91%;
     --sidebar-ring: 160 84% 39%;
 
     /* Custom SecureGuard Colors */
-    --emerald: 160 84% 39%;
-    --emerald-glow: 160 84% 50%;
+    --emerald: 160 84% 35%;
+    --emerald-glow: 160 84% 45%;
     --crimson: 0 72% 51%;
     --crimson-glow: 0 72% 60%;
     --warning: 38 92% 50%;
-    --warning-foreground: 222 47% 5%;
+    --warning-foreground: 38 92% 10%;
 
-    /* Glassmorphism */
-    --glass-bg: 222 47% 8%;
-    --glass-border: 215 28% 20%;
-    --chart-1: 160 84% 45%;
-    --chart-2: 160 70% 55%;
-    --chart-3: 160 60% 65%;
-    --chart-4: 160 50% 35%;
-    --chart-5: 24 5% 44%;
-    --sidebar: 60 9% 97%;
+    /* Glassmorphism - Light mode */
+    --glass-bg: 0 0% 100%;
+    --glass-border: 220 13% 91%;
+    --chart-1: 160 84% 40%;
+    --chart-2: 160 70% 50%;
+    --chart-3: 160 60% 60%;
+    --chart-4: 160 50% 30%;
+    --chart-5: 220 9% 46%;
+    --sidebar: 0 0% 100%;
     --font-sans: 'Source Sans Pro', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
     --font-serif: 'Source Serif Pro', ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
     --font-mono: 'Source Code Pro', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
