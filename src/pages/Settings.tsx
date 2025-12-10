@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTheme } from "next-themes";
 import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera, Palette, Sun, Moon, Monitor } from "lucide-react";
 import { toast } from "sonner";
@@ -32,7 +33,16 @@ const accentColors = [
 ];
 
 const Settings = () => {
+  const [searchParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
+  const [activeTab, setActiveTab] = useState("profile");
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && ["profile", "api-keys", "notifications", "appearance"].includes(tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
   
   // Profile state
   const [name, setName] = useState("Alex Johnson");
@@ -81,7 +91,7 @@ const Settings = () => {
         </div>
 
         {/* Vertical Tabs Layout */}
-        <Tabs defaultValue="profile" orientation="vertical" className="flex flex-col lg:flex-row gap-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} orientation="vertical" className="flex flex-col lg:flex-row gap-6">
           {/* Sidebar Navigation */}
           <TabsList className="flex lg:flex-col h-auto bg-card/50 backdrop-blur-sm border border-border/50 p-2 rounded-lg lg:w-56 shrink-0">
             <TabsTrigger

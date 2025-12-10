@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { AlertTriangle, ChevronRight } from "lucide-react";
 
 interface Alert {
@@ -16,6 +17,7 @@ const mockAlerts: Alert[] = [
 ];
 
 const CriticalAlerts = () => {
+  const navigate = useNavigate();
   return (
     <div className="glass-card overflow-hidden animate-fade-in">
       <div className="p-6 border-b border-border/50 flex items-center justify-between">
@@ -49,7 +51,10 @@ const CriticalAlerts = () => {
         ))}
       </div>
       <div className="p-4 border-t border-border/50">
-        <button className="w-full text-center text-sm text-primary hover:text-primary/80 transition-colors font-medium">
+        <button 
+          onClick={() => navigate("/alerts")}
+          className="w-full text-center text-sm text-primary hover:text-primary/80 transition-colors font-medium"
+        >
           View All Alerts
         </button>
       </div>
