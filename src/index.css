@@ -309,20 +309,213 @@
     @apply animate-shimmer;
   }
 
+  /* Cinematic Background */
+  .bg-cyber-dark {
+    background: linear-gradient(180deg, #0a0a0f 0%, #0d1117 50%, #0a0a0f 100%);
+  }
+
+  /* Animated text gradient */
+  .text-gradient-animated {
+    background: linear-gradient(
+      90deg,
+      hsl(160, 84%, 45%) 0%,
+      hsl(160, 84%, 60%) 25%,
+      hsl(180, 70%, 50%) 50%,
+      hsl(160, 84%, 60%) 75%,
+      hsl(160, 84%, 45%) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: gradient-shift 3s ease-in-out infinite;
+  }
+
+  /* Gradient animated button background */
+  .bg-gradient-animated-btn {
+    background: linear-gradient(
+      90deg,
+      hsl(160, 84%, 35%) 0%,
+      hsl(160, 84%, 45%) 50%,
+      hsl(160, 84%, 35%) 100%
+    );
+    background-size: 200% 100%;
+  }
+
+  /* Floating code fragments animation */
+  @keyframes float-diagonal {
+    0% {
+      transform: translate(0, 0);
+      opacity: 0;
+    }
+    10% {
+      opacity: 1;
+    }
+    90% {
+      opacity: 1;
+    }
+    100% {
+      transform: translate(100vw, 100vh);
+      opacity: 0;
+    }
+  }
+
+  .animate-float-diagonal {
+    animation: float-diagonal linear infinite;
+  }
+
+  /* Floating badge animation */
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
+  }
+
+  /* Pulsing glow dot */
+  .animate-pulse-glow-dot {
+    animation: pulse-glow-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow-dot {
+    0%, 100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 0 hsl(160 84% 45% / 0.5);
+    }
+    50% {
+      transform: scale(1.15);
+      box-shadow: 0 0 10px 2px hsl(160 84% 45% / 0.3);
+    }
+  }
+
+  /* Number pop animation */
+  .animate-number-pop {
+    animation: number-pop 0.4s ease-out;
+  }
+
+  @keyframes number-pop {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.1);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  /* Slow spin for icons */
+  .animate-slow-spin {
+    animation: slow-spin 20s linear infinite;
+  }
+
+  @keyframes slow-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* One-time spin on hover */
+  .animate-spin-once {
+    animation: spin-once 0.5s ease-out;
+  }
+
+  @keyframes spin-once {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Stat card hover effect */
+  .stat-card-hover {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .stat-card-hover:hover {
+    transform: translateY(-8px);
+    box-shadow: 
+      0 20px 40px -10px hsl(160 84% 45% / 0.2),
+      0 0 30px hsl(160 84% 45% / 0.1);
+  }
+
+  /* Feature card hover effect */
+  .feature-card-hover {
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .feature-card-hover:hover {
+    transform: translateY(-10px);
+    box-shadow: 
+      0 25px 50px -12px hsl(160 84% 45% / 0.25),
+      0 0 0 1px hsl(160 84% 45% / 0.1);
+  }
+
+  /* Gradient shift animation */
+  @keyframes gradient-shift {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  .animate-gradient-shift {
+    animation: gradient-shift 2s ease-in-out infinite;
+  }
+
+  /* Logo scan effect */
+  @keyframes scan-logo {
+    0% {
+      transform: translateY(-100%);
+    }
+    100% {
+      transform: translateY(100%);
+    }
+  }
+
+  .animate-scan-logo {
+    animation: scan-logo 1s ease-in-out infinite;
+  }
+
   /* Reduced motion support */
   @media (prefers-reduced-motion: reduce) {
     .hover-lift,
     .press-effect,
     .icon-bounce,
-    .row-hover {
+    .row-hover,
+    .stat-card-hover,
+    .feature-card-hover {
       @apply transition-none transform-none;
     }
     
     .animate-fade-in,
     .animate-slide-up,
     .animate-scale-up,
-    .animate-bounce-subtle {
+    .animate-bounce-subtle,
+    .animate-float-diagonal,
+    .animate-slow-spin,
+    .animate-gradient-shift,
+    .animate-pulse-glow-dot,
+    .text-gradient-animated {
       animation: none;
+    }
+
+    .text-gradient-animated {
+      background: none;
+      color: hsl(160, 84%, 45%);
     }
   }
 }
