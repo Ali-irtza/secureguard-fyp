@@ -28,11 +28,11 @@ const StepCard = ({ step, index }: { step: typeof steps[0]; index: number }) => 
   return (
     <div 
       ref={ref}
-      className="relative group"
+      className="relative group h-full"
     >
       {/* Step Card */}
       <div 
-        className={`glass-card p-8 text-center relative z-10 transition-all duration-500 hover:scale-[1.02] hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10 ${
+        className={`glass-card p-8 text-center relative z-10 h-full flex flex-col transition-all duration-500 hover:scale-[1.02] hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10 ${
           isInView 
             ? "opacity-100 translate-y-0" 
             : "opacity-0 translate-y-8"
@@ -53,7 +53,7 @@ const StepCard = ({ step, index }: { step: typeof steps[0]; index: number }) => 
         <h3 className="text-xl font-semibold text-foreground mb-3">
           {step.title}
         </h3>
-        <p className="text-muted-foreground">
+        <p className="text-muted-foreground flex-grow">
           {step.description}
         </p>
       </div>
