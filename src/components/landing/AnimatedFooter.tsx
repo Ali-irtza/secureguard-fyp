@@ -1,4 +1,5 @@
 import { Shield, Github, Twitter, Linkedin } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useInView } from "@/hooks/use-in-view";
 
 const AnimatedFooter = () => {
@@ -7,11 +8,17 @@ const AnimatedFooter = () => {
   return (
     <footer 
       ref={ref}
-      className={`py-12 border-t border-white/10 transition-all duration-1000 relative z-10 ${
+      className={`py-16 relative z-10 transition-all duration-1000 ${
         isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
       }`}
     >
-      <div className="container mx-auto px-4">
+      {/* Enhanced Background */}
+      <div className="absolute inset-0 bg-gradient-to-t from-emerald-950/30 via-cyber-dark/80 to-transparent backdrop-blur-sm" />
+      
+      {/* Decorative Top Border */}
+      <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent" />
+      
+      <div className="container mx-auto px-4 relative">
         <div className="flex flex-col md:flex-row items-center justify-between gap-8">
           {/* Logo */}
           <div className="flex items-center gap-2 group">
@@ -20,19 +27,31 @@ const AnimatedFooter = () => {
           </div>
 
           {/* Links */}
-          <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-gray-400">
-            <a href="#" className="hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full">
+          <div className="flex flex-wrap items-center justify-center gap-6 text-sm">
+            <Link 
+              to="/about" 
+              className="text-gray-300 hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full"
+            >
               About
-            </a>
-            <a href="#" className="hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full">
+            </Link>
+            <Link 
+              to="/privacy" 
+              className="text-gray-300 hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full"
+            >
               Privacy
-            </a>
-            <a href="#" className="hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full">
+            </Link>
+            <Link 
+              to="/terms" 
+              className="text-gray-300 hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full"
+            >
               Terms
-            </a>
-            <a href="#" className="hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full">
+            </Link>
+            <Link 
+              to="/contact" 
+              className="text-gray-300 hover:text-emerald-400 transition-colors relative after:absolute after:bottom-0 after:left-0 after:w-0 after:h-px after:bg-emerald-400 after:transition-all after:duration-300 hover:after:w-full"
+            >
               Contact
-            </a>
+            </Link>
           </div>
 
           {/* Social Icons */}
