@@ -111,7 +111,7 @@ const RecentScansTable = ({ scans }: RecentScansTableProps) => {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-primary hover:text-primary hover:bg-primary/10"
+                  className="text-emerald hover:text-emerald-glow hover:bg-emerald/10 font-medium"
                 >
                   <FileText className="h-4 w-4 mr-1.5" />
                   View Report
