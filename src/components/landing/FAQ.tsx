@@ -22,14 +22,14 @@ const faqs = [
 
 const FAQ = () => {
   return (
-    <section id="faq" className="py-24 bg-muted/30 scroll-mt-16">
+    <section id="faq" className="py-24 scroll-mt-16">
       <div className="container mx-auto px-4">
         {/* Section Header */}
         <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
             Frequently Asked Questions
           </h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+          <p className="text-lg text-gray-400 max-w-2xl mx-auto">
             Everything you need to know about SecureGuard Pro
           </p>
         </div>
@@ -41,14 +41,14 @@ const FAQ = () => {
               <AccordionItem
                 key={index}
                 value={`item-${index}`}
-                className="glass-card px-6 border-none"
+                className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl px-6"
               >
-                <AccordionTrigger className="text-left hover:no-underline py-6">
-                  <span className="text-lg font-medium text-foreground">
+                <AccordionTrigger className="text-left hover:no-underline py-6 text-white [&>svg]:text-emerald-400">
+                  <span className="text-lg font-medium">
                     {faq.question}
                   </span>
                 </AccordionTrigger>
-                <AccordionContent className="text-muted-foreground pb-6">
+                <AccordionContent className="text-gray-400 pb-6">
                   {faq.answer}
                 </AccordionContent>
               </AccordionItem>

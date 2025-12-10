@@ -27,10 +27,10 @@ const TechStack = () => {
       <div className="container mx-auto px-4">
         {/* Section Header */}
         <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
             Built with Industry-Leading Technology
           </h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+          <p className="text-lg text-gray-400 max-w-2xl mx-auto">
             Our robust architecture ensures reliability, security, and blazing-fast performance
           </p>
         </div>
@@ -40,15 +40,15 @@ const TechStack = () => {
           {technologies.map((tech, index) => (
             <div
               key={index}
-              className="glass-card p-6 text-center group hover:border-primary/40 transition-all duration-300"
+              className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl p-6 text-center group hover:border-emerald-500/40 transition-all duration-300"
             >
               <div className="text-4xl mb-4 grayscale group-hover:grayscale-0 transition-all duration-300">
                 {tech.icon}
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-1">
+              <h3 className="text-lg font-semibold text-white mb-1">
                 {tech.name}
               </h3>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-gray-400">
                 {tech.description}
               </p>
             </div>
