@@ -70,7 +70,7 @@ const StepCard = ({ step, index }: { step: typeof steps[0]; index: number }) => 
 
 const HowItWorks = () => {
   return (
-    <section id="how-it-works" className="py-24 scroll-mt-16">
+    <section id="how-it-works" className="py-24 scroll-mt-16 relative z-10">
       <div className="container mx-auto px-4">
         {/* Section Header */}
         <div className="text-center mb-16">
