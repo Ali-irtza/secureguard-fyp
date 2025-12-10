@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Eye, EyeOff, Github, Mail, Lock } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,6 +27,7 @@ const LoginForm = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -38,12 +39,18 @@ const LoginForm = () => {
 
   const onSubmit = async (data: LoginFormValues) => {
     setIsLoading(true);
-    // Simulate API call - replace with actual Supabase auth
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    
+    // Mock auth - accept any valid credentials
+    localStorage.setItem("dev_authenticated", "true");
+    localStorage.setItem("dev_user_email", data.email);
+    
     toast({
-      title: "Login attempted",
-      description: "Connect Supabase to enable real authentication.",
+      title: "Welcome back!",
+      description: "You've been signed in successfully.",
     });
+    
+    navigate("/dashboard");
     setIsLoading(false);
   };
 
