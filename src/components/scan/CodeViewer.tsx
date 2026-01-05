@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { MousePointerClick } from "lucide-react";
 
 interface CodeLine {
   lineNumber: number;
@@ -57,22 +58,61 @@ const highlightSyntax = (content: string, language: string): React.ReactNode => 
 export const CodeViewer = ({ lines, currentLine, language }: CodeViewerProps) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const lastUserScrollTime = useRef(0);
 
+  // Handle user scroll to temporarily disable auto-scroll
+  const handleScroll = () => {
+    lastUserScrollTime.current = Date.now();
+    setAutoScrollEnabled(false);
+  };
+
+  // Re-enable auto-scroll after 3 seconds of no user interaction
   useEffect(() => {
-    // Auto-scroll to current line
-    if (lineRefs.current[currentLine - 1]) {
+    const timer = setInterval(() => {
+      if (!autoScrollEnabled && Date.now() - lastUserScrollTime.current > 3000) {
+        setAutoScrollEnabled(true);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [autoScrollEnabled]);
+
+  // Auto-scroll to current line only when enabled
+  useEffect(() => {
+    if (autoScrollEnabled && lineRefs.current[currentLine - 1]) {
       lineRefs.current[currentLine - 1]?.scrollIntoView({
         behavior: "smooth",
         block: "center",
       });
     }
-  }, [currentLine]);
+  }, [currentLine, autoScrollEnabled]);
 
   return (
-    <div 
-      ref={scrollRef}
-      className="h-full overflow-auto bg-[#0d1117] rounded-lg border border-border/30 font-mono text-sm"
-    >
+    <div className="h-full flex flex-col bg-[#0d1117] rounded-lg border border-border/30 font-mono text-sm relative">
+      {/* Auto-scroll toggle header */}
+      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-2 bg-[#0d1117]/95 backdrop-blur border-b border-border/30">
+        <span className="text-xs text-muted-foreground uppercase tracking-wider">
+          {language.toUpperCase()} • {lines.length} lines
+        </span>
+        <button 
+          onClick={() => setAutoScrollEnabled(!autoScrollEnabled)}
+          className={cn(
+            "flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors",
+            autoScrollEnabled 
+              ? "bg-primary/20 text-primary" 
+              : "bg-muted/50 text-muted-foreground hover:bg-muted"
+          )}
+        >
+          <MousePointerClick className="h-3 w-3" />
+          Auto-scroll {autoScrollEnabled ? "ON" : "OFF"}
+        </button>
+      </div>
+      
+      <div 
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-auto"
+      >
       <div className="p-4">
         {lines.map((line, index) => (
           <div
@@ -113,14 +153,7 @@ export const CodeViewer = ({ lines, currentLine, language }: CodeViewerProps) =>
         ))}
       </div>
       
-      {/* Scan beam effect */}
-      <div 
-        className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent opacity-50 pointer-events-none"
-        style={{
-          top: `${(currentLine / lines.length) * 100}%`,
-          transition: "top 150ms ease-out"
-        }}
-      />
+      </div>
     </div>
   );
 };
