@@ -136,7 +136,7 @@ const AnimatedHero = () => {
             <Button 
               size="lg" 
               className="glow-emerald text-lg px-10 py-6 group relative overflow-hidden bg-gradient-animated-btn"
-              onClick={() => navigate("/new-scan")}
+              onClick={() => navigate("/auth")}
             >
               <span className="relative z-10 flex items-center">
                 Scan Code Now
