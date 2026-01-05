@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +28,7 @@ import {
   KeyRound,
   Shield,
   ArrowLeft,
+  StopCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
@@ -215,6 +216,9 @@ const NewScan = () => {
     vulnerabilitiesFound: 0,
     elapsedTime: 0,
   });
+  
+  // Abort ref for stopping scan
+  const scanAbortRef = useRef(false);
 
   const detectLanguage = (filename: string): string => {
     const ext = filename.split(".").pop()?.toLowerCase();
@@ -230,7 +234,14 @@ const NewScan = () => {
     setLogs((prev) => [...prev, { timestamp, message, type }]);
   }, []);
 
+  const handleStopScan = () => {
+    scanAbortRef.current = true;
+    setIsScanning(false);
+    addLog("Scan cancelled by user", "warning");
+  };
+
   const handleStartScan = async () => {
+    scanAbortRef.current = false;
     setIsScanning(true);
     setScanComplete(false);
     setCurrentPhase(0);
@@ -287,6 +298,11 @@ const NewScan = () => {
     const startTime = Date.now();
     
     for (let i = 0; i < lines.length; i++) {
+      // Check for abort
+      if (scanAbortRef.current) {
+        break;
+      }
+      
       const lineNum = i + 1;
       setCurrentLine(lineNum);
       
@@ -330,6 +346,11 @@ const NewScan = () => {
       }
       
       await new Promise(r => setTimeout(r, 100));
+    }
+    
+    // If aborted, don't complete the scan
+    if (scanAbortRef.current) {
+      return;
     }
 
     // Mark last line
@@ -453,6 +474,12 @@ const NewScan = () => {
                 </p>
               </div>
             </div>
+            {isScanning && (
+              <Button variant="destructive" onClick={handleStopScan}>
+                <StopCircle className="h-4 w-4 mr-2" />
+                Stop Scan
+              </Button>
+            )}
             {scanComplete && (
               <div className="flex gap-2">
                 <Button className="shadow-lg shadow-primary/25">
@@ -465,33 +492,35 @@ const NewScan = () => {
             )}
           </div>
 
-          {/* Split Screen */}
+          {/* Split Screen - 40% / 60% */}
           <div className="flex-1 flex overflow-hidden">
-            {/* Left Panel - Progress */}
-            <div className="w-[400px] border-r border-border/50 bg-card/30">
-              <ScanningProgress
-                currentPhase={currentPhase}
-                stats={stats}
-                isComplete={scanComplete}
-              />
+            {/* Left Panel - Progress (40%) */}
+            <div className="w-[40%] min-w-[300px] max-w-[500px] border-r border-border/50 bg-card/30 flex flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto">
+                <ScanningProgress
+                  currentPhase={currentPhase}
+                  stats={stats}
+                  isComplete={scanComplete}
+                />
+              </div>
+              
+              {/* Terminal Logs in left panel */}
+              <div className="p-4 border-t border-border/50">
+                <ScanLogTerminal
+                  logs={logs}
+                  isExpanded={logsExpanded}
+                  onToggleExpand={() => setLogsExpanded(!logsExpanded)}
+                />
+              </div>
             </div>
 
-            {/* Right Panel - Code Viewer */}
-            <div className="flex-1 flex flex-col bg-background">
+            {/* Right Panel - Code Viewer (60%) */}
+            <div className="flex-1 flex flex-col bg-background overflow-hidden">
               <div className="flex-1 p-4 overflow-hidden">
                 <CodeViewer
                   lines={codeLines}
                   currentLine={currentLine}
                   language={uploadedFile ? detectLanguage(uploadedFile.name) : "python"}
-                />
-              </div>
-              
-              {/* Terminal Logs */}
-              <div className="p-4 pt-0">
-                <ScanLogTerminal
-                  logs={logs}
-                  isExpanded={logsExpanded}
-                  onToggleExpand={() => setLogsExpanded(!logsExpanded)}
                 />
               </div>
             </div>
