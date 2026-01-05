@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, Calendar, Download, Trash2, Share2, Plus, Clock, FileBarChart, FileSpreadsheet, FilePieChart, CheckCircle2 } from "lucide-react";
+import { FileText, Calendar, Download, Trash2, Share2, Plus, Clock, FileBarChart, CheckCircle2 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,6 @@ const summaryStats = [
   { label: "Storage Used", value: "124 MB", icon: FileBarChart },
 ];
 
-const reportTemplates = [
-  { id: 1, name: "Executive Summary", desc: "High-level overview for stakeholders", icon: FilePieChart },
-  { id: 2, name: "Full Security Audit", desc: "Comprehensive vulnerability report", icon: FileText },
-  { id: 3, name: "Compliance Report", desc: "SOC2, GDPR, HIPAA compliance", icon: FileBarChart },
-  { id: 4, name: "Vulnerability Trends", desc: "Historical analysis and trends", icon: FileSpreadsheet },
-];
 
 const recentReports = [
   { id: 1, name: "Weekly Security Summary", type: "Executive Summary", date: "Dec 9, 2024", status: "completed", format: "PDF" },
@@ -84,28 +78,6 @@ const Reports = () => {
           ))}
         </div>
 
-        {/* Report Templates */}
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader>
-            <CardTitle>Report Templates</CardTitle>
-            <CardDescription>Quick-start with pre-configured report formats</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {reportTemplates.map((template) => (
-                <button
-                  key={template.id}
-                  onClick={() => setDialogOpen(true)}
-                  className="p-4 rounded-xl border border-border/50 bg-background/30 hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
-                >
-                  <template.icon className="h-8 w-8 text-primary mb-3 group-hover:scale-110 transition-transform" />
-                  <h3 className="font-medium text-foreground">{template.name}</h3>
-                  <p className="text-sm text-muted-foreground mt-1">{template.desc}</p>
-                </button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
 
         {/* Recent Reports Table */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
