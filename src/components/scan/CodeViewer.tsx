@@ -67,15 +67,7 @@ export const CodeViewer = ({ lines, currentLine, language }: CodeViewerProps) =>
     setAutoScrollEnabled(false);
   };
 
-  // Re-enable auto-scroll after 3 seconds of no user interaction
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (!autoScrollEnabled && Date.now() - lastUserScrollTime.current > 3000) {
-        setAutoScrollEnabled(true);
-      }
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [autoScrollEnabled]);
+  // No auto-re-enable - user has full control once they scroll
 
   // Auto-scroll to current line only when enabled
   useEffect(() => {

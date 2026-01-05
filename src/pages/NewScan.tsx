@@ -457,45 +457,47 @@ const NewScan = () => {
   if (isScanning || scanComplete) {
     return (
       <DashboardLayout>
-        <div className="h-[calc(100vh-4rem)] flex flex-col">
+        <div className="h-[calc(100vh-4rem)] -m-4 lg:-m-6 flex flex-col">
           {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-border/50">
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" onClick={handleReset}>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3 md:p-4 border-b border-border/50 bg-background">
+            <div className="flex items-center gap-2 min-w-0">
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={handleReset}>
                 <ArrowLeft className="h-5 w-5" />
               </Button>
-              <div>
-                <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
-                  <Shield className="h-5 w-5 text-primary" />
-                  Security Analysis
+              <div className="min-w-0">
+                <h1 className="text-lg md:text-xl font-bold text-foreground flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-primary shrink-0" />
+                  <span className="truncate">Security Analysis</span>
                 </h1>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground truncate">
                   {uploadedFile?.name || "Code Analysis"}
                 </p>
               </div>
             </div>
-            {isScanning && (
-              <Button variant="destructive" onClick={handleStopScan}>
-                <StopCircle className="h-4 w-4 mr-2" />
-                Stop Scan
-              </Button>
-            )}
-            {scanComplete && (
-              <div className="flex gap-2">
-                <Button className="shadow-lg shadow-primary/25">
-                  View Full Report
+            <div className="flex items-center gap-2 shrink-0">
+              {isScanning && (
+                <Button variant="destructive" size="sm" onClick={handleStopScan}>
+                  <StopCircle className="h-4 w-4 mr-1.5" />
+                  Stop
                 </Button>
-                <Button variant="outline" onClick={handleReset}>
-                  New Scan
-                </Button>
-              </div>
-            )}
+              )}
+              {scanComplete && (
+                <>
+                  <Button size="sm" className="shadow-lg shadow-primary/25">
+                    View Report
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleReset}>
+                    New Scan
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Split Screen - 40% / 60% */}
           <div className="flex-1 flex overflow-hidden">
             {/* Left Panel - Progress (40%) */}
-            <div className="w-[40%] min-w-[300px] max-w-[500px] border-r border-border/50 bg-card/30 flex flex-col overflow-hidden">
+            <div className="w-2/5 min-w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto">
                 <ScanningProgress
                   currentPhase={currentPhase}
@@ -515,7 +517,7 @@ const NewScan = () => {
             </div>
 
             {/* Right Panel - Code Viewer (60%) */}
-            <div className="flex-1 flex flex-col bg-background overflow-hidden">
+            <div className="flex-1 min-w-0 flex flex-col bg-background overflow-hidden">
               <div className="flex-1 p-4 overflow-hidden">
                 <CodeViewer
                   lines={codeLines}
