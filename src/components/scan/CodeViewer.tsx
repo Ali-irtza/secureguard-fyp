@@ -80,7 +80,7 @@ export const CodeViewer = ({ lines, currentLine, language }: CodeViewerProps) =>
   }, [currentLine, autoScrollEnabled]);
 
   return (
-    <div className="h-full flex flex-col bg-[#0d1117] rounded-lg border border-border/30 font-mono text-sm relative">
+    <div className="h-full w-full flex flex-col bg-[#0d1117] rounded-lg border border-border/30 font-mono text-sm relative">
       {/* Auto-scroll toggle header */}
       <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-2 bg-[#0d1117]/95 backdrop-blur border-b border-border/30">
         <span className="text-xs text-muted-foreground uppercase tracking-wider">

@@ -574,19 +574,21 @@ const NewScan = () => {
               </div>
             </div>
 
-            {/* Right Panel - Code Viewer (Full Width when panel hidden) */}
+            {/* Right Panel - Code Viewer (Constrained Width, Centered) */}
             <div 
               className={cn(
-                "flex-1 min-w-0 flex flex-col bg-background overflow-hidden transition-all duration-300",
+                "flex-1 min-w-0 flex flex-col bg-muted/20 overflow-hidden transition-all duration-300",
                 !showPanel && "ml-0"
               )}
             >
-              <div className="flex-1 p-4 overflow-hidden">
-                <CodeViewer
-                  lines={codeLines}
-                  currentLine={currentLine}
-                  language={uploadedFile ? detectLanguage(uploadedFile.name) : "python"}
-                />
+              <div className="flex-1 p-4 lg:p-6 overflow-hidden flex justify-center">
+                <div className="w-full max-w-4xl h-full">
+                  <CodeViewer
+                    lines={codeLines}
+                    currentLine={currentLine}
+                    language={uploadedFile ? detectLanguage(uploadedFile.name) : "python"}
+                  />
+                </div>
               </div>
             </div>
           </div>
