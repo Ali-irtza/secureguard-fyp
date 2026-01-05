@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -22,59 +21,358 @@ import {
 import {
   Upload,
   Github,
-  FileCode,
   Settings2,
   ChevronDown,
   Play,
-  Loader2,
-  CheckCircle2,
   Sparkles,
   KeyRound,
+  Shield,
+  ArrowLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CodeViewer } from "@/components/scan/CodeViewer";
+import { ScanningProgress } from "@/components/scan/ScanningProgress";
+import { ScanLogTerminal, LogEntry } from "@/components/scan/ScanLogTerminal";
+import { FileUploadArea } from "@/components/scan/FileUploadArea";
 
-type ScanStep = {
-  label: string;
-  status: "pending" | "active" | "completed";
+// Mock code samples for different languages
+const MOCK_CODE = {
+  python: `import os
+import sqlite3
+from flask import Flask, request
+
+app = Flask(__name__)
+
+def get_user(user_id):
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    # SQL Injection vulnerability
+    query = f"SELECT * FROM users WHERE id = {user_id}"
+    cursor.execute(query)
+    return cursor.fetchone()
+
+@app.route('/login', methods=['POST'])
+def login():
+    username = request.form['username']
+    password = request.form['password']
+    
+    # Hardcoded credentials
+    if username == 'admin' and password == 'password123':
+        return 'Login successful'
+    
+    return 'Invalid credentials'
+
+@app.route('/exec', methods=['POST'])
+def execute():
+    # Command injection vulnerability
+    cmd = request.form['cmd']
+    os.system(cmd)
+    return 'Executed'
+
+if __name__ == '__main__':
+    app.run(debug=True)`,
+  c: `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void vulnerable_function(char *input) {
+    char buffer[64];
+    // Buffer overflow vulnerability
+    strcpy(buffer, input);
+    printf("Input: %s\\n", buffer);
+}
+
+int check_password(char *password) {
+    // Hardcoded password
+    if (strcmp(password, "secret123") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+void format_string_vuln(char *user_input) {
+    // Format string vulnerability
+    printf(user_input);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("Usage: %s <input>\\n", argv[0]);
+        return 1;
+    }
+    
+    vulnerable_function(argv[1]);
+    
+    char password[100];
+    printf("Enter password: ");
+    gets(password); // Dangerous function
+    
+    if (check_password(password)) {
+        printf("Access granted\\n");
+    }
+    
+    return 0;
+}`,
+  cpp: `#include <iostream>
+#include <cstring>
+#include <fstream>
+
+using namespace std;
+
+class UserAuth {
+private:
+    char username[50];
+    char password[50];
+    
+public:
+    void setCredentials(const char* user, const char* pass) {
+        // Buffer overflow potential
+        strcpy(username, user);
+        strcpy(password, pass);
+    }
+    
+    bool authenticate(const char* pass) {
+        // Timing attack vulnerability
+        return strcmp(password, pass) == 0;
+    }
 };
+
+void readFile(const char* filename) {
+    // Path traversal vulnerability
+    ifstream file(filename);
+    string line;
+    while (getline(file, line)) {
+        cout << line << endl;
+    }
+}
+
+int* createArray(int size) {
+    // Memory leak - no delete
+    int* arr = new int[size];
+    return arr;
+}
+
+int main() {
+    UserAuth auth;
+    auth.setCredentials("admin", "admin123");
+    
+    char input[256];
+    cout << "Enter filename: ";
+    cin >> input;
+    
+    // No input validation
+    readFile(input);
+    
+    return 0;
+}`
+};
+
+// Vulnerability patterns for simulation
+const VULNERABILITY_PATTERNS = [
+  { line: 11, message: "SQL Injection", lang: "python" },
+  { line: 18, message: "Hardcoded Credentials", lang: "python" },
+  { line: 26, message: "Command Injection", lang: "python" },
+  { line: 7, message: "Buffer Overflow", lang: "c" },
+  { line: 12, message: "Hardcoded Password", lang: "c" },
+  { line: 18, message: "Format String Vuln", lang: "c" },
+  { line: 29, message: "Dangerous Function", lang: "c" },
+  { line: 14, message: "Buffer Overflow", lang: "cpp" },
+  { line: 19, message: "Timing Attack", lang: "cpp" },
+  { line: 25, message: "Path Traversal", lang: "cpp" },
+  { line: 32, message: "Memory Leak", lang: "cpp" },
+];
+
+interface CodeLine {
+  lineNumber: number;
+  content: string;
+  status: "pending" | "scanning" | "safe" | "vulnerable";
+  vulnerability?: string;
+}
 
 const NewScan = () => {
   const [activeTab, setActiveTab] = useState("upload");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [scanComplete, setScanComplete] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [fileContent, setFileContent] = useState<string>("");
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("main");
   const [language, setLanguage] = useState("auto");
   const [deepAnalysis, setDeepAnalysis] = useState(true);
   const [checkSecrets, setCheckSecrets] = useState(true);
+  
+  // Scanning state
+  const [currentPhase, setCurrentPhase] = useState(0);
+  const [currentLine, setCurrentLine] = useState(0);
+  const [codeLines, setCodeLines] = useState<CodeLine[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(true);
+  const [stats, setStats] = useState({
+    linesScanned: 0,
+    totalLines: 0,
+    vulnerabilitiesFound: 0,
+    elapsedTime: 0,
+  });
 
-  const scanSteps: ScanStep[] = [
-    { label: "Initializing AI...", status: currentStepIndex > 0 ? "completed" : currentStepIndex === 0 && isScanning ? "active" : "pending" },
-    { label: "Parsing Source Code...", status: currentStepIndex > 1 ? "completed" : currentStepIndex === 1 ? "active" : "pending" },
-    { label: "Scanning for Vulnerabilities...", status: currentStepIndex > 2 ? "completed" : currentStepIndex === 2 ? "active" : "pending" },
-    { label: "Running Deep Analysis...", status: currentStepIndex > 3 ? "completed" : currentStepIndex === 3 ? "active" : "pending" },
-    { label: "Generating Report...", status: currentStepIndex > 4 ? "completed" : currentStepIndex === 4 ? "active" : "pending" },
-  ];
+  const detectLanguage = (filename: string): string => {
+    const ext = filename.split(".").pop()?.toLowerCase();
+    if (ext === "py") return "python";
+    if (ext === "c" || ext === "h") return "c";
+    if (["cpp", "cc", "cxx", "hpp"].includes(ext || "")) return "cpp";
+    return "python";
+  };
 
-  const handleStartScan = () => {
+  const addLog = useCallback((message: string, type: LogEntry["type"] = "info") => {
+    const now = new Date();
+    const timestamp = `${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
+    setLogs((prev) => [...prev, { timestamp, message, type }]);
+  }, []);
+
+  const handleStartScan = async () => {
     setIsScanning(true);
-    setCurrentStepIndex(0);
-
-    // Simulate scan progress
-    const stepDuration = 1500;
-    scanSteps.forEach((_, index) => {
-      setTimeout(() => {
-        setCurrentStepIndex(index + 1);
-      }, stepDuration * (index + 1));
+    setScanComplete(false);
+    setCurrentPhase(0);
+    setCurrentLine(0);
+    setLogs([]);
+    
+    // Determine language and get code
+    const detectedLang = uploadedFile 
+      ? detectLanguage(uploadedFile.name) 
+      : language === "auto" ? "python" : language;
+    
+    // Use uploaded file content or mock code
+    const code = fileContent || MOCK_CODE[detectedLang as keyof typeof MOCK_CODE] || MOCK_CODE.python;
+    const lines = code.split("\n");
+    
+    // Initialize code lines
+    const initialLines: CodeLine[] = lines.map((content, index) => ({
+      lineNumber: index + 1,
+      content,
+      status: "pending" as const,
+    }));
+    setCodeLines(initialLines);
+    setStats({
+      linesScanned: 0,
+      totalLines: lines.length,
+      vulnerabilitiesFound: 0,
+      elapsedTime: 0,
     });
 
-    // Complete scan
-    setTimeout(() => {
-      setIsScanning(false);
-    }, stepDuration * (scanSteps.length + 1));
+    // Get vulnerabilities for this language
+    const vulns = VULNERABILITY_PATTERNS.filter(v => v.lang === detectedLang);
+
+    // Phase 0: Initialize
+    addLog("Initializing SecureGuard AI Scanner v2.1.0...", "info");
+    await new Promise(r => setTimeout(r, 800));
+    addLog("Loading vulnerability database (15,234 patterns)...", "info");
+    await new Promise(r => setTimeout(r, 600));
+    addLog("AI engine ready", "success");
+    setCurrentPhase(1);
+
+    // Phase 1: Parse
+    addLog(`Parsing ${detectedLang.toUpperCase()} source code...`, "info");
+    await new Promise(r => setTimeout(r, 500));
+    addLog(`Found ${lines.length} lines of code`, "info");
+    await new Promise(r => setTimeout(r, 400));
+    addLog("Building Abstract Syntax Tree...", "info");
+    await new Promise(r => setTimeout(r, 600));
+    addLog("Syntax tree constructed successfully", "success");
+    setCurrentPhase(2);
+
+    // Phase 2: Line-by-line scanning
+    addLog("Starting vulnerability scan...", "info");
+    let vulnCount = 0;
+    const startTime = Date.now();
+    
+    for (let i = 0; i < lines.length; i++) {
+      const lineNum = i + 1;
+      setCurrentLine(lineNum);
+      
+      // Check for vulnerability
+      const vuln = vulns.find(v => v.line === lineNum);
+      
+      // Update line status
+      setCodeLines(prev => prev.map((line, idx) => {
+        if (idx === i) {
+          return {
+            ...line,
+            status: "scanning",
+          };
+        }
+        if (idx < i) {
+          const prevVuln = vulns.find(v => v.line === idx + 1);
+          return {
+            ...line,
+            status: prevVuln ? "vulnerable" : "safe",
+            vulnerability: prevVuln?.message,
+          };
+        }
+        return line;
+      }));
+      
+      // Update stats
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      setStats(prev => ({
+        ...prev,
+        linesScanned: lineNum,
+        elapsedTime: elapsed,
+        vulnerabilitiesFound: vulnCount,
+      }));
+
+      if (vuln) {
+        vulnCount++;
+        addLog(`Line ${lineNum}: Potential ${vuln.message} detected`, "warning");
+        await new Promise(r => setTimeout(r, 300));
+      } else if (lineNum % 5 === 0) {
+        addLog(`Scanning line ${lineNum}...`, "info");
+      }
+      
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // Mark last line
+    setCodeLines(prev => prev.map((line, idx) => {
+      if (idx === lines.length - 1) {
+        const lastVuln = vulns.find(v => v.line === lines.length);
+        return {
+          ...line,
+          status: lastVuln ? "vulnerable" : "safe",
+          vulnerability: lastVuln?.message,
+        };
+      }
+      return line;
+    }));
+
+    // Phase 3: Deep analysis
+    setCurrentPhase(3);
+    addLog("Running deep AI analysis...", "info");
+    await new Promise(r => setTimeout(r, 1000));
+    addLog("Analyzing data flow patterns...", "info");
+    await new Promise(r => setTimeout(r, 800));
+    addLog("Checking for complex vulnerability chains...", "info");
+    await new Promise(r => setTimeout(r, 600));
+    addLog("Deep analysis complete", "success");
+
+    // Phase 4: Generate report
+    setCurrentPhase(4);
+    addLog("Generating security report...", "info");
+    await new Promise(r => setTimeout(r, 800));
+    addLog(`Found ${vulnCount} potential vulnerabilities`, vulnCount > 0 ? "warning" : "success");
+    await new Promise(r => setTimeout(r, 400));
+    addLog("Report generated successfully", "success");
+
+    // Complete
+    setCurrentPhase(5);
+    setStats(prev => ({
+      ...prev,
+      vulnerabilitiesFound: vulnCount,
+      elapsedTime: Math.floor((Date.now() - startTime) / 1000),
+    }));
+    setIsScanning(false);
+    setScanComplete(true);
+    addLog("Scan complete!", "success");
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -92,6 +390,12 @@ const NewScan = () => {
     const file = e.dataTransfer.files[0];
     if (file) {
       setUploadedFile(file);
+      // Read file content
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setFileContent(e.target?.result as string || "");
+      };
+      reader.readAsText(file);
     }
   };
 
@@ -99,325 +403,297 @@ const NewScan = () => {
     const file = e.target.files?.[0];
     if (file) {
       setUploadedFile(file);
+      // Read file content
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setFileContent(e.target?.result as string || "");
+      };
+      reader.readAsText(file);
     }
   };
 
-  const progressPercentage = isScanning 
-    ? Math.min((currentStepIndex / scanSteps.length) * 100, 100) 
-    : currentStepIndex === scanSteps.length ? 100 : 0;
+  const handleReset = () => {
+    setIsScanning(false);
+    setScanComplete(false);
+    setCurrentPhase(0);
+    setCurrentLine(0);
+    setCodeLines([]);
+    setLogs([]);
+    setUploadedFile(null);
+    setFileContent("");
+    setRepoUrl("");
+    setStats({
+      linesScanned: 0,
+      totalLines: 0,
+      vulnerabilitiesFound: 0,
+      elapsedTime: 0,
+    });
+  };
 
   const canStartScan = activeTab === "upload" ? !!uploadedFile : !!repoUrl;
 
+  // If scanning or complete, show split-screen view
+  if (isScanning || scanComplete) {
+    return (
+      <DashboardLayout>
+        <div className="h-[calc(100vh-4rem)] flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-border/50">
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" size="icon" onClick={handleReset}>
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+              <div>
+                <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-primary" />
+                  Security Analysis
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  {uploadedFile?.name || "Code Analysis"}
+                </p>
+              </div>
+            </div>
+            {scanComplete && (
+              <div className="flex gap-2">
+                <Button className="shadow-lg shadow-primary/25">
+                  View Full Report
+                </Button>
+                <Button variant="outline" onClick={handleReset}>
+                  New Scan
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Split Screen */}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Left Panel - Progress */}
+            <div className="w-[400px] border-r border-border/50 bg-card/30">
+              <ScanningProgress
+                currentPhase={currentPhase}
+                stats={stats}
+                isComplete={scanComplete}
+              />
+            </div>
+
+            {/* Right Panel - Code Viewer */}
+            <div className="flex-1 flex flex-col bg-background">
+              <div className="flex-1 p-4 overflow-hidden">
+                <CodeViewer
+                  lines={codeLines}
+                  currentLine={currentLine}
+                  language={uploadedFile ? detectLanguage(uploadedFile.name) : "python"}
+                />
+              </div>
+              
+              {/* Terminal Logs */}
+              <div className="p-4 pt-0">
+                <ScanLogTerminal
+                  logs={logs}
+                  isExpanded={logsExpanded}
+                  onToggleExpand={() => setLogsExpanded(!logsExpanded)}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Pre-scan UI
   return (
     <DashboardLayout>
       <div className="space-y-6 max-w-4xl mx-auto">
         {/* Page Header */}
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-foreground">New Scan</h1>
-          <p className="text-muted-foreground mt-1">
-            Upload your code or import from GitHub to start a security analysis
-          </p>
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary/10 via-background to-background border border-primary/20 p-8">
+          <div className="absolute inset-0 bg-grid-pattern opacity-5" />
+          <div className="relative">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 rounded-lg bg-primary/20">
+                <Shield className="h-6 w-6 text-primary" />
+              </div>
+              <h1 className="text-2xl lg:text-3xl font-bold text-foreground">
+                New Security Scan
+              </h1>
+            </div>
+            <p className="text-muted-foreground max-w-lg">
+              Upload your Python, C, or C++ code to detect vulnerabilities, 
+              security flaws, and potential exploits using AI-powered analysis.
+            </p>
+          </div>
         </div>
 
-        {/* Scanning State */}
-        {isScanning || currentStepIndex === scanSteps.length ? (
-          <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                {currentStepIndex === scanSteps.length ? (
-                  <>
-                    <CheckCircle2 className="h-5 w-5 text-primary" />
-                    Scan Complete
-                  </>
-                ) : (
-                  <>
-                    <Loader2 className="h-5 w-5 text-primary animate-spin" />
-                    Scanning in Progress
-                  </>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Progress Bar */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Progress</span>
-                  <span className="text-primary font-medium">{Math.round(progressPercentage)}%</span>
-                </div>
-                <Progress value={progressPercentage} className="h-2" />
-              </div>
+        {/* Source Selection Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="grid w-full grid-cols-2 h-12">
+            <TabsTrigger value="upload" className="gap-2 text-sm font-medium">
+              <Upload className="h-4 w-4" />
+              Upload File
+            </TabsTrigger>
+            <TabsTrigger value="github" className="gap-2 text-sm font-medium">
+              <Github className="h-4 w-4" />
+              Import from GitHub
+            </TabsTrigger>
+          </TabsList>
 
-              {/* Scan Steps */}
-              <div className="space-y-3">
-                {scanSteps.map((step, index) => (
-                  <div
-                    key={index}
-                    className={cn(
-                      "flex items-center gap-3 p-3 rounded-lg transition-all duration-300",
-                      step.status === "active" && "bg-primary/10 border border-primary/30",
-                      step.status === "completed" && "bg-primary/5",
-                      step.status === "pending" && "opacity-50"
-                    )}
-                  >
-                    {step.status === "completed" ? (
-                      <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
-                    ) : step.status === "active" ? (
-                      <Loader2 className="h-5 w-5 text-primary animate-spin shrink-0" />
-                    ) : (
-                      <div className="h-5 w-5 rounded-full border-2 border-muted-foreground/30 shrink-0" />
-                    )}
-                    <span className={cn(
-                      "text-sm font-medium",
-                      step.status === "active" && "text-primary",
-                      step.status === "completed" && "text-foreground",
-                      step.status === "pending" && "text-muted-foreground"
-                    )}>
-                      {step.label}
-                    </span>
+          {/* Upload Tab */}
+          <TabsContent value="upload" className="mt-6">
+            <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+              <CardContent className="pt-6">
+                <FileUploadArea
+                  uploadedFile={uploadedFile}
+                  isDragOver={isDragOver}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onFileSelect={handleFileSelect}
+                  onRemoveFile={() => {
+                    setUploadedFile(null);
+                    setFileContent("");
+                  }}
+                />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* GitHub Tab */}
+          <TabsContent value="github" className="mt-6">
+            <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+              <CardContent className="pt-6 space-y-6">
+                <div className="space-y-2">
+                  <Label htmlFor="repo-url" className="text-sm font-medium">
+                    Repository URL
+                  </Label>
+                  <div className="relative">
+                    <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="repo-url"
+                      placeholder="https://github.com/username/repository"
+                      value={repoUrl}
+                      onChange={(e) => setRepoUrl(e.target.value)}
+                      className="pl-10"
+                    />
                   </div>
-                ))}
-              </div>
-
-              {/* Actions when complete */}
-              {currentStepIndex === scanSteps.length && (
-                <div className="flex gap-3 pt-4">
-                  <Button className="flex-1 shadow-lg shadow-primary/25">
-                    View Report
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    onClick={() => {
-                      setCurrentStepIndex(0);
-                      setUploadedFile(null);
-                      setRepoUrl("");
-                    }}
-                  >
-                    New Scan
-                  </Button>
                 </div>
-              )}
-            </CardContent>
+
+                <div className="space-y-2">
+                  <Label htmlFor="branch" className="text-sm font-medium">
+                    Branch
+                  </Label>
+                  <Select value={branch} onValueChange={setBranch}>
+                    <SelectTrigger id="branch">
+                      <SelectValue placeholder="Select branch" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="main">main</SelectItem>
+                      <SelectItem value="master">master</SelectItem>
+                      <SelectItem value="develop">develop</SelectItem>
+                      <SelectItem value="staging">staging</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        {/* Advanced Configuration */}
+        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <Card className="border-border/50 bg-card/50 backdrop-blur-sm overflow-hidden">
+            <CollapsibleTrigger asChild>
+              <CardHeader className="cursor-pointer hover:bg-muted/30 transition-colors">
+                <CardTitle className="flex items-center justify-between text-base">
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="h-5 w-5 text-muted-foreground" />
+                    Advanced Configuration
+                  </div>
+                  <ChevronDown className={cn(
+                    "h-5 w-5 text-muted-foreground transition-transform duration-200",
+                    settingsOpen && "rotate-180"
+                  )} />
+                </CardTitle>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <CardContent className="pt-0 space-y-6">
+                {/* Language Selection */}
+                <div className="space-y-2">
+                  <Label htmlFor="language" className="text-sm font-medium">
+                    Language
+                  </Label>
+                  <Select value={language} onValueChange={setLanguage}>
+                    <SelectTrigger id="language">
+                      <SelectValue placeholder="Select language" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">Auto-detect</SelectItem>
+                      <SelectItem value="python">Python</SelectItem>
+                      <SelectItem value="c">C</SelectItem>
+                      <SelectItem value="cpp">C++</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Toggles */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/50">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-primary/10">
+                        <Sparkles className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <Label htmlFor="deep-analysis" className="text-sm font-medium cursor-pointer">
+                          Deep AI Analysis
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Use advanced AI to detect complex vulnerabilities
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="deep-analysis"
+                      checked={deepAnalysis}
+                      onCheckedChange={setDeepAnalysis}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/50">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-warning/10">
+                        <KeyRound className="h-4 w-4 text-warning" />
+                      </div>
+                      <div>
+                        <Label htmlFor="check-secrets" className="text-sm font-medium cursor-pointer">
+                          Check for Secrets/Keys
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Scan for exposed API keys, passwords, and tokens
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="check-secrets"
+                      checked={checkSecrets}
+                      onCheckedChange={setCheckSecrets}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </CollapsibleContent>
           </Card>
-        ) : (
-          <>
-            {/* Source Selection Tabs */}
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-2 h-12">
-                <TabsTrigger value="upload" className="gap-2 text-sm font-medium">
-                  <Upload className="h-4 w-4" />
-                  Upload File
-                </TabsTrigger>
-                <TabsTrigger value="github" className="gap-2 text-sm font-medium">
-                  <Github className="h-4 w-4" />
-                  Import from GitHub
-                </TabsTrigger>
-              </TabsList>
+        </Collapsible>
 
-              {/* Upload Tab */}
-              <TabsContent value="upload" className="mt-6">
-                <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
-                  <CardContent className="pt-6">
-                    <div
-                      onDragOver={handleDragOver}
-                      onDragLeave={handleDragLeave}
-                      onDrop={handleDrop}
-                      className={cn(
-                        "relative border-2 border-dashed rounded-xl p-12 text-center transition-all duration-300 cursor-pointer",
-                        isDragOver 
-                          ? "border-primary bg-primary/10" 
-                          : uploadedFile 
-                            ? "border-primary/50 bg-primary/5" 
-                            : "border-border hover:border-primary/50 hover:bg-muted/50"
-                      )}
-                    >
-                      <input
-                        type="file"
-                        accept=".py,.cpp,.c,.h,.hpp,.zip,.js,.ts,.jsx,.tsx"
-                        onChange={handleFileSelect}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      />
-                      
-                      {uploadedFile ? (
-                        <div className="space-y-3">
-                          <div className="mx-auto w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
-                            <FileCode className="h-8 w-8 text-primary" />
-                          </div>
-                          <div>
-                            <p className="font-semibold text-foreground">{uploadedFile.name}</p>
-                            <p className="text-sm text-muted-foreground">
-                              {(uploadedFile.size / 1024).toFixed(1)} KB
-                            </p>
-                          </div>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUploadedFile(null);
-                            }}
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          <div className="mx-auto w-16 h-16 rounded-full bg-muted flex items-center justify-center">
-                            <Upload className="h-8 w-8 text-muted-foreground" />
-                          </div>
-                          <div>
-                            <p className="font-semibold text-foreground">
-                              Drop files here or click to browse
-                            </p>
-                            <p className="text-sm text-muted-foreground mt-1">
-                              Supports .py, .cpp, .c, .js, .ts, or .zip files
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* GitHub Tab */}
-              <TabsContent value="github" className="mt-6">
-                <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
-                  <CardContent className="pt-6 space-y-6">
-                    <div className="space-y-2">
-                      <Label htmlFor="repo-url" className="text-sm font-medium">
-                        Repository URL
-                      </Label>
-                      <div className="relative">
-                        <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="repo-url"
-                          placeholder="https://github.com/username/repository"
-                          value={repoUrl}
-                          onChange={(e) => setRepoUrl(e.target.value)}
-                          className="pl-10"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="branch" className="text-sm font-medium">
-                        Branch
-                      </Label>
-                      <Select value={branch} onValueChange={setBranch}>
-                        <SelectTrigger id="branch">
-                          <SelectValue placeholder="Select branch" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="main">main</SelectItem>
-                          <SelectItem value="master">master</SelectItem>
-                          <SelectItem value="develop">develop</SelectItem>
-                          <SelectItem value="staging">staging</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            </Tabs>
-
-            {/* Advanced Configuration */}
-            <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
-              <Card className="border-border/50 bg-card/50 backdrop-blur-sm overflow-hidden">
-                <CollapsibleTrigger asChild>
-                  <CardHeader className="cursor-pointer hover:bg-muted/30 transition-colors">
-                    <CardTitle className="flex items-center justify-between text-base">
-                      <div className="flex items-center gap-2">
-                        <Settings2 className="h-5 w-5 text-muted-foreground" />
-                        Advanced Configuration
-                      </div>
-                      <ChevronDown className={cn(
-                        "h-5 w-5 text-muted-foreground transition-transform duration-200",
-                        settingsOpen && "rotate-180"
-                      )} />
-                    </CardTitle>
-                  </CardHeader>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <CardContent className="pt-0 space-y-6">
-                    {/* Language Selection */}
-                    <div className="space-y-2">
-                      <Label htmlFor="language" className="text-sm font-medium">
-                        Language
-                      </Label>
-                      <Select value={language} onValueChange={setLanguage}>
-                        <SelectTrigger id="language">
-                          <SelectValue placeholder="Select language" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="auto">Auto-detect</SelectItem>
-                          <SelectItem value="python">Python</SelectItem>
-                          <SelectItem value="c">C</SelectItem>
-                          <SelectItem value="cpp">C++</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Toggles */}
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/50">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-primary/10">
-                            <Sparkles className="h-4 w-4 text-primary" />
-                          </div>
-                          <div>
-                            <Label htmlFor="deep-analysis" className="text-sm font-medium cursor-pointer">
-                              Deep AI Analysis
-                            </Label>
-                            <p className="text-xs text-muted-foreground">
-                              Use advanced AI to detect complex vulnerabilities
-                            </p>
-                          </div>
-                        </div>
-                        <Switch
-                          id="deep-analysis"
-                          checked={deepAnalysis}
-                          onCheckedChange={setDeepAnalysis}
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/50">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-warning/10">
-                            <KeyRound className="h-4 w-4 text-warning" />
-                          </div>
-                          <div>
-                            <Label htmlFor="check-secrets" className="text-sm font-medium cursor-pointer">
-                              Check for Secrets/Keys
-                            </Label>
-                            <p className="text-xs text-muted-foreground">
-                              Scan for exposed API keys, passwords, and tokens
-                            </p>
-                          </div>
-                        </div>
-                        <Switch
-                          id="check-secrets"
-                          checked={checkSecrets}
-                          onCheckedChange={setCheckSecrets}
-                        />
-                      </div>
-                    </div>
-                  </CardContent>
-                </CollapsibleContent>
-              </Card>
-            </Collapsible>
-
-            {/* Start Analysis Button */}
-            <Button 
-              size="lg" 
-              className="w-full h-14 text-lg font-semibold shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all"
-              onClick={handleStartScan}
-              disabled={!canStartScan}
-            >
-              <Play className="h-5 w-5 mr-2" />
-              Start Analysis
-            </Button>
-          </>
-        )}
+        {/* Start Analysis Button */}
+        <Button 
+          size="lg" 
+          className="w-full h-14 text-lg font-semibold shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all"
+          onClick={handleStartScan}
+          disabled={!canStartScan}
+        >
+          <Play className="h-5 w-5 mr-2" />
+          Start Security Analysis
+        </Button>
       </div>
     </DashboardLayout>
   );
