@@ -29,6 +29,8 @@ import {
   Shield,
   ArrowLeft,
   StopCircle,
+  PanelLeftClose,
+  PanelLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
@@ -453,40 +455,67 @@ const NewScan = () => {
 
   const canStartScan = activeTab === "upload" ? !!uploadedFile : !!repoUrl;
 
+  // Panel visibility state
+  const [showPanel, setShowPanel] = useState(true);
+
   // If scanning or complete, show split-screen view
   if (isScanning || scanComplete) {
+    const progressPercentage = stats.totalLines > 0 
+      ? Math.round((stats.linesScanned / stats.totalLines) * 100) 
+      : 0;
+
     return (
       <DashboardLayout>
         <div className="h-[calc(100vh-4rem)] -m-4 lg:-m-6 flex flex-col">
-          {/* Header */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-3 md:p-4 border-b border-border/50 bg-background">
-            <div className="flex items-center gap-2 min-w-0">
-              <Button variant="ghost" size="icon" className="shrink-0" onClick={handleReset}>
-                <ArrowLeft className="h-5 w-5" />
+          {/* Compact Header with Inline Progress */}
+          <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/50 bg-background h-14 shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={handleReset}>
+                <ArrowLeft className="h-4 w-4" />
               </Button>
-              <div className="min-w-0">
-                <h1 className="text-lg md:text-xl font-bold text-foreground flex items-center gap-2">
-                  <Shield className="h-5 w-5 text-primary shrink-0" />
-                  <span className="truncate">Security Analysis</span>
-                </h1>
-                <p className="text-sm text-muted-foreground truncate">
+              <div className="flex items-center gap-2 min-w-0">
+                <Shield className="h-4 w-4 text-primary shrink-0" />
+                <span className="font-medium text-sm truncate max-w-[150px]">
                   {uploadedFile?.name || "Code Analysis"}
-                </p>
+                </span>
+              </div>
+              {/* Inline Progress */}
+              <div className="hidden sm:flex items-center gap-2">
+                <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div 
+                    className="h-full bg-primary transition-all duration-300" 
+                    style={{ width: `${progressPercentage}%` }} 
+                  />
+                </div>
+                <span className="text-xs font-mono text-muted-foreground w-8">
+                  {progressPercentage}%
+                </span>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-8 w-8"
+                onClick={() => setShowPanel(!showPanel)}
+              >
+                {showPanel ? (
+                  <PanelLeftClose className="h-4 w-4" />
+                ) : (
+                  <PanelLeft className="h-4 w-4" />
+                )}
+              </Button>
               {isScanning && (
-                <Button variant="destructive" size="sm" onClick={handleStopScan}>
-                  <StopCircle className="h-4 w-4 mr-1.5" />
-                  Stop
+                <Button variant="destructive" size="sm" className="h-8" onClick={handleStopScan}>
+                  <StopCircle className="h-4 w-4" />
                 </Button>
               )}
-              {scanComplete && (
+              {scanComplete && !showPanel && (
                 <>
-                  <Button size="sm" className="shadow-lg shadow-primary/25">
+                  <Button size="sm" className="h-8">
                     View Report
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleReset}>
+                  <Button variant="outline" size="sm" className="h-8" onClick={handleReset}>
                     New Scan
                   </Button>
                 </>
@@ -494,10 +523,15 @@ const NewScan = () => {
             </div>
           </div>
 
-          {/* Split Screen - 40% / 60% */}
-          <div className="flex-1 flex overflow-hidden">
-            {/* Left Panel - Progress (40%) */}
-            <div className="w-2/5 min-w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col overflow-hidden">
+          {/* Main Content */}
+          <div className="flex-1 flex overflow-hidden relative">
+            {/* Left Panel - Collapsible */}
+            <div 
+              className={cn(
+                "w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col transition-all duration-300",
+                showPanel ? "translate-x-0" : "-translate-x-full absolute -left-[280px]"
+              )}
+            >
               <div className="flex-1 overflow-y-auto">
                 <ScanningProgress
                   currentPhase={currentPhase}
@@ -506,18 +540,47 @@ const NewScan = () => {
                 />
               </div>
               
-              {/* Terminal Logs in left panel */}
-              <div className="p-4 border-t border-border/50">
+              {/* Terminal Logs */}
+              <div className="p-3 border-t border-border/50">
                 <ScanLogTerminal
                   logs={logs}
                   isExpanded={logsExpanded}
                   onToggleExpand={() => setLogsExpanded(!logsExpanded)}
                 />
               </div>
+
+              {/* Sticky Action Buttons */}
+              <div className="p-3 border-t border-border/50 bg-card/80 backdrop-blur-sm">
+                {scanComplete ? (
+                  <div className="flex gap-2">
+                    <Button size="sm" className="flex-1 shadow-lg shadow-primary/25">
+                      View Report
+                    </Button>
+                    <Button variant="outline" size="sm" className="flex-1" onClick={handleReset}>
+                      New Scan
+                    </Button>
+                  </div>
+                ) : (
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    className="w-full" 
+                    onClick={handleStopScan}
+                  >
+                    <StopCircle className="h-4 w-4 mr-2" />
+                    Stop Scan
+                  </Button>
+                )}
+              </div>
             </div>
 
-            {/* Right Panel - Code Viewer (60%) */}
-            <div className="flex-1 min-w-0 flex flex-col bg-background overflow-hidden">
+            {/* Right Panel - Code Viewer (Full Width when panel hidden) */}
+            <div 
+              className={cn(
+                "flex-1 min-w-0 flex flex-col bg-background overflow-hidden transition-all duration-300",
+                !showPanel && "ml-0"
+              )}
+            >
               <div className="flex-1 p-4 overflow-hidden">
                 <CodeViewer
                   lines={codeLines}
