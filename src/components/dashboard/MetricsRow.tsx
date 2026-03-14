@@ -10,7 +10,7 @@ interface MetricCardProps {
   teamLabel?: boolean;
 }
 
-const MetricCard = ({ title, value, icon, variant = "default", children }: MetricCardProps) => {
+const MetricCard = ({ title, value, icon, variant = "default", children, teamLabel }: MetricCardProps) => {
   const variantStyles = {
     default: "border-primary/20",
     critical: "border-destructive/30",
