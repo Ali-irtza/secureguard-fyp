@@ -7,6 +7,7 @@ interface MetricCardProps {
   icon: React.ReactNode;
   variant?: "default" | "critical" | "warning" | "success";
   children?: React.ReactNode;
+  teamLabel?: boolean;
 }
 
 const MetricCard = ({ title, value, icon, variant = "default", children }: MetricCardProps) => {
