@@ -48,6 +48,7 @@ interface MetricsRowProps {
   criticalVulns: number;
   healthScore: number;
   pendingScans: number;
+  isTeamView?: boolean;
 }
 
 const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: MetricsRowProps) => {
