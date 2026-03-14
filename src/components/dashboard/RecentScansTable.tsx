@@ -26,6 +26,7 @@ export interface Scan {
 
 interface RecentScansTableProps {
   scans: Scan[];
+  userRole?: "admin" | "developer" | "viewer";
 }
 
 const StatusBadge = ({ status }: { status: Scan["status"] }) => {
