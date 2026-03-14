@@ -21,6 +21,7 @@ export interface Scan {
     medium: number;
     low: number;
   };
+  memberId?: string;
 }
 
 interface RecentScansTableProps {
