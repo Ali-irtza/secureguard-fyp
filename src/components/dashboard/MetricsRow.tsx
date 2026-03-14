@@ -64,6 +64,7 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTe
           value={totalScans}
           icon={<Shield className="h-6 w-6" />}
           variant="default"
+          teamLabel={isTeamView}
         />
       </div>
       <div className="animate-slide-up stagger-2">
@@ -72,14 +73,16 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTe
           value={criticalVulns}
           icon={<ShieldAlert className="h-6 w-6" />}
           variant="critical"
+          teamLabel={isTeamView}
         />
       </div>
       <div className="animate-slide-up stagger-3">
         <MetricCard
-          title="Health Score"
+          title={isTeamView ? "Team Health Score" : "Health Score"}
           value=""
           icon={<Activity className="h-6 w-6" />}
           variant="success"
+          teamLabel={isTeamView}
         >
           <RadialProgress value={healthScore} />
         </MetricCard>
@@ -90,6 +93,7 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTe
           value={pendingScans}
           icon={<Clock className="h-6 w-6" />}
           variant="warning"
+          teamLabel={isTeamView}
         />
       </div>
     </div>
