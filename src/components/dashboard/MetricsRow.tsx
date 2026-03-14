@@ -51,7 +51,7 @@ interface MetricsRowProps {
   isTeamView?: boolean;
 }
 
-const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: MetricsRowProps) => {
+const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTeamView }: MetricsRowProps) => {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div className="animate-slide-up stagger-1">
