@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, ChevronRight } from "lucide-react";
+import type { TeamAlert } from "@/lib/team-data";
 
 interface Alert {
   id: string;
@@ -8,7 +9,7 @@ interface Alert {
   timeAgo: string;
 }
 
-const mockAlerts: Alert[] = [
+const defaultAlerts: Alert[] = [
   { id: "1", title: "SQL Injection", project: "auth-service", timeAgo: "2 hours ago" },
   { id: "2", title: "XSS Vulnerability", project: "frontend-app", timeAgo: "4 hours ago" },
   { id: "3", title: "Hardcoded Secrets", project: "api-gateway", timeAgo: "6 hours ago" },
@@ -16,8 +17,16 @@ const mockAlerts: Alert[] = [
   { id: "5", title: "CSRF Token Missing", project: "admin-panel", timeAgo: "2 days ago" },
 ];
 
-const CriticalAlerts = () => {
+interface CriticalAlertsProps {
+  teamAlerts?: TeamAlert[];
+  isTeamView?: boolean;
+  userRole?: "admin" | "developer" | "viewer";
+}
+
+const CriticalAlerts = ({ teamAlerts, isTeamView, userRole }: CriticalAlertsProps) => {
   const navigate = useNavigate();
+  const alerts = isTeamView && teamAlerts ? teamAlerts : defaultAlerts;
+
   return (
     <div className="glass-card overflow-hidden animate-fade-in">
       <div className="p-6 border-b border-border/50 flex items-center justify-between">
@@ -26,32 +35,45 @@ const CriticalAlerts = () => {
           Critical Alerts
         </h3>
         <span className="text-xs px-2 py-1 rounded-full bg-destructive/20 text-destructive font-medium">
-          {mockAlerts.length} Active
+          {alerts.length} Active
         </span>
       </div>
       <div className="max-h-[280px] overflow-y-auto">
-        {mockAlerts.map((alert) => (
-          <div
-            key={alert.id}
-            className="p-4 border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer group"
-          >
-            <div className="flex items-start gap-3">
-              <span className="mt-1.5 h-2 w-2 rounded-full bg-destructive flex-shrink-0 animate-pulse" />
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-foreground truncate">{alert.title}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-muted-foreground">{alert.project}</span>
-                  <span className="text-xs text-muted-foreground">•</span>
-                  <span className="text-xs text-muted-foreground">{alert.timeAgo}</span>
+        {alerts.map((alert) => {
+          const isTeamAlert = isTeamView && "memberName" in alert;
+          const teamAlert = isTeamAlert ? (alert as TeamAlert) : null;
+
+          return (
+            <div
+              key={alert.id}
+              className="p-4 border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer group"
+            >
+              <div className="flex items-start gap-3">
+                <span className="mt-1.5 h-2 w-2 rounded-full bg-destructive flex-shrink-0 animate-pulse" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground truncate">{alert.title}</p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="text-xs text-muted-foreground">{alert.project}</span>
+                    {teamAlert && (
+                      <>
+                        <span className="text-xs text-muted-foreground">·</span>
+                        <span className="text-xs text-muted-foreground">{teamAlert.memberName}</span>
+                        <span className="text-xs text-muted-foreground">·</span>
+                        <span className="text-xs text-muted-foreground">{teamAlert.branch}</span>
+                      </>
+                    )}
+                    <span className="text-xs text-muted-foreground">·</span>
+                    <span className="text-xs text-muted-foreground">{alert.timeAgo}</span>
+                  </div>
                 </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="p-4 border-t border-border/50">
-        <button 
+        <button
           onClick={() => navigate("/alerts")}
           className="w-full text-center text-sm text-primary hover:text-primary/80 transition-colors font-medium"
         >

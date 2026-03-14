@@ -21,10 +21,12 @@ export interface Scan {
     medium: number;
     low: number;
   };
+  memberId?: string;
 }
 
 interface RecentScansTableProps {
   scans: Scan[];
+  userRole?: "admin" | "developer" | "viewer";
 }
 
 const StatusBadge = ({ status }: { status: Scan["status"] }) => {
@@ -48,7 +50,7 @@ const StatusBadge = ({ status }: { status: Scan["status"] }) => {
   );
 };
 
-const RecentScansTable = ({ scans }: RecentScansTableProps) => {
+const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
@@ -109,14 +111,16 @@ const RecentScansTable = ({ scans }: RecentScansTableProps) => {
                 </div>
               </TableCell>
               <TableCell className="text-right">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-emerald hover:text-emerald-glow hover:bg-emerald/10 font-medium group"
-                >
-                  <FileText className="h-4 w-4 mr-1.5 transition-transform duration-200 group-hover:scale-110" />
-                  View Report
-                </Button>
+                {userRole !== "viewer" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-emerald hover:text-emerald-glow hover:bg-emerald/10 font-medium group"
+                  >
+                    <FileText className="h-4 w-4 mr-1.5 transition-transform duration-200 group-hover:scale-110" />
+                    View Report
+                  </Button>
+                )}
               </TableCell>
             </TableRow>
           ))}

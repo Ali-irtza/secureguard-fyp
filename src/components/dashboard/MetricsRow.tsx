@@ -7,9 +7,10 @@ interface MetricCardProps {
   icon: React.ReactNode;
   variant?: "default" | "critical" | "warning" | "success";
   children?: React.ReactNode;
+  teamLabel?: boolean;
 }
 
-const MetricCard = ({ title, value, icon, variant = "default", children }: MetricCardProps) => {
+const MetricCard = ({ title, value, icon, variant = "default", children, teamLabel }: MetricCardProps) => {
   const variantStyles = {
     default: "border-primary/20",
     critical: "border-destructive/30",
@@ -33,6 +34,9 @@ const MetricCard = ({ title, value, icon, variant = "default", children }: Metri
             {children || (
               <p className={`text-3xl font-bold ${valueStyles[variant]}`}>{value}</p>
             )}
+            {teamLabel && (
+              <p className="text-xs text-muted-foreground mt-1">Team</p>
+            )}
           </div>
         </div>
         <div className={`p-3 rounded-xl bg-muted/50 ${variant === "critical" ? "text-destructive" : "text-primary"}`}>
@@ -48,9 +52,10 @@ interface MetricsRowProps {
   criticalVulns: number;
   healthScore: number;
   pendingScans: number;
+  isTeamView?: boolean;
 }
 
-const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: MetricsRowProps) => {
+const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTeamView }: MetricsRowProps) => {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div className="animate-slide-up stagger-1">
@@ -59,6 +64,7 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: Me
           value={totalScans}
           icon={<Shield className="h-6 w-6" />}
           variant="default"
+          teamLabel={isTeamView}
         />
       </div>
       <div className="animate-slide-up stagger-2">
@@ -67,14 +73,16 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: Me
           value={criticalVulns}
           icon={<ShieldAlert className="h-6 w-6" />}
           variant="critical"
+          teamLabel={isTeamView}
         />
       </div>
       <div className="animate-slide-up stagger-3">
         <MetricCard
-          title="Health Score"
+          title={isTeamView ? "Team Health Score" : "Health Score"}
           value=""
           icon={<Activity className="h-6 w-6" />}
           variant="success"
+          teamLabel={isTeamView}
         >
           <RadialProgress value={healthScore} />
         </MetricCard>
@@ -85,6 +93,7 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans }: Me
           value={pendingScans}
           icon={<Clock className="h-6 w-6" />}
           variant="warning"
+          teamLabel={isTeamView}
         />
       </div>
     </div>
