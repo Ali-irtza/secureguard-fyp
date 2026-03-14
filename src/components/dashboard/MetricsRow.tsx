@@ -33,6 +33,9 @@ const MetricCard = ({ title, value, icon, variant = "default", children }: Metri
             {children || (
               <p className={`text-3xl font-bold ${valueStyles[variant]}`}>{value}</p>
             )}
+            {teamLabel && (
+              <p className="text-xs text-muted-foreground mt-1">Team</p>
+            )}
           </div>
         </div>
         <div className={`p-3 rounded-xl bg-muted/50 ${variant === "critical" ? "text-destructive" : "text-primary"}`}>
