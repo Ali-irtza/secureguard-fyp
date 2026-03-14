@@ -50,7 +50,7 @@ const StatusBadge = ({ status }: { status: Scan["status"] }) => {
   );
 };
 
-const RecentScansTable = ({ scans }: RecentScansTableProps) => {
+const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
