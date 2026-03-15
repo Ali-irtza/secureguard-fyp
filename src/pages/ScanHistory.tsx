@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info } from "lucide-react";
+import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info, Crown } from "lucide-react";
 import { format } from "date-fns";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -54,6 +54,7 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { mockTeams, CURRENT_USER_ID, type TeamRole } from "@/lib/team-data";
 
 interface ScanRecord {
   id: string;
@@ -69,30 +70,41 @@ interface ScanRecord {
   status: "completed" | "failed" | "in_progress";
   errorMessage?: string;
   errorDetails?: string;
+  type: "personal" | "team";
+  teamId?: string;
+  teamName?: string;
+  memberName?: string;
+  branch?: string;
 }
 
 type SortKey = "projectName" | "date" | "duration" | "vulnerabilities" | "status";
 type SortDirection = "asc" | "desc";
 
+const roleBadgeStyles: Record<TeamRole, string> = {
+  admin: "bg-primary/20 text-primary border-primary/30",
+  developer: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  viewer: "bg-muted text-muted-foreground border-border",
+};
+
 const mockScanHistory: ScanRecord[] = [
-  { id: "1", projectName: "E-Commerce Platform", date: new Date("2024-12-10T14:34:00"), duration: 45, vulnerabilities: { critical: 0, high: 2, medium: 5, low: 12 }, status: "completed" },
-  { id: "2", projectName: "Banking API", date: new Date("2024-12-10T12:15:00"), duration: 128, vulnerabilities: { critical: 1, high: 3, medium: 8, low: 15 }, status: "completed" },
-  { id: "3", projectName: "Healthcare Portal", date: new Date("2024-12-10T10:00:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "in_progress" },
-  { id: "4", projectName: "Mobile Backend", date: new Date("2024-12-09T18:45:00"), duration: 67, vulnerabilities: { critical: 0, high: 1, medium: 3, low: 8 }, status: "completed" },
-  { id: "5", projectName: "Legacy System", date: new Date("2024-12-09T16:20:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed", errorMessage: "Connection timeout", errorDetails: "Failed to establish connection to the target server after 30 seconds. The server may be offline or behind a firewall that blocks scanning requests. Please verify network connectivity and firewall rules." },
-  { id: "6", projectName: "E-Commerce Platform", date: new Date("2024-12-09T14:00:00"), duration: 52, vulnerabilities: { critical: 1, high: 4, medium: 7, low: 10 }, status: "completed" },
-  { id: "7", projectName: "Data Analytics Dashboard", date: new Date("2024-12-08T22:30:00"), duration: 195, vulnerabilities: { critical: 0, high: 0, medium: 2, low: 5 }, status: "completed" },
-  { id: "8", projectName: "Banking API", date: new Date("2024-12-08T15:45:00"), duration: 135, vulnerabilities: { critical: 2, high: 5, medium: 10, low: 18 }, status: "completed" },
-  { id: "9", projectName: "Internal Tools", date: new Date("2024-12-08T11:20:00"), duration: 38, vulnerabilities: { critical: 0, high: 0, medium: 1, low: 3 }, status: "completed" },
-  { id: "10", projectName: "Healthcare Portal", date: new Date("2024-12-07T20:00:00"), duration: 89, vulnerabilities: { critical: 0, high: 2, medium: 6, low: 14 }, status: "completed" },
-  { id: "11", projectName: "Mobile Backend", date: new Date("2024-12-07T14:30:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed", errorMessage: "Authentication failed", errorDetails: "Unable to authenticate with the provided API credentials. The API key may have expired or been revoked. Please update your credentials in project settings and retry the scan." },
-  { id: "12", projectName: "E-Commerce Platform", date: new Date("2024-12-06T16:45:00"), duration: 48, vulnerabilities: { critical: 0, high: 3, medium: 6, low: 11 }, status: "completed" },
-  { id: "13", projectName: "Data Analytics Dashboard", date: new Date("2024-12-06T10:15:00"), duration: 210, vulnerabilities: { critical: 0, high: 1, medium: 4, low: 9 }, status: "completed" },
-  { id: "14", projectName: "Legacy System", date: new Date("2024-12-05T18:00:00"), duration: 156, vulnerabilities: { critical: 3, high: 8, medium: 15, low: 22 }, status: "completed" },
-  { id: "15", projectName: "Banking API", date: new Date("2024-12-05T12:30:00"), duration: 142, vulnerabilities: { critical: 1, high: 4, medium: 9, low: 16 }, status: "completed" },
-  { id: "16", projectName: "Internal Tools", date: new Date("2024-12-04T15:20:00"), duration: 42, vulnerabilities: { critical: 0, high: 0, medium: 2, low: 4 }, status: "completed" },
-  { id: "17", projectName: "Healthcare Portal", date: new Date("2024-12-04T09:45:00"), duration: 95, vulnerabilities: { critical: 0, high: 3, medium: 7, low: 12 }, status: "completed" },
-  { id: "18", projectName: "Mobile Backend", date: new Date("2024-12-03T17:30:00"), duration: 71, vulnerabilities: { critical: 0, high: 1, medium: 4, low: 9 }, status: "completed" },
+  { id: "1", projectName: "E-Commerce Platform", date: new Date("2024-12-10T14:34:00"), duration: 45, vulnerabilities: { critical: 0, high: 2, medium: 5, low: 12 }, status: "completed", type: "personal" },
+  { id: "2", projectName: "Banking API", date: new Date("2024-12-10T12:15:00"), duration: 128, vulnerabilities: { critical: 1, high: 3, medium: 8, low: 15 }, status: "completed", type: "team", teamId: "team-1", teamName: "SecureGuard Team", memberName: "Ali Hassan", branch: "feature/login" },
+  { id: "3", projectName: "Healthcare Portal", date: new Date("2024-12-10T10:00:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "in_progress", type: "personal" },
+  { id: "4", projectName: "Mobile Backend", date: new Date("2024-12-09T18:45:00"), duration: 67, vulnerabilities: { critical: 0, high: 1, medium: 3, low: 8 }, status: "completed", type: "team", teamId: "team-2", teamName: "Ali's Project", memberName: "Ali Raza", branch: "main" },
+  { id: "5", projectName: "Legacy System", date: new Date("2024-12-09T16:20:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed", errorMessage: "Connection timeout", errorDetails: "Failed to establish connection to the target server after 30 seconds. The server may be offline or behind a firewall that blocks scanning requests. Please verify network connectivity and firewall rules.", type: "personal" },
+  { id: "6", projectName: "E-Commerce Platform", date: new Date("2024-12-09T14:00:00"), duration: 52, vulnerabilities: { critical: 1, high: 4, medium: 7, low: 10 }, status: "completed", type: "team", teamId: "team-1", teamName: "SecureGuard Team", memberName: "John Doe", branch: "main" },
+  { id: "7", projectName: "Data Analytics Dashboard", date: new Date("2024-12-08T22:30:00"), duration: 195, vulnerabilities: { critical: 0, high: 0, medium: 2, low: 5 }, status: "completed", type: "personal" },
+  { id: "8", projectName: "Banking API", date: new Date("2024-12-08T15:45:00"), duration: 135, vulnerabilities: { critical: 2, high: 5, medium: 10, low: 18 }, status: "completed", type: "team", teamId: "team-1", teamName: "SecureGuard Team", memberName: "Sara Kim", branch: "feature/payments" },
+  { id: "9", projectName: "Internal Tools", date: new Date("2024-12-08T11:20:00"), duration: 38, vulnerabilities: { critical: 0, high: 0, medium: 1, low: 3 }, status: "completed", type: "personal" },
+  { id: "10", projectName: "Healthcare Portal", date: new Date("2024-12-07T20:00:00"), duration: 89, vulnerabilities: { critical: 0, high: 2, medium: 6, low: 14 }, status: "completed", type: "team", teamId: "team-1", teamName: "SecureGuard Team", memberName: "Lina Torres", branch: "hotfix/auth" },
+  { id: "11", projectName: "Mobile Backend", date: new Date("2024-12-07T14:30:00"), duration: 0, vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 }, status: "failed", errorMessage: "Authentication failed", errorDetails: "Unable to authenticate with the provided API credentials. The API key may have expired or been revoked. Please update your credentials in project settings and retry the scan.", type: "team", teamId: "team-2", teamName: "Ali's Project", memberName: "Noor Fatima", branch: "dev/testing" },
+  { id: "12", projectName: "E-Commerce Platform", date: new Date("2024-12-06T16:45:00"), duration: 48, vulnerabilities: { critical: 0, high: 3, medium: 6, low: 11 }, status: "completed", type: "personal" },
+  { id: "13", projectName: "Data Analytics Dashboard", date: new Date("2024-12-06T10:15:00"), duration: 210, vulnerabilities: { critical: 0, high: 1, medium: 4, low: 9 }, status: "completed", type: "team", teamId: "team-3", teamName: "University Group", memberName: "Prof. Ahmed", branch: "main" },
+  { id: "14", projectName: "Legacy System", date: new Date("2024-12-05T18:00:00"), duration: 156, vulnerabilities: { critical: 3, high: 8, medium: 15, low: 22 }, status: "completed", type: "personal" },
+  { id: "15", projectName: "Banking API", date: new Date("2024-12-05T12:30:00"), duration: 142, vulnerabilities: { critical: 1, high: 4, medium: 9, low: 16 }, status: "completed", type: "team", teamId: "team-1", teamName: "SecureGuard Team", memberName: "Ali Hassan", branch: "feature/login" },
+  { id: "16", projectName: "Internal Tools", date: new Date("2024-12-04T15:20:00"), duration: 42, vulnerabilities: { critical: 0, high: 0, medium: 2, low: 4 }, status: "completed", type: "personal" },
+  { id: "17", projectName: "Healthcare Portal", date: new Date("2024-12-04T09:45:00"), duration: 95, vulnerabilities: { critical: 0, high: 3, medium: 7, low: 12 }, status: "completed", type: "team", teamId: "team-2", teamName: "Ali's Project", memberName: "John Doe", branch: "feature/dashboard" },
+  { id: "18", projectName: "Mobile Backend", date: new Date("2024-12-03T17:30:00"), duration: 71, vulnerabilities: { critical: 0, high: 1, medium: 4, low: 9 }, status: "completed", type: "personal" },
 ];
 
 const ITEMS_PER_PAGE = 10;
@@ -101,12 +113,19 @@ const ScanHistory = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [scanTypeFilter, setScanTypeFilter] = useState<"all" | "personal" | "team">("all");
+  const [selectedTeamId, setSelectedTeamId] = useState<string>(
+    mockTeams.find(t => t.currentUserRole === "admin")?.id || mockTeams[0]?.id || ""
+  );
   const [currentPage, setCurrentPage] = useState(1);
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
   const [failureDialogOpen, setFailureDialogOpen] = useState(false);
   const [selectedFailedScan, setSelectedFailedScan] = useState<ScanRecord | null>(null);
+
+  const userTeams = mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID));
+  const hasTeams = userTeams.length > 0;
 
   const formatDuration = (seconds: number): string => {
     if (seconds === 0) return "—";
@@ -159,6 +178,11 @@ const ScanHistory = () => {
     toast.success(`Re-running scan for ${scan.projectName}`);
   };
 
+  const handleViewReport = (e: React.MouseEvent, scan: ScanRecord) => {
+    e.stopPropagation();
+    navigate(`/reports/${scan.id}`);
+  };
+
   const handleRowClick = (scan: ScanRecord) => {
     if (scan.status === "completed") {
       navigate(`/reports/${scan.id}`);
@@ -175,6 +199,7 @@ const ScanHistory = () => {
     const filters: string[] = [];
     if (searchQuery) filters.push(`Search: "${searchQuery}"`);
     if (statusFilter !== "all") filters.push(`Status: ${statusFilter}`);
+    if (scanTypeFilter !== "all") filters.push(`Type: ${scanTypeFilter}`);
     if (dateRange.from) filters.push(`From: ${format(dateRange.from, "PP")}`);
     if (dateRange.to) filters.push(`To: ${format(dateRange.to, "PP")}`);
     return filters.length > 0 ? filters.join(" | ") : "None";
@@ -292,7 +317,16 @@ const ScanHistory = () => {
     const matchesStatus = statusFilter === "all" || scan.status === statusFilter;
     const matchesDateFrom = !dateRange.from || scan.date >= dateRange.from;
     const matchesDateTo = !dateRange.to || scan.date <= new Date(dateRange.to.getTime() + 86400000);
-    return matchesSearch && matchesStatus && matchesDateFrom && matchesDateTo;
+    const matchesType = scanTypeFilter === "all" 
+      || scan.type === scanTypeFilter
+      || (scanTypeFilter === "team" && scan.type === "team" && scan.teamId === selectedTeamId);
+    
+    // When team filter is active, also filter by selected team
+    if (scanTypeFilter === "team") {
+      return matchesSearch && matchesStatus && matchesDateFrom && matchesDateTo && scan.type === "team" && scan.teamId === selectedTeamId;
+    }
+    
+    return matchesSearch && matchesStatus && matchesDateFrom && matchesDateTo && (scanTypeFilter === "all" || scan.type === scanTypeFilter);
   });
 
   const sortedScans = useMemo(() => {
@@ -319,17 +353,24 @@ const ScanHistory = () => {
     });
   }, [filteredScans, sortKey, sortDirection]);
 
-  // Quick stats calculations
+  // Stats computed from the filtered dataset based on scan type filter
   const stats = useMemo(() => {
-    const completedScans = mockScanHistory.filter(s => s.status === "completed");
-    const totalScans = mockScanHistory.length;
+    let dataSource = mockScanHistory;
+    if (scanTypeFilter === "personal") {
+      dataSource = mockScanHistory.filter(s => s.type === "personal");
+    } else if (scanTypeFilter === "team") {
+      dataSource = mockScanHistory.filter(s => s.type === "team" && s.teamId === selectedTeamId);
+    }
+    
+    const completedScans = dataSource.filter(s => s.status === "completed");
+    const totalScans = dataSource.length;
     const successRate = totalScans > 0 ? Math.round((completedScans.length / totalScans) * 100) : 0;
     const totalVulns = completedScans.reduce((acc, s) => acc + getTotalVulnerabilities(s.vulnerabilities), 0);
     const avgDuration = completedScans.length > 0 
       ? Math.round(completedScans.reduce((acc, s) => acc + s.duration, 0) / completedScans.length)
       : 0;
     return { totalScans, successRate, totalVulns, avgDuration };
-  }, []);
+  }, [scanTypeFilter, selectedTeamId]);
 
   const totalPages = Math.ceil(sortedScans.length / ITEMS_PER_PAGE);
   const paginatedScans = sortedScans.slice(
@@ -361,6 +402,8 @@ const ScanHistory = () => {
     }
   };
 
+  const isTeamView = scanTypeFilter === "team";
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -383,6 +426,7 @@ const ScanHistory = () => {
               <div>
                 <p className="text-2xl font-bold text-foreground">{stats.totalScans}</p>
                 <p className="text-xs text-muted-foreground">Total Scans</p>
+                {isTeamView && <p className="text-[10px] text-muted-foreground">Team</p>}
               </div>
             </CardContent>
           </Card>
@@ -394,6 +438,7 @@ const ScanHistory = () => {
               <div>
                 <p className="text-2xl font-bold text-foreground">{stats.successRate}%</p>
                 <p className="text-xs text-muted-foreground">Success Rate</p>
+                {isTeamView && <p className="text-[10px] text-muted-foreground">Team</p>}
               </div>
             </CardContent>
           </Card>
@@ -405,6 +450,7 @@ const ScanHistory = () => {
               <div>
                 <p className="text-2xl font-bold text-foreground">{stats.totalVulns}</p>
                 <p className="text-xs text-muted-foreground">Vulnerabilities Found</p>
+                {isTeamView && <p className="text-[10px] text-muted-foreground">Team</p>}
               </div>
             </CardContent>
           </Card>
@@ -416,6 +462,7 @@ const ScanHistory = () => {
               <div>
                 <p className="text-2xl font-bold text-foreground">{formatDuration(stats.avgDuration)}</p>
                 <p className="text-xs text-muted-foreground">Avg. Duration</p>
+                {isTeamView && <p className="text-[10px] text-muted-foreground">Team</p>}
               </div>
             </CardContent>
           </Card>
@@ -454,6 +501,55 @@ const ScanHistory = () => {
                   <SelectItem value="in_progress">In Progress</SelectItem>
                 </SelectContent>
               </Select>
+
+              {/* Scan Type Filter */}
+              <Select
+                value={scanTypeFilter}
+                onValueChange={(value: "all" | "personal" | "team") => {
+                  setScanTypeFilter(value);
+                  setCurrentPage(1);
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-[180px] bg-background/50 border-border/50">
+                  <SelectValue placeholder="Filter by type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Scans</SelectItem>
+                  <SelectItem value="personal">Personal</SelectItem>
+                  {hasTeams && <SelectItem value="team">Team</SelectItem>}
+                </SelectContent>
+              </Select>
+
+              {/* Team Selector — visible only when Team filter is active */}
+              {scanTypeFilter === "team" && hasTeams && (
+                <Select value={selectedTeamId} onValueChange={(value) => {
+                  setSelectedTeamId(value);
+                  setCurrentPage(1);
+                }}>
+                  <SelectTrigger className="w-full sm:w-[260px] bg-background/50 border-border/50">
+                    <SelectValue placeholder="Select a team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {userTeams.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        <span className="flex items-center gap-2">
+                          {team.currentUserRole === "admin" && (
+                            <Crown className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />
+                          )}
+                          <span className="truncate">{team.name}</span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] px-1.5 py-0 h-4 capitalize ${roleBadgeStyles[team.currentUserRole]}`}
+                          >
+                            {team.currentUserRole}
+                          </Badge>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -586,90 +682,131 @@ const ScanHistory = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedScans.map((scan) => (
-                    <TableRow
-                      key={scan.id}
-                      onClick={() => handleRowClick(scan)}
-                      className={`transition-colors ${
-                        scan.status === "completed"
-                          ? "cursor-pointer hover:bg-muted/50"
-                          : "opacity-75"
-                      }`}
-                    >
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <FolderKanban className="h-4 w-4 text-muted-foreground" />
-                          <span className="font-medium">{scan.projectName}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(scan.date)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1.5 text-muted-foreground">
-                          <Clock className="h-3.5 w-3.5" />
-                          {formatDuration(scan.duration)}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {scan.status === "completed" ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-medium">{getTotalVulnerabilities(scan.vulnerabilities)}</span>
-                            <span className="text-muted-foreground text-sm">total</span>
-                            {scan.vulnerabilities.critical > 0 && (
-                              <Badge variant="outline" className="ml-2 bg-red-500/10 text-red-400 border-red-500/30 text-xs">
-                                {scan.vulnerabilities.critical} critical
-                              </Badge>
-                            )}
-                            {scan.vulnerabilities.high > 0 && (
-                              <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/30 text-xs">
-                                {scan.vulnerabilities.high} high
-                              </Badge>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <StatusBadge status={scan.status} />
-                          {scan.status === "failed" && scan.errorMessage && (
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-red-400 hover:text-red-300"
-                                    onClick={(e) => handleViewFailureDetails(e, scan)}
-                                  >
-                                    <Info className="h-4 w-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-[200px]">
-                                  <p className="text-xs">{scan.errorMessage}</p>
-                                  <p className="text-xs text-muted-foreground mt-1">Click for details</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => handleRerunScan(e, scan)}
-                          disabled={scan.status === "in_progress"}
-                          className="text-muted-foreground hover:text-foreground"
-                        >
-                          <RefreshCw className="h-4 w-4 mr-1.5" />
-                          Re-run
-                        </Button>
+                  {paginatedScans.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-12">
+                        <p className="text-muted-foreground text-sm">
+                          {scanTypeFilter === "personal"
+                            ? "No personal scans yet. Start a new scan to see your history here."
+                            : scanTypeFilter === "team"
+                            ? "No team scans found for this team yet."
+                            : "No scans found. Try adjusting your search or filters."}
+                        </p>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    paginatedScans.map((scan) => (
+                      <TableRow
+                        key={scan.id}
+                        onClick={() => handleRowClick(scan)}
+                        className={`transition-colors ${
+                          scan.status === "completed"
+                            ? "cursor-pointer hover:bg-muted/50"
+                            : "opacity-75"
+                        }`}
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <FolderKanban className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{scan.projectName}</span>
+                                {scan.type === "team" && (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-primary/15 text-primary border-primary/30">
+                                    Team
+                                  </Badge>
+                                )}
+                              </div>
+                              {scan.type === "team" && scan.memberName && (
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {scan.memberName} · {scan.branch}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatDate(scan.date)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                            <Clock className="h-3.5 w-3.5" />
+                            {formatDuration(scan.duration)}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {scan.status === "completed" ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium">{getTotalVulnerabilities(scan.vulnerabilities)}</span>
+                              <span className="text-muted-foreground text-sm">total</span>
+                              {scan.vulnerabilities.critical > 0 && (
+                                <Badge variant="outline" className="ml-2 bg-red-500/10 text-red-400 border-red-500/30 text-xs">
+                                  {scan.vulnerabilities.critical} critical
+                                </Badge>
+                              )}
+                              {scan.vulnerabilities.high > 0 && (
+                                <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/30 text-xs">
+                                  {scan.vulnerabilities.high} high
+                                </Badge>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={scan.status} />
+                            {scan.status === "failed" && scan.errorMessage && (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 text-red-400 hover:text-red-300"
+                                      onClick={(e) => handleViewFailureDetails(e, scan)}
+                                    >
+                                      <Info className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-[200px]">
+                                    <p className="text-xs">{scan.errorMessage}</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Click for details</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {scan.status === "completed" && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => handleViewReport(e, scan)}
+                                className="text-muted-foreground hover:text-foreground"
+                              >
+                                <FileText className="h-4 w-4 mr-1.5" />
+                                View Report
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => handleRerunScan(e, scan)}
+                              disabled={scan.status === "in_progress"}
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              <RefreshCw className="h-4 w-4 mr-1.5" />
+                              Re-run
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>
