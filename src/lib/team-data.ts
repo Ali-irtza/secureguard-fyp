@@ -45,6 +45,8 @@ export const mockTeams: Team[] = [
     name: "SecureGuard Team",
     currentUserRole: "admin",
     metrics: { totalScans: 512, criticalVulns: 28, healthScore: 79, pendingScans: 7 },
+    githubRepo: "https://github.com/secureguard/main-app",
+    branches: ["main", "develop", "staging", "feature/login", "feature/payments", "hotfix/auth", "dev/api-v2"],
     members: [
       { id: "user-1", name: "John Doe", initials: "JD", branch: "main", healthScore: 92, lastScan: "30 min ago" },
       { id: "user-2", name: "Ali Hassan", initials: "AH", branch: "feature/login", healthScore: 74, lastScan: "2 hours ago" },
