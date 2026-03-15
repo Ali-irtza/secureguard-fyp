@@ -31,12 +31,16 @@ import {
   StopCircle,
   PanelLeftClose,
   PanelLeft,
+  Lock,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
 import { ScanningProgress } from "@/components/scan/ScanningProgress";
 import { ScanLogTerminal, LogEntry } from "@/components/scan/ScanLogTerminal";
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
+import ScanModeToggle from "@/components/scan/ScanModeToggle";
+import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 // Mock code samples for different languages
 const MOCK_CODE = {
@@ -198,13 +202,18 @@ const NewScan = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [fileContent, setFileContent] = useState<string>("");
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("main");
   const [language, setLanguage] = useState("auto");
   const [deepAnalysis, setDeepAnalysis] = useState(true);
   const [checkSecrets, setCheckSecrets] = useState(true);
+  
+  // New state for team-aware scanning
+  const [projectName, setProjectName] = useState("");
+  const [scanMode, setScanMode] = useState<"personal" | "team">("personal");
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   
   // Scanning state
   const [currentPhase, setCurrentPhase] = useState(0);
@@ -221,6 +230,42 @@ const NewScan = () => {
   
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
+
+  // Panel visibility state
+  const [showPanel, setShowPanel] = useState(true);
+
+  // Initialize default team selection
+  useEffect(() => {
+    const scanableTeams = mockTeams.filter(
+      (t) => t.currentUserRole === "admin" || t.currentUserRole === "developer"
+    );
+    const adminTeam = scanableTeams.find((t) => t.currentUserRole === "admin");
+    setSelectedTeamId((adminTeam || scanableTeams[0])?.id || "");
+  }, []);
+
+  // Derived values
+  const selectedTeam = mockTeams.find((t) => t.id === selectedTeamId);
+  const userRole = selectedTeam?.currentUserRole;
+  const isTeamMode = scanMode === "team" && selectedTeam;
+
+  // Pre-fill repo URL when in team mode
+  useEffect(() => {
+    if (isTeamMode && selectedTeam?.githubRepo) {
+      setRepoUrl(selectedTeam.githubRepo);
+    } else if (!isTeamMode) {
+      setRepoUrl("");
+    }
+  }, [isTeamMode, selectedTeam]);
+
+  // Pre-fill branch for developer
+  useEffect(() => {
+    if (isTeamMode && userRole === "developer") {
+      const member = selectedTeam?.members.find((m) => m.id === CURRENT_USER_ID);
+      if (member?.branch) {
+        setBranch(member.branch);
+      }
+    }
+  }, [isTeamMode, userRole, selectedTeam]);
 
   const detectLanguage = (filename: string): string => {
     const ext = filename.split(".").pop()?.toLowerCase();
@@ -250,16 +295,14 @@ const NewScan = () => {
     setCurrentLine(0);
     setLogs([]);
     
-    // Determine language and get code
-    const detectedLang = uploadedFile 
-      ? detectLanguage(uploadedFile.name) 
+    const firstFile = uploadedFiles[0];
+    const detectedLang = firstFile 
+      ? detectLanguage(firstFile.name) 
       : language === "auto" ? "python" : language;
     
-    // Use uploaded file content or mock code
     const code = fileContent || MOCK_CODE[detectedLang as keyof typeof MOCK_CODE] || MOCK_CODE.python;
     const lines = code.split("\n");
     
-    // Initialize code lines
     const initialLines: CodeLine[] = lines.map((content, index) => ({
       lineNumber: index + 1,
       content,
@@ -273,10 +316,8 @@ const NewScan = () => {
       elapsedTime: 0,
     });
 
-    // Get vulnerabilities for this language
     const vulns = VULNERABILITY_PATTERNS.filter(v => v.lang === detectedLang);
 
-    // Phase 0: Initialize
     addLog("Initializing SecureGuard AI Scanner v2.1.0...", "info");
     await new Promise(r => setTimeout(r, 800));
     addLog("Loading vulnerability database (15,234 patterns)...", "info");
@@ -284,7 +325,6 @@ const NewScan = () => {
     addLog("AI engine ready", "success");
     setCurrentPhase(1);
 
-    // Phase 1: Parse
     addLog(`Parsing ${detectedLang.toUpperCase()} source code...`, "info");
     await new Promise(r => setTimeout(r, 500));
     addLog(`Found ${lines.length} lines of code`, "info");
@@ -294,30 +334,21 @@ const NewScan = () => {
     addLog("Syntax tree constructed successfully", "success");
     setCurrentPhase(2);
 
-    // Phase 2: Line-by-line scanning
     addLog("Starting vulnerability scan...", "info");
     let vulnCount = 0;
     const startTime = Date.now();
     
     for (let i = 0; i < lines.length; i++) {
-      // Check for abort
-      if (scanAbortRef.current) {
-        break;
-      }
+      if (scanAbortRef.current) break;
       
       const lineNum = i + 1;
       setCurrentLine(lineNum);
       
-      // Check for vulnerability
       const vuln = vulns.find(v => v.line === lineNum);
       
-      // Update line status
       setCodeLines(prev => prev.map((line, idx) => {
         if (idx === i) {
-          return {
-            ...line,
-            status: "scanning",
-          };
+          return { ...line, status: "scanning" };
         }
         if (idx < i) {
           const prevVuln = vulns.find(v => v.line === idx + 1);
@@ -330,7 +361,6 @@ const NewScan = () => {
         return line;
       }));
       
-      // Update stats
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
       setStats(prev => ({
         ...prev,
@@ -350,12 +380,8 @@ const NewScan = () => {
       await new Promise(r => setTimeout(r, 100));
     }
     
-    // If aborted, don't complete the scan
-    if (scanAbortRef.current) {
-      return;
-    }
+    if (scanAbortRef.current) return;
 
-    // Mark last line
     setCodeLines(prev => prev.map((line, idx) => {
       if (idx === lines.length - 1) {
         const lastVuln = vulns.find(v => v.line === lines.length);
@@ -368,7 +394,6 @@ const NewScan = () => {
       return line;
     }));
 
-    // Phase 3: Deep analysis
     setCurrentPhase(3);
     addLog("Running deep AI analysis...", "info");
     await new Promise(r => setTimeout(r, 1000));
@@ -378,7 +403,6 @@ const NewScan = () => {
     await new Promise(r => setTimeout(r, 600));
     addLog("Deep analysis complete", "success");
 
-    // Phase 4: Generate report
     setCurrentPhase(4);
     addLog("Generating security report...", "info");
     await new Promise(r => setTimeout(r, 800));
@@ -386,7 +410,6 @@ const NewScan = () => {
     await new Promise(r => setTimeout(r, 400));
     addLog("Report generated successfully", "success");
 
-    // Complete
     setCurrentPhase(5);
     setStats(prev => ({
       ...prev,
@@ -410,29 +433,48 @@ const NewScan = () => {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      setUploadedFile(file);
-      // Read file content
+    const newFiles = Array.from(e.dataTransfer.files);
+    if (newFiles.length > 0) {
+      setUploadedFiles((prev) => [...prev, ...newFiles]);
+      // Read first file content for scanning
       const reader = new FileReader();
-      reader.onload = (e) => {
-        setFileContent(e.target?.result as string || "");
+      reader.onload = (ev) => {
+        setFileContent(ev.target?.result as string || "");
       };
-      reader.readAsText(file);
+      reader.readAsText(newFiles[0]);
     }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setUploadedFile(file);
-      // Read file content
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setFileContent(e.target?.result as string || "");
-      };
-      reader.readAsText(file);
+    const newFiles = Array.from(e.target.files || []);
+    if (newFiles.length > 0) {
+      setUploadedFiles((prev) => [...prev, ...newFiles]);
+      // Read first file content for scanning
+      if (uploadedFiles.length === 0) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setFileContent(ev.target?.result as string || "");
+        };
+        reader.readAsText(newFiles[0]);
+      }
     }
+  };
+
+  const handleRemoveFile = (index: number) => {
+    setUploadedFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) {
+        setFileContent("");
+      } else if (index === 0 && next.length > 0) {
+        // Re-read first file
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setFileContent(ev.target?.result as string || "");
+        };
+        reader.readAsText(next[0]);
+      }
+      return next;
+    });
   };
 
   const handleReset = () => {
@@ -442,9 +484,10 @@ const NewScan = () => {
     setCurrentLine(0);
     setCodeLines([]);
     setLogs([]);
-    setUploadedFile(null);
+    setUploadedFiles([]);
     setFileContent("");
     setRepoUrl("");
+    setProjectName("");
     setStats({
       linesScanned: 0,
       totalLines: 0,
@@ -453,16 +496,188 @@ const NewScan = () => {
     });
   };
 
-  const canStartScan = activeTab === "upload" ? !!uploadedFile : !!repoUrl;
+  const canStartScan =
+    projectName.trim() !== "" &&
+    (activeTab === "upload" ? uploadedFiles.length > 0 : !!repoUrl);
 
-  // Panel visibility state
-  const [showPanel, setShowPanel] = useState(true);
+  // Determine GitHub tab behavior based on role
+  const renderGitHubTab = () => {
+    if (!isTeamMode) {
+      // Personal mode: standard free-text GitHub tab
+      return (
+        <CardContent className="pt-6 space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="repo-url" className="text-sm font-medium">
+              Repository URL
+            </Label>
+            <div className="relative">
+              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="repo-url"
+                placeholder="https://github.com/username/repository"
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="branch" className="text-sm font-medium">
+              Branch
+            </Label>
+            <Select value={branch} onValueChange={setBranch}>
+              <SelectTrigger id="branch">
+                <SelectValue placeholder="Select branch" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="main">main</SelectItem>
+                <SelectItem value="master">master</SelectItem>
+                <SelectItem value="develop">develop</SelectItem>
+                <SelectItem value="staging">staging</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      );
+    }
+
+    // Team mode: role-based
+    if (userRole === "admin") {
+      if (!selectedTeam?.githubRepo) {
+        return (
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center gap-4 py-8">
+              <Info className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground text-center">
+                No repository connected to this team.
+              </p>
+              <Button size="sm">Connect Repository</Button>
+            </div>
+          </CardContent>
+        );
+      }
+
+      return (
+        <CardContent className="pt-6 space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="repo-url" className="text-sm font-medium">
+              Repository URL
+            </Label>
+            <div className="relative">
+              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="repo-url"
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="branch" className="text-sm font-medium">
+              Branch
+            </Label>
+            <Select value={branch} onValueChange={setBranch}>
+              <SelectTrigger id="branch">
+                <SelectValue placeholder="Select branch" />
+              </SelectTrigger>
+              <SelectContent>
+                {selectedTeam.branches?.map((b) => (
+                  <SelectItem key={b} value={b}>{b}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      );
+    }
+
+    if (userRole === "developer") {
+      if (!selectedTeam?.githubRepo) {
+        return (
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/30 border border-border/50">
+              <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+              <p className="text-sm text-muted-foreground">
+                No repository connected to this team. Ask your Admin to connect a GitHub repository.
+              </p>
+            </div>
+          </CardContent>
+        );
+      }
+
+      const member = selectedTeam?.members.find((m) => m.id === CURRENT_USER_ID);
+      const assignedBranch = member?.branch;
+
+      return (
+        <CardContent className="pt-6 space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="repo-url" className="text-sm font-medium">
+              Repository URL
+            </Label>
+            <div className="relative">
+              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="repo-url"
+                value={repoUrl}
+                readOnly
+                className="pl-10 pr-10 opacity-75"
+              />
+              <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="branch" className="text-sm font-medium">
+              Branch
+            </Label>
+            {assignedBranch ? (
+              <>
+                <div className="relative">
+                  <Select value={assignedBranch} disabled>
+                    <SelectTrigger id="branch" className="opacity-75">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={assignedBranch}>{assignedBranch}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Lock className="absolute right-10 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Your branch is assigned by your team Admin
+                </p>
+              </>
+            ) : (
+              <>
+                <Select disabled>
+                  <SelectTrigger id="branch" className="opacity-50">
+                    <SelectValue placeholder="No branch assigned" />
+                  </SelectTrigger>
+                  <SelectContent />
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Contact your Admin to assign you a branch
+                </p>
+              </>
+            )}
+          </div>
+        </CardContent>
+      );
+    }
+
+    return null;
+  };
 
   // If scanning or complete, show split-screen view
   if (isScanning || scanComplete) {
     const progressPercentage = stats.totalLines > 0 
       ? Math.round((stats.linesScanned / stats.totalLines) * 100) 
       : 0;
+
+    const firstFile = uploadedFiles[0];
+    const displayName = projectName
+      ? `${projectName}${firstFile ? ` · ${firstFile.name}` : ""}`
+      : firstFile?.name || "Code Analysis";
 
     return (
       <DashboardLayout>
@@ -475,9 +690,14 @@ const NewScan = () => {
               </Button>
               <div className="flex items-center gap-2 min-w-0">
                 <Shield className="h-4 w-4 text-primary shrink-0" />
-                <span className="font-medium text-sm truncate max-w-[150px]">
-                  {uploadedFile?.name || "Code Analysis"}
+                <span className="font-medium text-sm truncate max-w-[200px]">
+                  {displayName}
                 </span>
+                {isTeamMode && (
+                  <span className="bg-primary/20 text-primary text-xs px-2 py-0.5 rounded-full font-medium shrink-0">
+                    Team
+                  </span>
+                )}
               </div>
               {/* Inline Progress */}
               <div className="hidden sm:flex items-center gap-2">
@@ -586,7 +806,7 @@ const NewScan = () => {
                   <CodeViewer
                     lines={codeLines}
                     currentLine={currentLine}
-                    language={uploadedFile ? detectLanguage(uploadedFile.name) : "python"}
+                    language={firstFile ? detectLanguage(firstFile.name) : "python"}
                   />
                 </div>
               </div>
@@ -620,6 +840,37 @@ const NewScan = () => {
           </div>
         </div>
 
+        {/* Project Name Input */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+          <CardContent className="pt-6 space-y-2">
+            <Label htmlFor="project-name" className="text-sm font-medium">
+              Project Name <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="project-name"
+              placeholder="e.g. auth-service, frontend-app"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+            />
+            {isTeamMode && (
+              <p className="text-xs text-muted-foreground">
+                This scan will be saved under your team project.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Scan Mode Toggle */}
+        {mockTeams.length > 0 && (
+          <ScanModeToggle
+            scanMode={scanMode}
+            onScanModeChange={setScanMode}
+            teams={mockTeams}
+            selectedTeamId={selectedTeamId}
+            onTeamChange={setSelectedTeamId}
+          />
+        )}
+
         {/* Source Selection Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-2 h-12">
@@ -638,16 +889,13 @@ const NewScan = () => {
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
               <CardContent className="pt-6">
                 <FileUploadArea
-                  uploadedFile={uploadedFile}
+                  uploadedFiles={uploadedFiles}
                   isDragOver={isDragOver}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
                   onFileSelect={handleFileSelect}
-                  onRemoveFile={() => {
-                    setUploadedFile(null);
-                    setFileContent("");
-                  }}
+                  onRemoveFile={handleRemoveFile}
                 />
               </CardContent>
             </Card>
@@ -656,40 +904,7 @@ const NewScan = () => {
           {/* GitHub Tab */}
           <TabsContent value="github" className="mt-6">
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
-              <CardContent className="pt-6 space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="repo-url" className="text-sm font-medium">
-                    Repository URL
-                  </Label>
-                  <div className="relative">
-                    <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="repo-url"
-                      placeholder="https://github.com/username/repository"
-                      value={repoUrl}
-                      onChange={(e) => setRepoUrl(e.target.value)}
-                      className="pl-10"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="branch" className="text-sm font-medium">
-                    Branch
-                  </Label>
-                  <Select value={branch} onValueChange={setBranch}>
-                    <SelectTrigger id="branch">
-                      <SelectValue placeholder="Select branch" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="main">main</SelectItem>
-                      <SelectItem value="master">master</SelectItem>
-                      <SelectItem value="develop">develop</SelectItem>
-                      <SelectItem value="staging">staging</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </CardContent>
+              {renderGitHubTab()}
             </Card>
           </TabsContent>
         </Tabs>
