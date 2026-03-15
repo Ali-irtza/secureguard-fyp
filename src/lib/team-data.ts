@@ -33,6 +33,8 @@ export interface Team {
   members: TeamMember[];
   scans: Scan[];
   alerts: TeamAlert[];
+  githubRepo?: string;
+  branches?: string[];
 }
 
 export const CURRENT_USER_ID = "user-1";
@@ -43,6 +45,8 @@ export const mockTeams: Team[] = [
     name: "SecureGuard Team",
     currentUserRole: "admin",
     metrics: { totalScans: 512, criticalVulns: 28, healthScore: 79, pendingScans: 7 },
+    githubRepo: "https://github.com/secureguard/main-app",
+    branches: ["main", "develop", "staging", "feature/login", "feature/payments", "hotfix/auth", "dev/api-v2"],
     members: [
       { id: "user-1", name: "John Doe", initials: "JD", branch: "main", healthScore: 92, lastScan: "30 min ago" },
       { id: "user-2", name: "Ali Hassan", initials: "AH", branch: "feature/login", healthScore: 74, lastScan: "2 hours ago" },
@@ -69,6 +73,8 @@ export const mockTeams: Team[] = [
     name: "Ali's Project",
     currentUserRole: "developer",
     metrics: { totalScans: 128, criticalVulns: 5, healthScore: 91, pendingScans: 1 },
+    githubRepo: "https://github.com/ali-raza/mobile-app",
+    branches: ["main", "feature/dashboard", "dev/testing"],
     members: [
       { id: "user-6", name: "Ali Raza", initials: "AR", branch: "main", healthScore: 95, lastScan: "1 hour ago" },
       { id: "user-1", name: "John Doe", initials: "JD", branch: "feature/dashboard", healthScore: 87, lastScan: "3 hours ago" },
