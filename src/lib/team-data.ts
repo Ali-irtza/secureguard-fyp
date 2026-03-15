@@ -33,6 +33,8 @@ export interface Team {
   members: TeamMember[];
   scans: Scan[];
   alerts: TeamAlert[];
+  githubRepo?: string;
+  branches?: string[];
 }
 
 export const CURRENT_USER_ID = "user-1";
