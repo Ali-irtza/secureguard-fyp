@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { 
   Search, FolderOpen, Eye, RotateCcw, Trash2, Plus, 
   ChevronUp, ChevronDown, Clock, AlertTriangle,
-  Shield, ShieldAlert, ShieldCheck, ShieldX
+  Shield, ShieldAlert, ShieldCheck, ShieldX,
+  User, Users, Crown, Github, Info
 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -26,6 +28,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,6 +53,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { mockTeams, CURRENT_USER_ID, type TeamRole } from "@/lib/team-data";
 
 interface Project {
   id: string;
@@ -50,20 +61,24 @@ interface Project {
   language: "Python" | "C" | "C++";
   lastScan: string;
   healthScore: "A" | "B" | "C" | "D" | "F";
+  type: "personal" | "team";
+  teamId?: string;
+  teamName?: string;
+  hasGithubRepo?: boolean;
 }
 
 type SortField = "name" | "language" | "lastScan" | "healthScore";
 type SortDirection = "asc" | "desc";
 
 const mockProjects: Project[] = [
-  { id: "1", name: "api-gateway", language: "Python", lastScan: "2024-12-08", healthScore: "A" },
-  { id: "2", name: "auth-service", language: "C++", lastScan: "2024-12-07", healthScore: "B" },
-  { id: "3", name: "payment-module", language: "Python", lastScan: "2024-12-05", healthScore: "C" },
-  { id: "4", name: "data-processor", language: "C", lastScan: "2024-12-04", healthScore: "A" },
-  { id: "5", name: "ml-pipeline", language: "Python", lastScan: "2024-12-03", healthScore: "D" },
-  { id: "6", name: "embedded-firmware", language: "C", lastScan: "2024-12-01", healthScore: "B" },
-  { id: "7", name: "crypto-lib", language: "C++", lastScan: "2024-11-28", healthScore: "F" },
-  { id: "8", name: "web-scraper", language: "Python", lastScan: "2024-11-25", healthScore: "A" },
+  { id: "1", name: "api-gateway", language: "Python", lastScan: "2024-12-08", healthScore: "A", type: "personal" },
+  { id: "2", name: "auth-service", language: "C++", lastScan: "2024-12-07", healthScore: "B", type: "team", teamId: "team-1", teamName: "SecureGuard Team", hasGithubRepo: true },
+  { id: "3", name: "payment-module", language: "Python", lastScan: "2024-12-05", healthScore: "C", type: "team", teamId: "team-1", teamName: "SecureGuard Team", hasGithubRepo: true },
+  { id: "4", name: "data-processor", language: "C", lastScan: "2024-12-04", healthScore: "A", type: "personal" },
+  { id: "5", name: "ml-pipeline", language: "Python", lastScan: "2024-12-03", healthScore: "D", type: "personal" },
+  { id: "6", name: "embedded-firmware", language: "C", lastScan: "2024-12-01", healthScore: "B", type: "team", teamId: "team-2", teamName: "Ali's Project", hasGithubRepo: true },
+  { id: "7", name: "crypto-lib", language: "C++", lastScan: "2024-11-28", healthScore: "F", type: "personal" },
+  { id: "8", name: "web-scraper", language: "Python", lastScan: "2024-11-25", healthScore: "A", type: "personal" },
 ];
 
 const languageBadgeStyles: Record<string, string> = {
@@ -82,16 +97,35 @@ const healthScoreStyles: Record<string, string> = {
 
 const healthScoreOrder: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, F: 5 };
 
+const roleBadgeStyles: Record<TeamRole, string> = {
+  admin: "bg-primary/20 text-primary border-primary/30",
+  developer: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  viewer: "bg-muted text-muted-foreground border-border",
+};
+
 const Projects = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [languageFilter, setLanguageFilter] = useState("all");
   const [healthFilter, setHealthFilter] = useState("all");
+  const [projectTypeFilter, setProjectTypeFilter] = useState<"all" | "personal" | "team">("all");
   const [projects, setProjects] = useState<Project[]>(mockProjects);
   const [sortField, setSortField] = useState<SortField>("lastScan");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Modal state
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectType, setNewProjectType] = useState<"personal" | "team">("personal");
+  const [newProjectTeamId, setNewProjectTeamId] = useState("");
+
+  // Team data
+  const userTeams = mockTeams.filter((t) =>
+    t.members.some((m) => m.id === CURRENT_USER_ID)
+  );
+  const hasTeams = userTeams.length > 0;
 
   // Calculate days since last scan
   const getDaysSinceLastScan = (dateString: string): number => {
@@ -126,7 +160,8 @@ const Projects = () => {
         (healthFilter === "healthy" && (project.healthScore === "A" || project.healthScore === "B")) ||
         (healthFilter === "attention" && (project.healthScore === "C" || project.healthScore === "D")) ||
         (healthFilter === "critical" && project.healthScore === "F");
-      return matchesSearch && matchesLanguage && matchesHealth;
+      const matchesType = projectTypeFilter === "all" || project.type === projectTypeFilter;
+      return matchesSearch && matchesLanguage && matchesHealth && matchesType;
     });
 
     // Sort
@@ -150,7 +185,7 @@ const Projects = () => {
     });
 
     return result;
-  }, [projects, searchQuery, languageFilter, healthFilter, sortField, sortDirection]);
+  }, [projects, searchQuery, languageFilter, healthFilter, projectTypeFilter, sortField, sortDirection]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {
@@ -193,10 +228,7 @@ const Projects = () => {
   };
 
   const handleRescan = (projectName: string) => {
-    toast({
-      title: "Re-scan Initiated",
-      description: `Starting new scan for "${projectName}"...`,
-    });
+    navigate(`/new-scan?project=${encodeURIComponent(projectName)}`);
   };
 
   const handleBulkRescan = () => {
@@ -228,12 +260,86 @@ const Projects = () => {
     });
   };
 
+  const handleCreateProject = () => {
+    const selectedTeam = userTeams.find((t) => t.id === newProjectTeamId);
+    const newProject: Project = {
+      id: `proj-${Date.now()}`,
+      name: newProjectName.trim(),
+      language: "Python",
+      lastScan: new Date().toISOString().split("T")[0],
+      healthScore: "A",
+      type: newProjectType,
+      teamId: newProjectType === "team" ? newProjectTeamId : undefined,
+      teamName: newProjectType === "team" ? selectedTeam?.name : undefined,
+      hasGithubRepo: newProjectType === "team" ? !!selectedTeam?.githubRepo : false,
+    };
+    setProjects((prev) => [newProject, ...prev]);
+    setIsCreateOpen(false);
+    setNewProjectName("");
+    setNewProjectType("personal");
+    setNewProjectTeamId("");
+    toast({
+      title: "Project Created",
+      description: `"${newProject.name}" has been created.`,
+    });
+  };
+
+  const canCreateProject =
+    newProjectName.trim() !== "" &&
+    (newProjectType === "personal" || (newProjectType === "team" && newProjectTeamId !== ""));
+
+  const getEmptyStateMessage = () => {
+    if (projectTypeFilter === "team") {
+      return "No team projects found. Create a project and assign it to a team.";
+    }
+    if (projectTypeFilter === "personal") {
+      return "No personal projects found.";
+    }
+    return null;
+  };
+
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ChevronUp className="w-4 h-4 opacity-30" />;
     return sortDirection === "asc" 
       ? <ChevronUp className="w-4 h-4 text-primary" /> 
       : <ChevronDown className="w-4 h-4 text-primary" />;
   };
+
+  // Full empty state — no projects at all
+  if (projects.length === 0) {
+    return (
+      <DashboardLayout>
+        <div className="flex flex-col items-center justify-center py-32 gap-4">
+          <FolderOpen className="w-16 h-16 text-muted-foreground/40" />
+          <h2 className="text-xl font-semibold text-foreground">No Projects Yet</h2>
+          <p className="text-muted-foreground text-sm">Create your first project to start scanning your code</p>
+          <Button
+            onClick={() => setIsCreateOpen(true)}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-glow-primary mt-2"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Create Project
+          </Button>
+        </div>
+
+        {/* Create Project Modal — also available from empty state */}
+        <CreateProjectModal
+          isOpen={isCreateOpen}
+          onOpenChange={setIsCreateOpen}
+          projectName={newProjectName}
+          onProjectNameChange={setNewProjectName}
+          projectType={newProjectType}
+          onProjectTypeChange={setNewProjectType}
+          teamId={newProjectTeamId}
+          onTeamIdChange={setNewProjectTeamId}
+          userTeams={userTeams}
+          hasTeams={hasTeams}
+          canCreate={canCreateProject}
+          onCreate={handleCreateProject}
+        />
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -245,7 +351,7 @@ const Projects = () => {
             <p className="text-muted-foreground mt-1">Manage and monitor your code repositories</p>
           </div>
           <Button
-            onClick={() => navigate("/new-scan")}
+            onClick={() => setIsCreateOpen(true)}
             className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-glow-primary"
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -332,6 +438,16 @@ const Projects = () => {
               <SelectItem value="healthy">Healthy (A-B)</SelectItem>
               <SelectItem value="attention">Needs Attention (C-D)</SelectItem>
               <SelectItem value="critical">Critical (F)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={projectTypeFilter} onValueChange={(v) => setProjectTypeFilter(v as "all" | "personal" | "team")}>
+            <SelectTrigger className="w-full sm:w-48 bg-card/50 border-border/50">
+              <SelectValue placeholder="Filter by Type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              <SelectItem value="personal">Personal</SelectItem>
+              {hasTeams && <SelectItem value="team">Team</SelectItem>}
             </SelectContent>
           </Select>
         </div>
@@ -442,8 +558,12 @@ const Projects = () => {
                   <TableCell colSpan={6} className="text-center py-12">
                     <div className="flex flex-col items-center gap-2">
                       <FolderOpen className="w-10 h-10 text-muted-foreground/50" />
-                      <p className="text-muted-foreground">No projects found</p>
-                      <p className="text-sm text-muted-foreground/70">Try adjusting your search or filters</p>
+                      <p className="text-muted-foreground">
+                        {getEmptyStateMessage() || "No projects found"}
+                      </p>
+                      {!getEmptyStateMessage() && (
+                        <p className="text-sm text-muted-foreground/70">Try adjusting your search or filters</p>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -461,8 +581,23 @@ const Projects = () => {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <FolderOpen className="w-4 h-4 text-primary" />
-                          <span className="font-medium text-foreground">{project.name}</span>
+                          <FolderOpen className="w-4 h-4 text-primary flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{project.name}</span>
+                              {project.type === "team" && (
+                                <Badge variant="outline" className="bg-primary/15 text-primary border-primary/30 text-[10px] px-1.5 py-0 h-4">
+                                  Team
+                                </Badge>
+                              )}
+                              {project.hasGithubRepo && (
+                                <Github className="w-3.5 h-3.5 text-muted-foreground" />
+                              )}
+                            </div>
+                            {project.type === "team" && project.teamName && (
+                              <p className="text-xs text-muted-foreground mt-0.5">{project.teamName}</p>
+                            )}
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -557,7 +692,172 @@ const Projects = () => {
           </Table>
         </div>
       </div>
+
+      {/* Create Project Modal */}
+      <CreateProjectModal
+        isOpen={isCreateOpen}
+        onOpenChange={setIsCreateOpen}
+        projectName={newProjectName}
+        onProjectNameChange={setNewProjectName}
+        projectType={newProjectType}
+        onProjectTypeChange={setNewProjectType}
+        teamId={newProjectTeamId}
+        onTeamIdChange={setNewProjectTeamId}
+        userTeams={userTeams}
+        hasTeams={hasTeams}
+        canCreate={canCreateProject}
+        onCreate={handleCreateProject}
+      />
     </DashboardLayout>
+  );
+};
+
+// ── Create Project Modal ──────────────────────────────────────────────
+
+interface CreateProjectModalProps {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  projectName: string;
+  onProjectNameChange: (v: string) => void;
+  projectType: "personal" | "team";
+  onProjectTypeChange: (v: "personal" | "team") => void;
+  teamId: string;
+  onTeamIdChange: (v: string) => void;
+  userTeams: typeof mockTeams;
+  hasTeams: boolean;
+  canCreate: boolean;
+  onCreate: () => void;
+}
+
+const CreateProjectModal = ({
+  isOpen,
+  onOpenChange,
+  projectName,
+  onProjectNameChange,
+  projectType,
+  onProjectTypeChange,
+  teamId,
+  onTeamIdChange,
+  userTeams,
+  hasTeams,
+  canCreate,
+  onCreate,
+}: CreateProjectModalProps) => {
+  const navigate = useNavigate();
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create New Project</DialogTitle>
+          <DialogDescription>Set up a new project to start scanning your code.</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5 py-2">
+          {/* Project Name */}
+          <div className="space-y-2">
+            <Label htmlFor="project-name">Project Name</Label>
+            <Input
+              id="project-name"
+              placeholder="e.g. auth-service, payment-module"
+              value={projectName}
+              onChange={(e) => onProjectNameChange(e.target.value)}
+              className="bg-card/50 border-border/50 focus:border-primary/50"
+            />
+          </div>
+
+          {/* Project Type Cards */}
+          <div className="space-y-2">
+            <Label>Project Type</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => onProjectTypeChange("personal")}
+                className={`flex flex-col items-center gap-2 p-4 rounded-lg border transition-all ${
+                  projectType === "personal"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border/50 bg-card/30 text-muted-foreground hover:border-border"
+                }`}
+              >
+                <User className="w-6 h-6" />
+                <span className="text-sm font-medium">Personal</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onProjectTypeChange("team")}
+                className={`flex flex-col items-center gap-2 p-4 rounded-lg border transition-all ${
+                  projectType === "team"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border/50 bg-card/30 text-muted-foreground hover:border-border"
+                }`}
+              >
+                <Users className="w-6 h-6" />
+                <span className="text-sm font-medium">Team</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Team Selector — only when Team type is selected */}
+          {projectType === "team" && (
+            hasTeams ? (
+              <div className="space-y-2">
+                <Label>Select Team</Label>
+                <Select value={teamId} onValueChange={onTeamIdChange}>
+                  <SelectTrigger className="bg-card/50 border-border/50">
+                    <SelectValue placeholder="Choose a team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {userTeams.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        <span className="flex items-center gap-2">
+                          {team.currentUserRole === "admin" && (
+                            <Crown className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />
+                          )}
+                          <span className="truncate">{team.name}</span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] px-1.5 py-0 h-4 capitalize ${roleBadgeStyles[team.currentUserRole]}`}
+                          >
+                            {team.currentUserRole}
+                          </Badge>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/30 border border-border/50">
+                <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-muted-foreground">You are not part of any team yet.</p>
+                  <button
+                    type="button"
+                    onClick={() => { onOpenChange(false); navigate("/teams"); }}
+                    className="text-sm text-primary hover:underline mt-1 inline-flex items-center gap-1"
+                  >
+                    Go to Teams page →
+                  </button>
+                </div>
+              </div>
+            )
+          )}
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={onCreate}
+            disabled={!canCreate}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground"
+          >
+            Create Project
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
