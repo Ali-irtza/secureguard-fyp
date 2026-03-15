@@ -73,6 +73,8 @@ export const mockTeams: Team[] = [
     name: "Ali's Project",
     currentUserRole: "developer",
     metrics: { totalScans: 128, criticalVulns: 5, healthScore: 91, pendingScans: 1 },
+    githubRepo: "https://github.com/ali-raza/mobile-app",
+    branches: ["main", "feature/dashboard", "dev/testing"],
     members: [
       { id: "user-6", name: "Ali Raza", initials: "AR", branch: "main", healthScore: 95, lastScan: "1 hour ago" },
       { id: "user-1", name: "John Doe", initials: "JD", branch: "feature/dashboard", healthScore: 87, lastScan: "3 hours ago" },
