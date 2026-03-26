@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Bell } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -13,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 interface DashboardTopBarProps {
   hasNotifications?: boolean;
@@ -21,6 +23,24 @@ interface DashboardTopBarProps {
 const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Determine primary role (highest privilege across all teams)
+  const primaryRole = useMemo(() => {
+    const userTeams = mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID));
+    if (userTeams.some(t => t.currentUserRole === "admin")) return "admin";
+    if (userTeams.some(t => t.currentUserRole === "developer")) return "developer";
+    if (userTeams.length > 0) return "viewer";
+    return null;
+  }, []);
+
+  const getRoleBadgeClasses = (role: string) => {
+    switch (role) {
+      case "admin": return "bg-primary/15 text-primary border-primary/30";
+      case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+      case "viewer": return "bg-muted text-muted-foreground border-border/50";
+      default: return "";
+    }
+  };
 
   const handleSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && searchQuery.trim()) {
@@ -106,7 +126,21 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56 glass-card border-border/50">
-            <DropdownMenuLabel>My Account</DropdownMenuLabel>
+            {/* Profile Header */}
+            <div className="px-3 py-3 flex items-center gap-3">
+              <Avatar className="h-10 w-10">
+                <AvatarFallback className="bg-primary/20 text-primary text-sm font-semibold">JD</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-foreground truncate">John Doe</p>
+                <p className="text-xs text-muted-foreground truncate">john.doe@secureguard.io</p>
+                {primaryRole && (
+                  <Badge variant="outline" className={`text-[10px] px-1.5 py-0 mt-1 ${getRoleBadgeClasses(primaryRole)}`}>
+                    {primaryRole}
+                  </Badge>
+                )}
+              </div>
+            </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem 
               className="cursor-pointer"
