@@ -1,59 +1,82 @@
 
 
-## Plan: Update Reports Page with Team Support
+## Plan: Update Settings Page with Team Features & Profile Dropdown
 
 ### Files to Modify
 | File | Action |
 |------|--------|
-| `src/pages/Reports.tsx` | Major update — remove scheduled reports, add team filter, update stat cards, update table rows, add empty states |
-| `src/components/dashboard/GenerateReportDialog.tsx` | Rewrite — simplified modal with 2 report types, single project dropdown, remove schedule/checkbox grid |
+| `src/pages/Settings.tsx` | Major rewrite — password section, notifications update, appearance cleanup, new Team & Permissions tab |
+| `src/components/dashboard/DashboardTopBar.tsx` | Update profile dropdown with avatar header + role badge |
 
 ---
 
 ### Changes
 
-**1. Reports.tsx — Data & State**
-- Remove `scheduledReports` array and `Clock` import
-- Update `recentReports` interface to add `type: "personal" | "team"`, `teamId?: string`, `teamName?: string`. Tag 2 reports as team reports (e.g. Weekly Security Summary → SecureGuard Team, Dependencies Analysis → Ali's Project)
-- Update stat cards: replace "Scheduled" with "Team Reports" (value = count of team reports, icon = `Users`)
-- Add state: `reportTypeFilter: "all" | "personal" | "team"`, `selectedTeamId: string`, `dialogOpen`
-- Import `mockTeams`, `CURRENT_USER_ID` from team-data
-- Compute `hasTeams` from mockTeams, default selectedTeamId to first admin team
-- `filteredReports` useMemo filters by type and selectedTeamId
-- When team filter active, stat cards recompute from filtered data and show small "Team" label
+**1. Profile Tab Updates (`Settings.tsx`)**
+- Replace email helper text with "Your email address cannot be changed here for security reasons."
+- Add a `Separator` divider after the Save Changes button
+- Add "Change Password" section with 3 password inputs (current, new, confirm) each with show/hide eye toggle
+- New state: `currentPassword`, `newPassword`, `confirmPassword`, `showCurrentPassword`, `showNewPassword`, `showConfirmPassword`
+- Separate green "Update Password" button independent of "Save Changes"
 
-**2. Reports.tsx — Filter Row**
-- New row between stat cards and Recent Reports table
-- Left: Select dropdown — "All Reports" / "Personal" / "Team" (Team hidden if no teams)
-- Right: team selector dropdown (visible only when Team selected) — same pattern as ScanHistory page with Crown icon + role badges
+**2. Notifications Tab Updates (`Settings.tsx`)**
+- Remove "Weekly Summary" toggle entirely
+- Remove `weeklySummary` from notifications state
+- Keep: Critical Bug Alerts, Scan Completed, New Project Added
+- Add "Team Member Scanned" toggle below existing ones — "Get notified when a team member completes a scan", default off
+- Only visible if `hasTeams === true` (computed from `mockTeams`)
 
-**3. Reports.tsx — Table Updates**
-- Team report rows show green "Team" badge (`bg-primary/15 text-primary`) next to name + team name in `text-xs text-muted-foreground` below
-- Personal rows unchanged
-- Card subtitle changed to "All your generated security reports"
+**3. Appearance Tab Cleanup (`Settings.tsx`)**
+- Remove `accentColors` const entirely
+- Remove `accentColor` and `density` state
+- Remove Accent Color section and UI Density RadioGroup section
+- Keep only Theme selector (Light/Dark/System) + Save Preferences button
+- Remove unused imports: `RadioGroup`, `RadioGroupItem`
 
-**4. Reports.tsx — Remove Scheduled Section**
-- Delete the entire Scheduled Reports `Card` block (lines 152-180)
-- Delete `scheduledReports` const
+**4. New "Team & Permissions" Tab (`Settings.tsx`)**
+- New tab in sidebar between Notifications and Appearance, icon: `Users`, label: "Team & Permissions"
+- Completely hidden if `hasTeams === false`
+- Update `useEffect` tab validation to include `"team-permissions"` as valid tab value
+- Content structure based on role in selected team:
 
-**5. Reports.tsx — Empty States**
-- If no reports at all: centered empty state with FileText icon, "No Reports Yet" heading, subtext, green "Generate Report" button
-- If filtered empty with personal: "No personal reports yet."
-- If filtered empty with team: "No team reports found for this team yet."
+**Admin view (3 sections):**
+- **Team Info card** — team name with pencil edit icon, created date (mock), red "Delete Team" button with AlertDialog confirmation
+- **Members card** — heading with count badge, table: Member (avatar+name+email), Role (editable Select dropdown per row, own row locked), Branch (editable for developers, "All Branches" badge for admin, lock icon for viewer), Actions (trash icon, hidden on own row). Green "Invite Member" button opens a Dialog: email input, role selector (Developer/Viewer only), Send Invite button
+- **GitHub Repository card** — if repo connected: name, URL link, green "Connected" badge, "Refresh Branches" ghost button, red "Disconnect" button. If not connected: dashed area, GitHub icon, "No repository connected", green "Connect Repository" button opens Dialog: repo URL input, PAT input with show/hide, info note, Connect button
 
-**6. GenerateReportDialog.tsx — Simplified Modal**
-- Accept new prop: `scanTypeFilter` and `selectedTeamId` to know context
-- Report Type: only 2 options — "Full Scan Report" (description below) and "Team Summary Report" (only visible if user has teams AND user's role in selected team is admin)
-- Project: single Select dropdown replacing checkbox grid. In team mode, show team-related project names from mockTeams scans. In personal mode, show personal projects list
-- Keep Date Range exactly as is
-- Keep Export Format exactly as is
-- Remove: Schedule toggle, Frequency dropdown, multi-project checkbox grid
-- Generate button disabled until reportType AND project are selected
+**Developer/Viewer view:**
+- Info banner: "Only the team Admin can manage members and settings."
+- Members table — read-only, no dropdowns, no remove. User's own row has "You" badge
+- GitHub repo — read-only info, no action buttons
+- No invite, no delete team
 
-### What Stays Unchanged
-- All action icons (download, share, delete)
-- Table columns (Name, Type, Date, Format, Status, Actions)
-- Header with "Generate Report" button
-- All existing card/table styles
-- Sidebar and other pages
+**State additions:** `selectedTeamId`, `inviteModalOpen`, `inviteEmail`, `inviteRole`, `connectGithubOpen`, `repoUrl`, `repoPat`, `showPat`, `editingTeamName`, `tempTeamName`
+
+**5. Profile Dropdown Update (`DashboardTopBar.tsx`)**
+- Replace "My Account" label section with a profile header: Avatar circle (green bg, initials), bold name, muted email, role badge (colored: green for admin, blue for developer, gray for viewer)
+- Then separator
+- Keep: Profile Settings, API Keys menu items
+- Keep: separator + red Log out
+- Import `mockTeams`, `CURRENT_USER_ID` from team-data to determine primary role
+- Add mock email constant
+
+**6. Cleanup**
+- Remove `accentColors` array
+- Remove unused imports (`RadioGroup`, `RadioGroupItem`, `Palette` if only used for appearance icon — keep it since it's still the Appearance tab icon)
+
+---
+
+### My Suggestions & Feedback
+
+A few thoughts on the design:
+
+1. **The Team & Permissions tab is doing a lot.** It's essentially a mini Teams management page inside Settings. This works for now since there's no dedicated Teams page yet, but once you build the Teams page, you'll want to decide: does Settings show a read-only summary linking to the Teams page, or does it stay as the full management UI? I'd recommend keeping full management on the Teams page and making Settings a lightweight "your teams" overview with links.
+
+2. **GitHub PAT in the Connect modal is fine for mock**, but in production you'd want OAuth flow instead of raw token input. Worth noting for later.
+
+3. **The "Invite Member" flow** — the modal says "An invite link will be sent to their email" but there's no backend. For mock, I'll just add the member to local state with a toast. This is consistent with how other mock flows work in the app.
+
+4. **Role badge in the profile dropdown** — the current user (John Doe) is Admin in SecureGuard Team, Developer in Ali's Project, and Viewer in University Group. I'll show the highest-privilege role (Admin) as the primary badge, which matches the existing "Admin" text already shown in the top bar.
+
+5. **Everything else looks solid** — the change password section, notification cleanup, and appearance simplification are all clean improvements.
 
