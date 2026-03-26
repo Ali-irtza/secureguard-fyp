@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTheme } from "next-themes";
-import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera, Palette, Sun, Moon, Monitor } from "lucide-react";
+import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera, Palette, Sun, Moon, Monitor, Users, Crown, Pencil, Trash2, Lock, Github, Info } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,6 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,31 +27,37 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-
-const accentColors = [
-  { value: "emerald", label: "Emerald", hsl: "160 84% 39%" },
-  { value: "blue", label: "Blue", hsl: "221 83% 53%" },
-  { value: "purple", label: "Purple", hsl: "262 83% 58%" },
-  { value: "orange", label: "Orange", hsl: "24 95% 53%" },
-  { value: "crimson", label: "Crimson", hsl: "348 83% 47%" },
-];
+import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 const Settings = () => {
   const [searchParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState("profile");
 
+  // Team data
+  const userTeams = useMemo(() => mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID)), []);
+  const hasTeams = userTeams.length > 0;
+
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab && ["profile", "api-keys", "notifications", "appearance"].includes(tab)) {
+    const validTabs = ["profile", "api-keys", "notifications", "team-permissions", "appearance"];
+    if (tab && validTabs.includes(tab)) {
+      if (tab === "team-permissions" && !hasTeams) return;
       setActiveTab(tab);
     }
-  }, [searchParams]);
+  }, [searchParams, hasTeams]);
   
   // Profile state
   const [name, setName] = useState("Alex Johnson");
-  const [email, setEmail] = useState("alex.johnson@secureguard.io");
+  const [email] = useState("alex.johnson@secureguard.io");
+
+  // Password state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // API Key state
   const [apiKey] = useState("sg_live_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456");
@@ -55,17 +66,44 @@ const Settings = () => {
   // Notification state
   const [notifications, setNotifications] = useState({
     criticalAlerts: true,
-    weeklySummary: true,
     scanCompleted: false,
     newProject: false,
+    teamMemberScanned: false,
   });
 
-  // Appearance state
-  const [accentColor, setAccentColor] = useState("emerald");
-  const [density, setDensity] = useState("comfortable");
+  // Team & Permissions state
+  const [selectedTeamId, setSelectedTeamId] = useState(userTeams[0]?.id || "");
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"developer" | "viewer">("developer");
+  const [connectGithubOpen, setConnectGithubOpen] = useState(false);
+  const [repoUrl, setRepoUrl] = useState("");
+  const [repoPat, setRepoPat] = useState("");
+  const [showPat, setShowPat] = useState(false);
+  const [editingTeamName, setEditingTeamName] = useState(false);
+  const [tempTeamName, setTempTeamName] = useState("");
+
+  const selectedTeam = useMemo(() => userTeams.find(t => t.id === selectedTeamId), [userTeams, selectedTeamId]);
+  const currentUserRole = selectedTeam?.currentUserRole || "viewer";
+  const isAdmin = currentUserRole === "admin";
 
   const handleSaveProfile = () => {
     toast.success("Profile updated successfully");
+  };
+
+  const handleUpdatePassword = () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast.error("Please fill in all password fields");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("New passwords do not match");
+      return;
+    }
+    toast.success("Password updated successfully");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
   };
 
   const handleCopyKey = () => {
@@ -77,7 +115,32 @@ const Settings = () => {
     toast.success("New API key generated successfully");
   };
 
+  const handleInviteMember = () => {
+    if (!inviteEmail) return;
+    toast.success(`Invite sent to ${inviteEmail}`);
+    setInviteEmail("");
+    setInviteRole("developer");
+    setInviteModalOpen(false);
+  };
+
+  const handleConnectGithub = () => {
+    if (!repoUrl) return;
+    toast.success("GitHub repository connected successfully");
+    setRepoUrl("");
+    setRepoPat("");
+    setConnectGithubOpen(false);
+  };
+
   const maskedKey = `${"•".repeat(32)}${apiKey.slice(-8)}`;
+
+  const getRoleBadgeClasses = (role: string) => {
+    switch (role) {
+      case "admin": return "bg-primary/15 text-primary border-primary/30";
+      case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+      case "viewer": return "bg-muted text-muted-foreground border-border/50";
+      default: return "bg-muted text-muted-foreground border-border/50";
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -115,6 +178,15 @@ const Settings = () => {
               <Bell className="h-4 w-4" />
               Notifications
             </TabsTrigger>
+            {hasTeams && (
+              <TabsTrigger
+                value="team-permissions"
+                className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+              >
+                <Users className="h-4 w-4" />
+                Team & Permissions
+              </TabsTrigger>
+            )}
             <TabsTrigger
               value="appearance"
               className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
@@ -171,17 +243,91 @@ const Settings = () => {
                       id="email"
                       type="email"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      readOnly
                       className="bg-background/50 border-border/50"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Contact support to change your email address
+                      Your email address cannot be changed here for security reasons.
                     </p>
                   </div>
 
                   <Button onClick={handleSaveProfile} className="bg-primary hover:bg-primary/90">
                     Save Changes
                   </Button>
+
+                  <Separator className="my-2" />
+
+                  {/* Change Password Section */}
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-foreground">Change Password</h3>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="current-password">Current Password</Label>
+                      <div className="relative">
+                        <Input
+                          id="current-password"
+                          type={showCurrentPassword ? "text" : "password"}
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          placeholder="Enter current password"
+                          className="bg-background/50 border-border/50 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="new-password">New Password</Label>
+                      <div className="relative">
+                        <Input
+                          id="new-password"
+                          type={showNewPassword ? "text" : "password"}
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="Enter new password"
+                          className="bg-background/50 border-border/50 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewPassword(!showNewPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="confirm-password">Confirm New Password</Label>
+                      <div className="relative">
+                        <Input
+                          id="confirm-password"
+                          type={showConfirmPassword ? "text" : "password"}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="Confirm new password"
+                          className="bg-background/50 border-border/50 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <Button onClick={handleUpdatePassword} className="bg-primary hover:bg-primary/90">
+                      Update Password
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -279,23 +425,6 @@ const Settings = () => {
                     />
                   </div>
 
-                  {/* Weekly Summary */}
-                  <div className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
-                    <div className="space-y-1">
-                      <Label htmlFor="weekly-summary" className="font-medium">Weekly Summary</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Receive a weekly digest of all scan activities
-                      </p>
-                    </div>
-                    <Switch
-                      id="weekly-summary"
-                      checked={notifications.weeklySummary}
-                      onCheckedChange={(checked) =>
-                        setNotifications({ ...notifications, weeklySummary: checked })
-                      }
-                    />
-                  </div>
-
                   {/* Scan Completed */}
                   <div className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
                     <div className="space-y-1">
@@ -330,12 +459,397 @@ const Settings = () => {
                     />
                   </div>
 
+                  {/* Team Member Scanned — only if user has teams */}
+                  {hasTeams && (
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
+                      <div className="space-y-1">
+                        <Label htmlFor="team-member-scanned" className="font-medium">Team Member Scanned</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Get notified when a team member completes a scan
+                        </p>
+                      </div>
+                      <Switch
+                        id="team-member-scanned"
+                        checked={notifications.teamMemberScanned}
+                        onCheckedChange={(checked) =>
+                          setNotifications({ ...notifications, teamMemberScanned: checked })
+                        }
+                      />
+                    </div>
+                  )}
+
                   <Button onClick={() => toast.success("Notification preferences saved")} className="bg-primary hover:bg-primary/90">
                     Save Preferences
                   </Button>
                 </CardContent>
               </Card>
             </TabsContent>
+
+            {/* Team & Permissions Tab */}
+            {hasTeams && (
+              <TabsContent value="team-permissions" className="mt-0 space-y-6">
+                {/* Team Selector */}
+                {userTeams.length > 1 && (
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-muted-foreground">Viewing settings for:</span>
+                    <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
+                      <SelectTrigger className="w-64 bg-card/50 border-border/50">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {userTeams.map((team) => (
+                          <SelectItem key={team.id} value={team.id}>
+                            <div className="flex items-center gap-2">
+                              <Crown className="h-3 w-3 text-primary" />
+                              <span>{team.name}</span>
+                              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.currentUserRole)}`}>
+                                {team.currentUserRole}
+                              </Badge>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Non-admin info banner */}
+                {!isAdmin && (
+                  <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-border/30">
+                    <Info className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <p className="text-sm text-muted-foreground">Only the team Admin can manage members and settings.</p>
+                  </div>
+                )}
+
+                {/* Section 1 — Team Info */}
+                <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        {editingTeamName && isAdmin ? (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={tempTeamName}
+                              onChange={(e) => setTempTeamName(e.target.value)}
+                              className="bg-background/50 border-border/50 h-8 w-64"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  toast.success("Team name updated");
+                                  setEditingTeamName(false);
+                                }
+                                if (e.key === "Escape") setEditingTeamName(false);
+                              }}
+                              autoFocus
+                            />
+                            <Button size="sm" variant="ghost" onClick={() => setEditingTeamName(false)}>Cancel</Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <CardTitle className="text-xl">{selectedTeam?.name}</CardTitle>
+                            {isAdmin && (
+                              <button
+                                onClick={() => {
+                                  setTempTeamName(selectedTeam?.name || "");
+                                  setEditingTeamName(true);
+                                }}
+                                className="text-muted-foreground hover:text-foreground transition-colors"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        <CardDescription className="mt-1">Created on January 15, 2024</CardDescription>
+                      </div>
+                      {isAdmin && (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="destructive" size="sm" className="gap-2">
+                              <Trash2 className="h-4 w-4" />
+                              Delete Team
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Are you sure you want to delete this team?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => toast.success("Team deleted")}
+                                className="bg-destructive hover:bg-destructive/90"
+                              >
+                                Confirm
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
+                    </div>
+                  </CardHeader>
+                </Card>
+
+                {/* Section 2 — Members */}
+                <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <CardTitle>Members</CardTitle>
+                        <Badge variant="outline" className="bg-muted/50 border-border/50">
+                          {selectedTeam?.members.length || 0}
+                        </Badge>
+                      </div>
+                      {isAdmin && (
+                        <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2" size="sm">
+                          <Users className="h-4 w-4" />
+                          Invite Member
+                        </Button>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border/50">
+                          <TableHead>Member</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>Assigned Branch</TableHead>
+                          {isAdmin && <TableHead className="w-16">Actions</TableHead>}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedTeam?.members.map((member) => {
+                          const isSelf = member.id === CURRENT_USER_ID;
+                          const memberRole = isSelf ? currentUserRole : (member.healthScore === null ? "viewer" : member.healthScore > 80 ? "admin" : "developer");
+                          // For mock purposes, derive role from team data
+                          const mockRole = selectedTeam.members.indexOf(member) === 0 ? 
+                            (selectedTeam.currentUserRole === "admin" && isSelf ? "admin" : "developer") : 
+                            (member.healthScore === null ? "viewer" : "developer");
+                          const displayRole = isSelf ? currentUserRole : mockRole;
+
+                          return (
+                            <TableRow key={member.id} className="border-border/30">
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <Avatar className="h-8 w-8">
+                                    <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                                      {member.initials}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium text-foreground">{member.name}</span>
+                                      {isSelf && !isAdmin && (
+                                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary border-primary/30">You</Badge>
+                                      )}
+                                    </div>
+                                    <span className="text-xs text-muted-foreground">{member.name.toLowerCase().replace(" ", ".")}@email.com</span>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {isAdmin && !isSelf ? (
+                                  <Select defaultValue={displayRole}>
+                                    <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="admin">Admin</SelectItem>
+                                      <SelectItem value="developer">Developer</SelectItem>
+                                      <SelectItem value="viewer">Viewer</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                ) : (
+                                  <Badge variant="outline" className={`text-xs ${getRoleBadgeClasses(displayRole)}`}>
+                                    {displayRole}
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {displayRole === "admin" ? (
+                                  <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">All Branches</Badge>
+                                ) : displayRole === "viewer" ? (
+                                  <div className="flex items-center gap-1 text-muted-foreground">
+                                    <Lock className="h-3 w-3" />
+                                    <span className="text-xs">No branch</span>
+                                  </div>
+                                ) : isAdmin && !isSelf ? (
+                                  <Select defaultValue={member.branch}>
+                                    <SelectTrigger className="w-40 h-8 bg-background/50 border-border/50 text-xs">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {selectedTeam.branches?.map((branch) => (
+                                        <SelectItem key={branch} value={branch}>{branch}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                ) : (
+                                  <span className="text-sm text-foreground">{member.branch}</span>
+                                )}
+                              </TableCell>
+                              {isAdmin && (
+                                <TableCell>
+                                  {!isSelf && (
+                                    <button
+                                      onClick={() => toast.success(`${member.name} removed from team`)}
+                                      className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+
+                {/* Section 3 — GitHub Repository */}
+                <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+                  <CardHeader>
+                    <CardTitle>GitHub Repository</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {selectedTeam?.githubRepo ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <Github className="h-5 w-5 text-foreground" />
+                          <a href={selectedTeam.githubRepo} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-sm">
+                            {selectedTeam.githubRepo.replace("https://github.com/", "")}
+                          </a>
+                          <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <p>Connected on January 15, 2024</p>
+                          <p>{selectedTeam.branches?.length || 0} branches detected</p>
+                        </div>
+                        {isAdmin && (
+                          <div className="flex items-center gap-2">
+                            <Button variant="ghost" size="sm" className="gap-2" onClick={() => toast.success("Branches refreshed")}>
+                              <RefreshCw className="h-4 w-4" />
+                              Refresh Branches
+                            </Button>
+                            <Button variant="destructive" size="sm" className="gap-2" onClick={() => toast.success("Repository disconnected")}>
+                              Disconnect
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-3 text-center">
+                        <Github className="h-8 w-8 text-muted-foreground" />
+                        <p className="text-muted-foreground">No repository connected</p>
+                        {isAdmin && (
+                          <Button onClick={() => setConnectGithubOpen(true)} className="bg-primary hover:bg-primary/90 gap-2" size="sm">
+                            Connect Repository
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Invite Member Modal */}
+                <Dialog open={inviteModalOpen} onOpenChange={setInviteModalOpen}>
+                  <DialogContent className="bg-card border-border/50">
+                    <DialogHeader>
+                      <DialogTitle>Invite Member</DialogTitle>
+                      <DialogDescription>Send an invitation to join {selectedTeam?.name}</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                      <div className="space-y-2">
+                        <Label>Email Address</Label>
+                        <Input
+                          type="email"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          placeholder="teammate@email.com"
+                          className="bg-background/50 border-border/50"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Role</Label>
+                        <Select value={inviteRole} onValueChange={(v: "developer" | "viewer") => setInviteRole(v)}>
+                          <SelectTrigger className="bg-background/50 border-border/50">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="developer">Developer</SelectItem>
+                            <SelectItem value="viewer">Viewer</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <p className="text-xs text-muted-foreground">An invite link will be sent to their email</p>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="ghost" onClick={() => setInviteModalOpen(false)}>Cancel</Button>
+                      <Button onClick={handleInviteMember} className="bg-primary hover:bg-primary/90" disabled={!inviteEmail}>
+                        Send Invite
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                {/* Connect GitHub Modal */}
+                <Dialog open={connectGithubOpen} onOpenChange={setConnectGithubOpen}>
+                  <DialogContent className="bg-card border-border/50">
+                    <DialogHeader>
+                      <DialogTitle>Connect GitHub Repository</DialogTitle>
+                      <DialogDescription>Link a repository to enable GitHub-based scanning</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                      <div className="space-y-2">
+                        <Label>Repository URL</Label>
+                        <Input
+                          value={repoUrl}
+                          onChange={(e) => setRepoUrl(e.target.value)}
+                          placeholder="https://github.com/org/repo"
+                          className="bg-background/50 border-border/50"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Personal Access Token</Label>
+                        <div className="relative">
+                          <Input
+                            type={showPat ? "text" : "password"}
+                            value={repoPat}
+                            onChange={(e) => setRepoPat(e.target.value)}
+                            placeholder="ghp_xxxxxxxxxxxx"
+                            className="bg-background/50 border-border/50 pr-10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPat(!showPat)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            {showPat ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 border border-border/30">
+                        <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                        <p className="text-xs text-muted-foreground">
+                          We only read your code for scanning. We never modify your repository.
+                        </p>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="ghost" onClick={() => setConnectGithubOpen(false)}>Cancel</Button>
+                      <Button onClick={handleConnectGithub} className="bg-primary hover:bg-primary/90" disabled={!repoUrl}>
+                        Connect
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </TabsContent>
+            )}
 
             {/* Appearance Tab */}
             <TabsContent value="appearance" className="mt-0">
@@ -370,57 +884,6 @@ const Settings = () => {
                         </button>
                       ))}
                     </div>
-                  </div>
-
-                  {/* Accent Color */}
-                  <div className="space-y-3">
-                    <Label>Accent Color</Label>
-                    <div className="flex flex-wrap gap-3">
-                      {accentColors.map((color) => (
-                        <button
-                          key={color.value}
-                          onClick={() => {
-                            setAccentColor(color.value);
-                            toast.success(`Accent color changed to ${color.label}`);
-                          }}
-                          className={`w-10 h-10 rounded-full border-2 transition-all hover:scale-110 ${
-                            accentColor === color.value ? "border-foreground ring-2 ring-offset-2 ring-offset-background" : "border-transparent"
-                          }`}
-                          style={{ backgroundColor: `hsl(${color.hsl})` }}
-                          title={color.label}
-                        />
-                      ))}
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Choose an accent color for buttons and highlights
-                    </p>
-                  </div>
-
-                  {/* UI Density */}
-                  <div className="space-y-3">
-                    <Label>UI Density</Label>
-                    <RadioGroup value={density} onValueChange={setDensity} className="flex gap-4">
-                      {[
-                        { value: "comfortable", label: "Comfortable", desc: "More spacing, easier to read" },
-                        { value: "compact", label: "Compact", desc: "Denser layout, more content visible" },
-                      ].map((option) => (
-                        <Label
-                          key={option.value}
-                          htmlFor={option.value}
-                          className={`flex-1 flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all ${
-                            density === option.value
-                              ? "border-primary bg-primary/10"
-                              : "border-border/50 hover:border-border"
-                          }`}
-                        >
-                          <RadioGroupItem value={option.value} id={option.value} className="mt-1" />
-                          <div>
-                            <p className="font-medium text-foreground">{option.label}</p>
-                            <p className="text-sm text-muted-foreground">{option.desc}</p>
-                          </div>
-                        </Label>
-                      ))}
-                    </RadioGroup>
                   </div>
 
                   <Button onClick={() => toast.success("Appearance settings saved")} className="bg-primary hover:bg-primary/90">
