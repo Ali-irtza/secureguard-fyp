@@ -151,32 +151,37 @@ const Team = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Team Switcher — only if multiple teams */}
-        {userTeams.length > 1 ? (
-          <div className="flex flex-wrap gap-2">
-            {userTeams.map((team) => (
-              <button
-                key={team.id}
-                onClick={() => setSelectedTeamId(team.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all duration-200 ${
-                  selectedTeamId === team.id
-                    ? "bg-primary/10 border-primary/40 text-foreground"
-                    : "bg-card/50 border-border/50 text-muted-foreground hover:text-foreground hover:border-border"
-                }`}
-              >
-                {team.currentUserRole === "admin" && <Crown className="h-3.5 w-3.5 text-primary" />}
-                <span className="font-medium text-sm">{team.name}</span>
-                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 ${getRoleBadgeClasses(team.currentUserRole)}`}>
-                  {team.currentUserRole}
-                </Badge>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div>
+        {/* Team Switcher Dropdown + Create Team Button */}
+        <div className="flex items-center gap-3">
+          {userTeams.length > 1 ? (
+            <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
+              <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
+                <SelectValue placeholder="Select a team" />
+              </SelectTrigger>
+              <SelectContent>
+                {userTeams.map((team) => (
+                  <SelectItem key={team.id} value={team.id}>
+                    <span className="flex items-center gap-2">
+                      {team.currentUserRole === "admin" && <Crown className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
+                      <span className="truncate">{team.name}</span>
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 capitalize ${getRoleBadgeClasses(team.currentUserRole)}`}>
+                        {team.currentUserRole}
+                      </Badge>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground">{selectedTeam?.name}</h1>
-            <p className="text-muted-foreground mt-1">Team · {selectedTeam?.members.length} members</p>
-          </div>
+          )}
+          <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+            <Plus className="h-4 w-4" />
+            Create Team
+          </Button>
+        </div>
+        {userTeams.length === 1 && (
+          <p className="text-muted-foreground -mt-4">Team · {selectedTeam?.members.length} members</p>
         )}
 
         {/* Page Header */}
