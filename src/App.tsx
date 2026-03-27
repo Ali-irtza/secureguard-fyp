@@ -22,6 +22,7 @@ import Terms from "./pages/Terms";
 import Contact from "./pages/Contact";
 import Notifications from "./pages/Notifications";
 import Alerts from "./pages/Alerts";
+import Team from "./pages/Team";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ const App = () => (
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/new-scan" element={<NewScan />} />
           <Route path="/projects" element={<Projects />} />
+          <Route path="/team" element={<Team />} />
           <Route path="/scan-history" element={<ScanHistory />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/help" element={<Help />} />
