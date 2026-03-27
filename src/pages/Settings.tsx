@@ -69,21 +69,14 @@ const Settings = () => {
     teamMemberScanned: false,
   });
 
-  // Team & Permissions state
-  const [selectedTeamId, setSelectedTeamId] = useState(userTeams[0]?.id || "");
-  const [inviteModalOpen, setInviteModalOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<"developer" | "viewer">("developer");
-  const [connectGithubOpen, setConnectGithubOpen] = useState(false);
-  const [repoUrl, setRepoUrl] = useState("");
-  const [repoPat, setRepoPat] = useState("");
-  const [showPat, setShowPat] = useState(false);
-  const [editingTeamName, setEditingTeamName] = useState(false);
-  const [tempTeamName, setTempTeamName] = useState("");
-
-  const selectedTeam = useMemo(() => userTeams.find(t => t.id === selectedTeamId), [userTeams, selectedTeamId]);
-  const currentUserRole = selectedTeam?.currentUserRole || "viewer";
-  const isAdmin = currentUserRole === "admin";
+  const getRoleBadgeClasses = (role: string) => {
+    switch (role) {
+      case "admin": return "bg-primary/15 text-primary border-primary/30";
+      case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+      case "viewer": return "bg-muted text-muted-foreground border-border/50";
+      default: return "bg-muted text-muted-foreground border-border/50";
+    }
+  };
 
   const handleSaveProfile = () => {
     toast.success("Profile updated successfully");
