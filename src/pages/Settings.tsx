@@ -28,6 +28,7 @@ import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 const Settings = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState("profile");
 
