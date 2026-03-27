@@ -469,52 +469,6 @@ const Team = () => {
           />
         )}
 
-        {/* Danger Zone — Admin only */}
-        {isAdmin && selectedTeam && (
-          <Card className="bg-card/50 backdrop-blur-sm border-destructive/30">
-            <CardHeader>
-              <CardTitle className="text-destructive flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5" />
-                Danger Zone
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-foreground">Delete Team</p>
-                  <p className="text-sm text-muted-foreground">
-                    Permanently delete this team and remove all members. This action cannot be undone.
-                  </p>
-                </div>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 gap-2">
-                      <Trash2 className="h-4 w-4" />
-                      Delete Team
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure you want to delete {selectedTeam.name}?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        All members will be removed and this action cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={() => toast.success(`Team "${selectedTeam.name}" deleted`)}
-                        className="bg-destructive hover:bg-destructive/90"
-                      >
-                        Delete Team
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </div>
-            </CardContent>
-          </Card>
-        )}
       </div>
 
       {/* Invite Member Modal */}
