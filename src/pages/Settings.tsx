@@ -106,32 +106,7 @@ const Settings = () => {
     toast.success("New API key generated successfully");
   };
 
-  const handleInviteMember = () => {
-    if (!inviteEmail) return;
-    toast.success(`Invite sent to ${inviteEmail}`);
-    setInviteEmail("");
-    setInviteRole("developer");
-    setInviteModalOpen(false);
-  };
-
-  const handleConnectGithub = () => {
-    if (!repoUrl) return;
-    toast.success("GitHub repository connected successfully");
-    setRepoUrl("");
-    setRepoPat("");
-    setConnectGithubOpen(false);
-  };
-
   const maskedKey = `${"•".repeat(32)}${apiKey.slice(-8)}`;
-
-  const getRoleBadgeClasses = (role: string) => {
-    switch (role) {
-      case "admin": return "bg-primary/15 text-primary border-primary/30";
-      case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
-      case "viewer": return "bg-muted text-muted-foreground border-border/50";
-      default: return "bg-muted text-muted-foreground border-border/50";
-    }
-  };
 
   return (
     <DashboardLayout>
