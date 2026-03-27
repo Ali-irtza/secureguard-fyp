@@ -454,366 +454,92 @@ const Settings = () => {
             {/* Team & Permissions Tab */}
             {hasTeams && (
               <TabsContent value="team-permissions" className="mt-0 space-y-6">
-                {/* Team Selector */}
-                {userTeams.length > 1 && (
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm text-muted-foreground">Viewing settings for:</span>
-                    <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
-                      <SelectTrigger className="w-64 bg-card/50 border-border/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {userTeams.map((team) => (
-                          <SelectItem key={team.id} value={team.id}>
-                            <div className="flex items-center gap-2">
-                              <Crown className="h-3 w-3 text-primary" />
-                              <span>{team.name}</span>
-                              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.currentUserRole)}`}>
-                                {team.currentUserRole}
-                              </Badge>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                {/* Non-admin info banner */}
-                {!isAdmin && (
-                  <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-border/30">
-                    <Info className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <p className="text-sm text-muted-foreground">Only the team Admin can manage members and settings.</p>
-                  </div>
-                )}
-
-                {/* Section 1 — Team Info */}
                 <Card className="bg-card/50 backdrop-blur-sm border-border/50">
                   <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        {editingTeamName && isAdmin ? (
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={tempTeamName}
-                              onChange={(e) => setTempTeamName(e.target.value)}
-                              className="bg-background/50 border-border/50 h-8 w-64"
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  toast.success("Team name updated");
-                                  setEditingTeamName(false);
-                                }
-                                if (e.key === "Escape") setEditingTeamName(false);
-                              }}
-                              autoFocus
-                            />
-                            <Button size="sm" variant="ghost" onClick={() => setEditingTeamName(false)}>Cancel</Button>
+                    <CardTitle>Your Teams</CardTitle>
+                    <CardDescription>Manage your team memberships and settings</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {userTeams.map((team) => {
+                      const isTeamAdmin = team.currentUserRole === "admin";
+                      const repoName = team.githubRepo
+                        ? team.githubRepo.replace("https://github.com/", "")
+                        : null;
+
+                      return (
+                        <div
+                          key={team.id}
+                          className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                              {isTeamAdmin ? (
+                                <Crown className="h-5 w-5 text-primary" />
+                              ) : (
+                                <Users className="h-5 w-5 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-foreground">{team.name}</span>
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.currentUserRole)}`}>
+                                  {team.currentUserRole}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span>{team.members.length} members</span>
+                                {repoName && (
+                                  <span className="flex items-center gap-1">
+                                    <Github className="h-3 w-3" />
+                                    {repoName}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        ) : (
                           <div className="flex items-center gap-2">
-                            <CardTitle className="text-xl">{selectedTeam?.name}</CardTitle>
-                            {isAdmin && (
-                              <button
-                                onClick={() => {
-                                  setTempTeamName(selectedTeam?.name || "");
-                                  setEditingTeamName(true);
-                                }}
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="gap-2 text-muted-foreground hover:text-foreground"
+                              onClick={() => navigate("/team")}
+                            >
+                              Manage Team
+                              <ArrowRight className="h-4 w-4" />
+                            </Button>
+                            {isTeamAdmin && (
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="destructive" size="sm" className="gap-2">
+                                    <Trash2 className="h-4 w-4" />
+                                    Delete Team
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Are you sure you want to delete {team.name}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      All members will be removed and this action cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => toast.success(`${team.name} deleted`)}
+                                      className="bg-destructive hover:bg-destructive/90"
+                                    >
+                                      Delete Team
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
                             )}
                           </div>
-                        )}
-                        <CardDescription className="mt-1">Created on January 15, 2024</CardDescription>
-                      </div>
-                      {isAdmin && (
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="destructive" size="sm" className="gap-2">
-                              <Trash2 className="h-4 w-4" />
-                              Delete Team
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Are you sure you want to delete this team?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                This action cannot be undone.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => toast.success("Team deleted")}
-                                className="bg-destructive hover:bg-destructive/90"
-                              >
-                                Confirm
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      )}
-                    </div>
-                  </CardHeader>
-                </Card>
-
-                {/* Section 2 — Members */}
-                <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <CardTitle>Members</CardTitle>
-                        <Badge variant="outline" className="bg-muted/50 border-border/50">
-                          {selectedTeam?.members.length || 0}
-                        </Badge>
-                      </div>
-                      {isAdmin && (
-                        <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2" size="sm">
-                          <Users className="h-4 w-4" />
-                          Invite Member
-                        </Button>
-                      )}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="border-border/50">
-                          <TableHead>Member</TableHead>
-                          <TableHead>Role</TableHead>
-                          <TableHead>Assigned Branch</TableHead>
-                          {isAdmin && <TableHead className="w-16">Actions</TableHead>}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {selectedTeam?.members.map((member) => {
-                          const isSelf = member.id === CURRENT_USER_ID;
-                          const memberRole = isSelf ? currentUserRole : (member.healthScore === null ? "viewer" : member.healthScore > 80 ? "admin" : "developer");
-                          // For mock purposes, derive role from team data
-                          const mockRole = selectedTeam.members.indexOf(member) === 0 ? 
-                            (selectedTeam.currentUserRole === "admin" && isSelf ? "admin" : "developer") : 
-                            (member.healthScore === null ? "viewer" : "developer");
-                          const displayRole = isSelf ? currentUserRole : mockRole;
-
-                          return (
-                            <TableRow key={member.id} className="border-border/30">
-                              <TableCell>
-                                <div className="flex items-center gap-3">
-                                  <Avatar className="h-8 w-8">
-                                    <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                                      {member.initials}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-medium text-foreground">{member.name}</span>
-                                      {isSelf && !isAdmin && (
-                                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary border-primary/30">You</Badge>
-                                      )}
-                                    </div>
-                                    <span className="text-xs text-muted-foreground">{member.name.toLowerCase().replace(" ", ".")}@email.com</span>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                {isAdmin && !isSelf ? (
-                                  <Select defaultValue={displayRole}>
-                                    <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="admin">Admin</SelectItem>
-                                      <SelectItem value="developer">Developer</SelectItem>
-                                      <SelectItem value="viewer">Viewer</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                ) : (
-                                  <Badge variant="outline" className={`text-xs ${getRoleBadgeClasses(displayRole)}`}>
-                                    {displayRole}
-                                  </Badge>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {displayRole === "admin" ? (
-                                  <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">All Branches</Badge>
-                                ) : displayRole === "viewer" ? (
-                                  <div className="flex items-center gap-1 text-muted-foreground">
-                                    <Lock className="h-3 w-3" />
-                                    <span className="text-xs">No branch</span>
-                                  </div>
-                                ) : isAdmin && !isSelf ? (
-                                  <Select defaultValue={member.branch}>
-                                    <SelectTrigger className="w-40 h-8 bg-background/50 border-border/50 text-xs">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {selectedTeam.branches?.map((branch) => (
-                                        <SelectItem key={branch} value={branch}>{branch}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                ) : (
-                                  <span className="text-sm text-foreground">{member.branch}</span>
-                                )}
-                              </TableCell>
-                              {isAdmin && (
-                                <TableCell>
-                                  {!isSelf && (
-                                    <button
-                                      onClick={() => toast.success(`${member.name} removed from team`)}
-                                      className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </TableCell>
-                              )}
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
+                        </div>
+                      );
+                    })}
                   </CardContent>
                 </Card>
-
-                {/* Section 3 — GitHub Repository */}
-                <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-                  <CardHeader>
-                    <CardTitle>GitHub Repository</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {selectedTeam?.githubRepo ? (
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <Github className="h-5 w-5 text-foreground" />
-                          <a href={selectedTeam.githubRepo} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-sm">
-                            {selectedTeam.githubRepo.replace("https://github.com/", "")}
-                          </a>
-                          <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
-                        </div>
-                        <div className="text-xs text-muted-foreground space-y-1">
-                          <p>Connected on January 15, 2024</p>
-                          <p>{selectedTeam.branches?.length || 0} branches detected</p>
-                        </div>
-                        {isAdmin && (
-                          <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="sm" className="gap-2" onClick={() => toast.success("Branches refreshed")}>
-                              <RefreshCw className="h-4 w-4" />
-                              Refresh Branches
-                            </Button>
-                            <Button variant="destructive" size="sm" className="gap-2" onClick={() => toast.success("Repository disconnected")}>
-                              Disconnect
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-3 text-center">
-                        <Github className="h-8 w-8 text-muted-foreground" />
-                        <p className="text-muted-foreground">No repository connected</p>
-                        {isAdmin && (
-                          <Button onClick={() => setConnectGithubOpen(true)} className="bg-primary hover:bg-primary/90 gap-2" size="sm">
-                            Connect Repository
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Invite Member Modal */}
-                <Dialog open={inviteModalOpen} onOpenChange={setInviteModalOpen}>
-                  <DialogContent className="bg-card border-border/50">
-                    <DialogHeader>
-                      <DialogTitle>Invite Member</DialogTitle>
-                      <DialogDescription>Send an invitation to join {selectedTeam?.name}</DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-2">
-                      <div className="space-y-2">
-                        <Label>Email Address</Label>
-                        <Input
-                          type="email"
-                          value={inviteEmail}
-                          onChange={(e) => setInviteEmail(e.target.value)}
-                          placeholder="teammate@email.com"
-                          className="bg-background/50 border-border/50"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Role</Label>
-                        <Select value={inviteRole} onValueChange={(v: "developer" | "viewer") => setInviteRole(v)}>
-                          <SelectTrigger className="bg-background/50 border-border/50">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="developer">Developer</SelectItem>
-                            <SelectItem value="viewer">Viewer</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <p className="text-xs text-muted-foreground">An invite link will be sent to their email</p>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="ghost" onClick={() => setInviteModalOpen(false)}>Cancel</Button>
-                      <Button onClick={handleInviteMember} className="bg-primary hover:bg-primary/90" disabled={!inviteEmail}>
-                        Send Invite
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-
-                {/* Connect GitHub Modal */}
-                <Dialog open={connectGithubOpen} onOpenChange={setConnectGithubOpen}>
-                  <DialogContent className="bg-card border-border/50">
-                    <DialogHeader>
-                      <DialogTitle>Connect GitHub Repository</DialogTitle>
-                      <DialogDescription>Link a repository to enable GitHub-based scanning</DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-2">
-                      <div className="space-y-2">
-                        <Label>Repository URL</Label>
-                        <Input
-                          value={repoUrl}
-                          onChange={(e) => setRepoUrl(e.target.value)}
-                          placeholder="https://github.com/org/repo"
-                          className="bg-background/50 border-border/50"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Personal Access Token</Label>
-                        <div className="relative">
-                          <Input
-                            type={showPat ? "text" : "password"}
-                            value={repoPat}
-                            onChange={(e) => setRepoPat(e.target.value)}
-                            placeholder="ghp_xxxxxxxxxxxx"
-                            className="bg-background/50 border-border/50 pr-10"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPat(!showPat)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            {showPat ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 border border-border/30">
-                        <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                        <p className="text-xs text-muted-foreground">
-                          We only read your code for scanning. We never modify your repository.
-                        </p>
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="ghost" onClick={() => setConnectGithubOpen(false)}>Cancel</Button>
-                      <Button onClick={handleConnectGithub} className="bg-primary hover:bg-primary/90" disabled={!repoUrl}>
-                        Connect
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
               </TabsContent>
             )}
 
