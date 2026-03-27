@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Users, Crown, Pencil, Trash2, Lock, Github, Info, Eye, EyeOff, UserPlus, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
+import { Users, Crown, Pencil, Trash2, Lock, Github, Info, Eye, EyeOff, UserPlus, ExternalLink, RefreshCw, Plus } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
@@ -151,32 +151,37 @@ const Team = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Team Switcher — only if multiple teams */}
-        {userTeams.length > 1 ? (
-          <div className="flex flex-wrap gap-2">
-            {userTeams.map((team) => (
-              <button
-                key={team.id}
-                onClick={() => setSelectedTeamId(team.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all duration-200 ${
-                  selectedTeamId === team.id
-                    ? "bg-primary/10 border-primary/40 text-foreground"
-                    : "bg-card/50 border-border/50 text-muted-foreground hover:text-foreground hover:border-border"
-                }`}
-              >
-                {team.currentUserRole === "admin" && <Crown className="h-3.5 w-3.5 text-primary" />}
-                <span className="font-medium text-sm">{team.name}</span>
-                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 ${getRoleBadgeClasses(team.currentUserRole)}`}>
-                  {team.currentUserRole}
-                </Badge>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div>
+        {/* Team Switcher Dropdown + Create Team Button */}
+        <div className="flex items-center gap-3">
+          {userTeams.length > 1 ? (
+            <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
+              <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
+                <SelectValue placeholder="Select a team" />
+              </SelectTrigger>
+              <SelectContent>
+                {userTeams.map((team) => (
+                  <SelectItem key={team.id} value={team.id}>
+                    <span className="flex items-center gap-2">
+                      {team.currentUserRole === "admin" && <Crown className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
+                      <span className="truncate">{team.name}</span>
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 capitalize ${getRoleBadgeClasses(team.currentUserRole)}`}>
+                        {team.currentUserRole}
+                      </Badge>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground">{selectedTeam?.name}</h1>
-            <p className="text-muted-foreground mt-1">Team · {selectedTeam?.members.length} members</p>
-          </div>
+          )}
+          <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+            <Plus className="h-4 w-4" />
+            Create Team
+          </Button>
+        </div>
+        {userTeams.length === 1 && (
+          <p className="text-muted-foreground -mt-4">Team · {selectedTeam?.members.length} members</p>
         )}
 
         {/* Page Header */}
@@ -464,52 +469,6 @@ const Team = () => {
           />
         )}
 
-        {/* Danger Zone — Admin only */}
-        {isAdmin && selectedTeam && (
-          <Card className="bg-card/50 backdrop-blur-sm border-destructive/30">
-            <CardHeader>
-              <CardTitle className="text-destructive flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5" />
-                Danger Zone
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-foreground">Delete Team</p>
-                  <p className="text-sm text-muted-foreground">
-                    Permanently delete this team and remove all members. This action cannot be undone.
-                  </p>
-                </div>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 gap-2">
-                      <Trash2 className="h-4 w-4" />
-                      Delete Team
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure you want to delete {selectedTeam.name}?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        All members will be removed and this action cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={() => toast.success(`Team "${selectedTeam.name}" deleted`)}
-                        className="bg-destructive hover:bg-destructive/90"
-                      >
-                        Delete Team
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </div>
-            </CardContent>
-          </Card>
-        )}
       </div>
 
       {/* Invite Member Modal */}
@@ -625,6 +584,38 @@ const Team = () => {
               className="bg-primary hover:bg-primary/90"
             >
               Connect Repository
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Team Modal */}
+      <Dialog open={createTeamOpen} onOpenChange={setCreateTeamOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New Team</DialogTitle>
+            <DialogDescription>Give your team a name to get started</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="create-team-name">Team Name</Label>
+              <Input
+                id="create-team-name"
+                value={newTeamName}
+                onChange={(e) => setNewTeamName(e.target.value)}
+                placeholder="e.g. SecureGuard Team"
+                className="bg-background/50 border-border/50"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCreateTeamOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleCreateTeam}
+              disabled={!newTeamName.trim()}
+              className="bg-primary hover:bg-primary/90"
+            >
+              Create Team
             </Button>
           </DialogFooter>
         </DialogContent>
