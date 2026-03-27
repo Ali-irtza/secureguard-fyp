@@ -588,6 +588,38 @@ const Team = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Create Team Modal */}
+      <Dialog open={createTeamOpen} onOpenChange={setCreateTeamOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New Team</DialogTitle>
+            <DialogDescription>Give your team a name to get started</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="create-team-name">Team Name</Label>
+              <Input
+                id="create-team-name"
+                value={newTeamName}
+                onChange={(e) => setNewTeamName(e.target.value)}
+                placeholder="e.g. SecureGuard Team"
+                className="bg-background/50 border-border/50"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCreateTeamOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleCreateTeam}
+              disabled={!newTeamName.trim()}
+              className="bg-primary hover:bg-primary/90"
+            >
+              Create Team
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };
