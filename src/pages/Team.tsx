@@ -460,15 +460,6 @@ const Team = () => {
           </CardContent>
         </Card>
 
-        {/* Team Health Summary */}
-        {selectedTeam && (
-          <TeamHealthOverview
-            team={selectedTeam}
-            currentUserId={CURRENT_USER_ID}
-            userRole={currentUserRole}
-          />
-        )}
-
       </div>
 
       {/* Invite Member Modal */}
