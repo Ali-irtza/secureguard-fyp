@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { Users, Crown, Pencil, Trash2, Lock, Github, Info, Eye, EyeOff, UserPlus, ExternalLink, RefreshCw, Plus } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
-import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -459,15 +459,6 @@ const Team = () => {
             )}
           </CardContent>
         </Card>
-
-        {/* Team Health Summary */}
-        {selectedTeam && (
-          <TeamHealthOverview
-            team={selectedTeam}
-            currentUserId={CURRENT_USER_ID}
-            userRole={currentUserRole}
-          />
-        )}
 
       </div>
 
