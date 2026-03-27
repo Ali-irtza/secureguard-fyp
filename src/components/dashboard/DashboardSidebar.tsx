@@ -1,4 +1,4 @@
-import { Shield, LayoutDashboard, Plus, FolderKanban, FileBarChart, Settings, LogOut, HelpCircle, FileText } from "lucide-react";
+import { Shield, LayoutDashboard, Plus, FolderKanban, Users, FileBarChart, Settings, LogOut, HelpCircle, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { NavLink } from "@/components/NavLink";
