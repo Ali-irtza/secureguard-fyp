@@ -8,15 +8,15 @@ import {
 const faqs = [
   {
     question: "What programming languages are supported?",
-    answer: "SecureGuard Pro currently supports Python and C++ with deep analysis capabilities. We're actively working on adding support for JavaScript, TypeScript, Go, and Rust. Our AI models are trained specifically on security patterns for each supported language.",
+    answer: "SecureGuard Pro currently supports Python and C++ with deep analysis capabilities. Our AI models are trained specifically on security patterns for each supported language.",
   },
   {
     question: "How secure is my code during scanning?",
-    answer: "Your code is processed in isolated, encrypted containers and is never stored after analysis. We use end-to-end encryption for all data transfers, and our infrastructure is SOC 2 Type II certified. Code is automatically purged from our systems within minutes of scan completion.",
+    answer: "Your code is stored in encrypted, isolated containers so you can rescan anytime without re-uploading. We use end-to-end encryption for all data transfers, and our infrastructure is SOC 2 Type II certified. Only you and your authorized team members can access your stored code.",
   },
   {
-    question: "Can I integrate with my CI/CD pipeline?",
-    answer: "Absolutely! SecureGuard Pro offers native integrations with GitHub Actions, GitLab CI, Jenkins, and CircleCI. You can configure automatic scans on every push, pull request, or scheduled intervals. Our API also allows custom integrations with any CI/CD system.",
+    question: "Can I rescan my projects later?",
+    answer: "Yes! Once you upload your code, it's securely stored so you can rescan at any time. You can also schedule automatic rescans to catch new vulnerabilities as our detection models improve.",
   },
 ];
 
