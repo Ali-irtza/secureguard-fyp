@@ -32,3 +32,17 @@ frontend/.env.*
 *.sln
 *.sw?
 .env
+
+# Private local documentation bundle
+Project-details/
+
+# Backend
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Private dev log (local only)
+backend/DEVLOG.md

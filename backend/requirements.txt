@@ -1,0 +1,18 @@
+# Web framework
+fastapi==0.115.6
+
+# ASGI server - runs our FastAPI app
+uvicorn[standard]==0.34.0
+
+# Supabase client - connects to our database and auth
+supabase==2.10.0
+
+# Pydantic settings - manages environment variables the smart way
+pydantic-settings==2.7.0
+
+# Python multipart - needed for file uploads (code scanning)
+python-multipart==0.0.20
+
+# HTTPX - async HTTP client (used internally by supabase-py)
+# Version is intentionally unpinned - supabase manages this dependency
+httpx
