@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import MetricsRow from "@/components/dashboard/MetricsRow";
 import EmptyState from "@/components/dashboard/EmptyState";
 import RecentScansTable, { Scan } from "@/components/dashboard/RecentScansTable";
 import VulnerabilityChart from "@/components/dashboard/VulnerabilityChart";
 import CriticalAlerts from "@/components/dashboard/CriticalAlerts";
+import TeamViewToggle from "@/components/dashboard/TeamViewToggle";
+import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
+import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 // Mock data for demonstration
 const mockScans: Scan[] = [
@@ -46,13 +49,39 @@ const mockScans: Scan[] = [
 ];
 
 const Dashboard = () => {
-  const [showEmpty] = useState(false); // Toggle to test empty state
+  const [showEmpty] = useState(false);
+  const [viewMode, setViewMode] = useState<"personal" | "team">("personal");
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
 
-  const metrics = {
+  // Default team selection: first admin team, or first team
+  useEffect(() => {
+    if (mockTeams.length > 0) {
+      const adminTeam = mockTeams.find((t) => t.currentUserRole === "admin");
+      setSelectedTeamId((adminTeam || mockTeams[0]).id);
+    }
+  }, []);
+
+  const selectedTeam = mockTeams.find((t) => t.id === selectedTeamId);
+  const userRole = selectedTeam?.currentUserRole;
+  const isTeamView = viewMode === "team" && !!selectedTeam;
+
+  // Determine metrics
+  const personalMetrics = {
     totalScans: 247,
     criticalVulns: 12,
     healthScore: 87,
     pendingScans: 3,
+  };
+
+  const metrics = isTeamView && selectedTeam ? selectedTeam.metrics : personalMetrics;
+
+  // Determine scans based on role
+  const getScans = (): Scan[] => {
+    if (!isTeamView || !selectedTeam) return mockScans;
+    if (userRole === "developer") {
+      return selectedTeam.scans.filter((s) => s.memberId === CURRENT_USER_ID);
+    }
+    return selectedTeam.scans;
   };
 
   return (
@@ -68,8 +97,28 @@ const Dashboard = () => {
           </div>
         </div>
 
+        {/* Team View Toggle */}
+        {mockTeams.length > 0 && (
+          <TeamViewToggle
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            teams={mockTeams}
+            selectedTeamId={selectedTeamId}
+            onTeamChange={setSelectedTeamId}
+          />
+        )}
+
         {/* Metrics Row */}
-        <MetricsRow {...metrics} />
+        <MetricsRow {...metrics} isTeamView={isTeamView} />
+
+        {/* Team Health Overview - only in team view */}
+        {isTeamView && selectedTeam && userRole && (
+          <TeamHealthOverview
+            team={selectedTeam}
+            currentUserId={CURRENT_USER_ID}
+            userRole={userRole}
+          />
+        )}
 
         {/* Main Content */}
         {showEmpty ? (
@@ -78,13 +127,20 @@ const Dashboard = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left Column - 2/3 width */}
             <div className="lg:col-span-2">
-              <RecentScansTable scans={mockScans} />
+              <RecentScansTable
+                scans={getScans()}
+                userRole={isTeamView ? userRole : undefined}
+              />
             </div>
 
             {/* Right Column - 1/3 width */}
             <div className="space-y-6">
               <VulnerabilityChart />
-              <CriticalAlerts />
+              <CriticalAlerts
+                isTeamView={isTeamView}
+                teamAlerts={isTeamView && selectedTeam ? selectedTeam.alerts : undefined}
+                userRole={isTeamView ? userRole : undefined}
+              />
             </div>
           </div>
         )}

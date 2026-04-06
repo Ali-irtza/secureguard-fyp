@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState, useEffect, useMemo } from "react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useTheme } from "next-themes";
-import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera, Palette, Sun, Moon, Monitor } from "lucide-react";
+import { User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera, Palette, Sun, Moon, Monitor, Users, Crown, Trash2, Github, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,31 +24,38 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-
-const accentColors = [
-  { value: "emerald", label: "Emerald", hsl: "160 84% 39%" },
-  { value: "blue", label: "Blue", hsl: "221 83% 53%" },
-  { value: "purple", label: "Purple", hsl: "262 83% 58%" },
-  { value: "orange", label: "Orange", hsl: "24 95% 53%" },
-  { value: "crimson", label: "Crimson", hsl: "348 83% 47%" },
-];
+import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 const Settings = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState("profile");
 
+  // Team data
+  const userTeams = useMemo(() => mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID)), []);
+  const hasTeams = userTeams.length > 0;
+
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab && ["profile", "api-keys", "notifications", "appearance"].includes(tab)) {
+    const validTabs = ["profile", "api-keys", "notifications", "team-permissions", "appearance"];
+    if (tab && validTabs.includes(tab)) {
+      if (tab === "team-permissions" && !hasTeams) return;
       setActiveTab(tab);
     }
-  }, [searchParams]);
+  }, [searchParams, hasTeams]);
   
   // Profile state
   const [name, setName] = useState("Alex Johnson");
-  const [email, setEmail] = useState("alex.johnson@secureguard.io");
+  const [email] = useState("alex.johnson@secureguard.io");
+
+  // Password state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // API Key state
   const [apiKey] = useState("sg_live_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456");
@@ -55,17 +64,37 @@ const Settings = () => {
   // Notification state
   const [notifications, setNotifications] = useState({
     criticalAlerts: true,
-    weeklySummary: true,
     scanCompleted: false,
     newProject: false,
+    teamMemberScanned: false,
   });
 
-  // Appearance state
-  const [accentColor, setAccentColor] = useState("emerald");
-  const [density, setDensity] = useState("comfortable");
+  const getRoleBadgeClasses = (role: string) => {
+    switch (role) {
+      case "admin": return "bg-primary/15 text-primary border-primary/30";
+      case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+      case "viewer": return "bg-muted text-muted-foreground border-border/50";
+      default: return "bg-muted text-muted-foreground border-border/50";
+    }
+  };
 
   const handleSaveProfile = () => {
     toast.success("Profile updated successfully");
+  };
+
+  const handleUpdatePassword = () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast.error("Please fill in all password fields");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("New passwords do not match");
+      return;
+    }
+    toast.success("Password updated successfully");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
   };
 
   const handleCopyKey = () => {
@@ -115,6 +144,15 @@ const Settings = () => {
               <Bell className="h-4 w-4" />
               Notifications
             </TabsTrigger>
+            {hasTeams && (
+              <TabsTrigger
+                value="team-permissions"
+                className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+              >
+                <Users className="h-4 w-4" />
+                Team & Permissions
+              </TabsTrigger>
+            )}
             <TabsTrigger
               value="appearance"
               className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
@@ -171,17 +209,91 @@ const Settings = () => {
                       id="email"
                       type="email"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      readOnly
                       className="bg-background/50 border-border/50"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Contact support to change your email address
+                      Your email address cannot be changed here for security reasons.
                     </p>
                   </div>
 
                   <Button onClick={handleSaveProfile} className="bg-primary hover:bg-primary/90">
                     Save Changes
                   </Button>
+
+                  <Separator className="my-2" />
+
+                  {/* Change Password Section */}
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-foreground">Change Password</h3>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="current-password">Current Password</Label>
+                      <div className="relative">
+                        <Input
+                          id="current-password"
+                          type={showCurrentPassword ? "text" : "password"}
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          placeholder="Enter current password"
+                          className="bg-background/50 border-border/50 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="new-password">New Password</Label>
+                      <div className="relative">
+                        <Input
+                          id="new-password"
+                          type={showNewPassword ? "text" : "password"}
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="Enter new password"
+                          className="bg-background/50 border-border/50 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewPassword(!showNewPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="confirm-password">Confirm New Password</Label>
+                      <div className="relative">
+                        <Input
+                          id="confirm-password"
+                          type={showConfirmPassword ? "text" : "password"}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="Confirm new password"
+                          className="bg-background/50 border-border/50 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <Button onClick={handleUpdatePassword} className="bg-primary hover:bg-primary/90">
+                      Update Password
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -279,23 +391,6 @@ const Settings = () => {
                     />
                   </div>
 
-                  {/* Weekly Summary */}
-                  <div className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
-                    <div className="space-y-1">
-                      <Label htmlFor="weekly-summary" className="font-medium">Weekly Summary</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Receive a weekly digest of all scan activities
-                      </p>
-                    </div>
-                    <Switch
-                      id="weekly-summary"
-                      checked={notifications.weeklySummary}
-                      onCheckedChange={(checked) =>
-                        setNotifications({ ...notifications, weeklySummary: checked })
-                      }
-                    />
-                  </div>
-
                   {/* Scan Completed */}
                   <div className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
                     <div className="space-y-1">
@@ -330,12 +425,123 @@ const Settings = () => {
                     />
                   </div>
 
+                  {/* Team Member Scanned — only if user has teams */}
+                  {hasTeams && (
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
+                      <div className="space-y-1">
+                        <Label htmlFor="team-member-scanned" className="font-medium">Team Member Scanned</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Get notified when a team member completes a scan
+                        </p>
+                      </div>
+                      <Switch
+                        id="team-member-scanned"
+                        checked={notifications.teamMemberScanned}
+                        onCheckedChange={(checked) =>
+                          setNotifications({ ...notifications, teamMemberScanned: checked })
+                        }
+                      />
+                    </div>
+                  )}
+
                   <Button onClick={() => toast.success("Notification preferences saved")} className="bg-primary hover:bg-primary/90">
                     Save Preferences
                   </Button>
                 </CardContent>
               </Card>
             </TabsContent>
+
+            {/* Team & Permissions Tab */}
+            {hasTeams && (
+              <TabsContent value="team-permissions" className="mt-0 space-y-6">
+                <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+                  <CardHeader>
+                    <CardTitle>Your Teams</CardTitle>
+                    <CardDescription>Manage your team memberships and settings</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {userTeams.map((team) => {
+                      const isTeamAdmin = team.currentUserRole === "admin";
+                      const repoName = team.githubRepo
+                        ? team.githubRepo.replace("https://github.com/", "")
+                        : null;
+
+                      return (
+                        <div
+                          key={team.id}
+                          className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                              {isTeamAdmin ? (
+                                <Crown className="h-5 w-5 text-primary" />
+                              ) : (
+                                <Users className="h-5 w-5 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-foreground">{team.name}</span>
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.currentUserRole)}`}>
+                                  {team.currentUserRole}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span>{team.members.length} members</span>
+                                {repoName && (
+                                  <span className="flex items-center gap-1">
+                                    <Github className="h-3 w-3" />
+                                    {repoName}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="gap-2 text-muted-foreground hover:text-foreground"
+                              onClick={() => navigate("/team")}
+                            >
+                              Manage Team
+                              <ArrowRight className="h-4 w-4" />
+                            </Button>
+                            {isTeamAdmin && (
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="destructive" size="sm" className="gap-2">
+                                    <Trash2 className="h-4 w-4" />
+                                    Delete Team
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Are you sure you want to delete {team.name}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      All members will be removed and this action cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => toast.success(`${team.name} deleted`)}
+                                      className="bg-destructive hover:bg-destructive/90"
+                                    >
+                                      Delete Team
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
 
             {/* Appearance Tab */}
             <TabsContent value="appearance" className="mt-0">
@@ -370,57 +576,6 @@ const Settings = () => {
                         </button>
                       ))}
                     </div>
-                  </div>
-
-                  {/* Accent Color */}
-                  <div className="space-y-3">
-                    <Label>Accent Color</Label>
-                    <div className="flex flex-wrap gap-3">
-                      {accentColors.map((color) => (
-                        <button
-                          key={color.value}
-                          onClick={() => {
-                            setAccentColor(color.value);
-                            toast.success(`Accent color changed to ${color.label}`);
-                          }}
-                          className={`w-10 h-10 rounded-full border-2 transition-all hover:scale-110 ${
-                            accentColor === color.value ? "border-foreground ring-2 ring-offset-2 ring-offset-background" : "border-transparent"
-                          }`}
-                          style={{ backgroundColor: `hsl(${color.hsl})` }}
-                          title={color.label}
-                        />
-                      ))}
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Choose an accent color for buttons and highlights
-                    </p>
-                  </div>
-
-                  {/* UI Density */}
-                  <div className="space-y-3">
-                    <Label>UI Density</Label>
-                    <RadioGroup value={density} onValueChange={setDensity} className="flex gap-4">
-                      {[
-                        { value: "comfortable", label: "Comfortable", desc: "More spacing, easier to read" },
-                        { value: "compact", label: "Compact", desc: "Denser layout, more content visible" },
-                      ].map((option) => (
-                        <Label
-                          key={option.value}
-                          htmlFor={option.value}
-                          className={`flex-1 flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all ${
-                            density === option.value
-                              ? "border-primary bg-primary/10"
-                              : "border-border/50 hover:border-border"
-                          }`}
-                        >
-                          <RadioGroupItem value={option.value} id={option.value} className="mt-1" />
-                          <div>
-                            <p className="font-medium text-foreground">{option.label}</p>
-                            <p className="text-sm text-muted-foreground">{option.desc}</p>
-                          </div>
-                        </Label>
-                      ))}
-                    </RadioGroup>
                   </div>
 
                   <Button onClick={() => toast.success("Appearance settings saved")} className="bg-primary hover:bg-primary/90">

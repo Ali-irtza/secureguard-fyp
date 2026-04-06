@@ -1,4 +1,4 @@
-import { Shield, LayoutDashboard, Plus, FolderKanban, FileBarChart, Settings, LogOut, HelpCircle, FileText } from "lucide-react";
+import { Shield, LayoutDashboard, Plus, FolderKanban, Users, FileBarChart, Settings, LogOut, HelpCircle, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { NavLink } from "@/components/NavLink";
@@ -19,6 +19,7 @@ const mainNavItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "New Scan", url: "/new-scan", icon: Plus, isPrimary: true },
   { title: "Projects", url: "/projects", icon: FolderKanban },
+  { title: "Team", url: "/team", icon: Users },
   { title: "Scan History", url: "/scan-history", icon: FileBarChart },
   { title: "Reports", url: "/reports", icon: FileText },
 ];
