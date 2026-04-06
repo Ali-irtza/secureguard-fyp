@@ -15,8 +15,8 @@ const faqs = [
     answer: "Your code is stored in encrypted, isolated containers so you can rescan anytime without re-uploading. We use end-to-end encryption for all data transfers, and our infrastructure is SOC 2 Type II certified. Only you and your authorized team members can access your stored code.",
   },
   {
-    question: "Can I rescan my projects later?",
-    answer: "Yes! Once you upload your code, it's securely stored so you can rescan at any time. You can also schedule automatic rescans to catch new vulnerabilities as our detection models improve.",
+    question: "How does the AI-driven analysis detect vulnerabilities",
+    answer: "The FastAPI backend utilizes specialized AI models to scan your code for flaws, generating a comprehensive Vulnerability Report that categorizes risks by severity and provides suggested fixes.",
   },
 ];
 
