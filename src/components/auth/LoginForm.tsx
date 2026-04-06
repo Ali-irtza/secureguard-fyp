@@ -61,6 +61,13 @@ const LoginForm = () => {
     });
   };
 
+  const handleGoogleLogin = () => {
+    toast({
+      title: "Google OAuth",
+      description: "Connect Supabase to enable Google authentication.",
+    });
+  };
+
   return (
     <div className="space-y-6">
       <Form {...form}>
