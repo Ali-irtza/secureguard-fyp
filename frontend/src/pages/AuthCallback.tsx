@@ -17,22 +17,36 @@ const AuthCallback = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Listen for the auth state change that happens when Supabase
-    // processes the OAuth token from the URL
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (event === "SIGNED_IN" && session) {
-          // Session established — go to dashboard
-          navigate("/dashboard", { replace: true });
-        } else if (event === "SIGNED_OUT" || !session) {
-          // Something went wrong — go back to auth
-          navigate("/auth", { replace: true });
-        }
+    // Step 1: Check if Supabase already processed the token from the URL
+    // and created a session. This handles the case where the page loads
+    // after the OAuth redirect and the token is in the URL hash.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        // Session exists — go to dashboard
+        navigate("/dashboard", { replace: true });
+        return;
       }
-    );
 
-    // Cleanup listener when component unmounts
-    return () => subscription.unsubscribe();
+      // Step 2: No session yet — listen for it to be created.
+      // Supabase JS reads the token from the URL hash and fires SIGNED_IN.
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(
+        (event, session) => {
+          if (event === "SIGNED_IN" && session) {
+            navigate("/dashboard", { replace: true });
+          }
+        }
+      );
+
+      // If nothing happens after 5 seconds, something went wrong
+      const timeout = setTimeout(() => {
+        navigate("/auth", { replace: true });
+      }, 5000);
+
+      return () => {
+        subscription.unsubscribe();
+        clearTimeout(timeout);
+      };
+    });
   }, [navigate]);
 
   return (
