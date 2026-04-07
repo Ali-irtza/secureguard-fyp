@@ -76,20 +76,30 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     });
 
     // onAuthStateChange fires on: login, logout, token refresh.
-    // It also fires once on mount with the current session — we skip that
-    // by checking if we already have a profile for this user.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         const currentUser = session?.user ?? null;
         setUser(currentUser);
         if (currentUser) {
-          // Only fetch profile if it's a different user (e.g. account switch)
-          // or if profile hasn't loaded yet (e.g. first login after OAuth)
           setProfile(prev => {
-            if (prev?.id !== currentUser.id) {
-              fetchProfile(currentUser.id);
+            if (prev?.id === currentUser.id) {
+              // Same user, profile already loaded — do nothing
+              return prev;
             }
-            return prev; // keep existing profile until fetch completes
+            // Different user or fresh login — load from cache immediately
+            // so the UI shows correct data before the DB fetch completes
+            const cached = localStorage.getItem(`profile:${currentUser.id}`);
+            if (cached) {
+              try {
+                const parsed = JSON.parse(cached) as ProfileRow;
+                // Kick off a background refresh to get latest data
+                fetchProfile(currentUser.id);
+                return parsed; // show cached data instantly
+              } catch { /* ignore */ }
+            }
+            // No cache — fetch from DB (first ever login)
+            fetchProfile(currentUser.id);
+            return null;
           });
         } else {
           setProfile(null);
