@@ -40,8 +40,9 @@ app.add_middleware(
 # We register them here — this keeps main.py clean and focused.
 # As we build each feature, we uncomment the import and include the router.
 # ---------------------------------------------------------------------------
-# from app.routers import auth, scans, projects, teams, reports, alerts
-# app.include_router(auth.router,     prefix="/auth",     tags=["Auth"])
+from app.routers import auth
+app.include_router(auth.router, prefix="/auth", tags=["Auth"])
+
 # app.include_router(scans.router,    prefix="/scans",    tags=["Scans"])
 # app.include_router(projects.router, prefix="/projects", tags=["Projects"])
 # app.include_router(teams.router,    prefix="/teams",    tags=["Teams"])

@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
+import { supabase } from "@/lib/supabase";
 
 interface DashboardTopBarProps {
   hasNotifications?: boolean;
@@ -48,8 +49,8 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.clear();
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     toast.success("Logged out successfully");
     navigate("/auth");
   };
