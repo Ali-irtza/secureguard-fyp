@@ -36,6 +36,9 @@ frontend/.env.*
 # Private local documentation bundle
 Project-details/
 
+# Supabase CLI temp files
+supabase/.temp/
+
 # Backend
 backend/venv/
 backend/__pycache__/

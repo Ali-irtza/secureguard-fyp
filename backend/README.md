@@ -34,12 +34,14 @@ backend/
 │   └── services/            # Business logic, separated from routes
 │       ├── scanner.py       # Plug-in point for ML models
 │       └── report_gen.py
-├── supabase/
-│   └── migrations/          # SQL migration files (run via Supabase CLI)
 ├── .env.example             # Template for environment variables
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt
+
+supabase/                    # At project root — Supabase CLI expects it here
+└── migrations/              # SQL migration files (run via supabase db push)
+    └── 001_initial_schema.sql
 ```
 
 ## Getting Started
