@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual environment — never copy this into Docker
+# Docker installs its own packages from requirements.txt
+venv/
+.venv/
+env/
+
+# Environment files — injected at runtime, not baked into image
+.env
+
+# Dev/editor files
+.git/
+.gitignore
+*.md
+DEVLOG.md
+
+# Test files
+tests/
+pytest_cache/
+.coverage

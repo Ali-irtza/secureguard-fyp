@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# Docker Compose — SecureGuard Pro
+# ---------------------------------------------------------------------------
+# docker-compose.yml lives at the project ROOT (not inside backend/).
+# This lets us eventually add frontend and other services here too.
+#
+# Usage:
+#   docker compose up --build     ← build image and start
+#   docker compose up             ← start (no rebuild)
+#   docker compose down           ← stop and remove containers
+#   docker compose logs -f        ← follow logs
+# ---------------------------------------------------------------------------
+
+version: "3.9"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI
+  # ---------------------------------------------------------------------------
+  backend:
+    # Build from the Dockerfile inside the backend/ folder
+    build:
+      context: ./backend        # Docker build context (where Dockerfile is)
+      dockerfile: Dockerfile
+
+    # Map host port 8000 → container port 8000
+    # Format: "host_port:container_port"
+    # Access the API at http://localhost:8000
+    ports:
+      - "8000:8000"
+
+    # Load environment variables from backend/.env
+    # These override any ENV set in the Dockerfile
+    env_file:
+      - ./backend/.env
+
+    # Override the default CMD for development:
+    # --reload = auto-restart when code changes (like nodemon for Python)
+    # We mount the source code as a volume so changes reflect immediately
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+    # Mount local backend/app/ into the container
+    # Any code change on your machine instantly appears inside the container
+    # This is what makes --reload actually useful in Docker
+    volumes:
+      - ./backend/app:/app/app
+
+    # Health check — Docker will restart the container if this fails
+    # curl the /health endpoint every 30s, timeout after 10s, retry 3 times
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
