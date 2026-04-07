@@ -15,6 +15,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -26,46 +27,67 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 const LoginForm = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<"github" | "google" | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      email: "",
-      password: "",
-    },
+    defaultValues: { email: "", password: "" },
   });
 
+  // ---------------------------------------------------------------------------
+  // Email + Password Login
+  // ---------------------------------------------------------------------------
   const onSubmit = async (data: LoginFormValues) => {
     setIsLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    
-    // Mock auth - accept any valid credentials
-    localStorage.setItem("dev_authenticated", "true");
-    localStorage.setItem("dev_user_email", data.email);
-    
-    toast({
-      title: "Welcome back!",
-      description: "You've been signed in successfully.",
+    const { error } = await supabase.auth.signInWithPassword({
+      email: data.email,
+      password: data.password,
     });
-    
-    navigate("/dashboard");
+
+    if (error) {
+      toast({
+        title: "Sign in failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({ title: "Welcome back!", description: "Signed in successfully." });
+      navigate("/dashboard");
+    }
     setIsLoading(false);
   };
 
-  const handleGitHubLogin = () => {
-    toast({
-      title: "GitHub OAuth",
-      description: "Connect Supabase to enable GitHub authentication.",
+  // ---------------------------------------------------------------------------
+  // OAuth Login (GitHub / Google)
+  // ---------------------------------------------------------------------------
+  // How OAuth works:
+  // 1. We call supabase.auth.signInWithOAuth({ provider })
+  // 2. Supabase redirects the browser to GitHub/Google login page
+  // 3. User approves → GitHub/Google redirects back to our app
+  // 4. Supabase reads the token from the URL and creates a session
+  // 5. User is now logged in
+  // ---------------------------------------------------------------------------
+  const handleOAuthLogin = async (provider: "github" | "google") => {
+    setOauthLoading(provider);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        // After OAuth completes, redirect here
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
     });
-  };
 
-  const handleGoogleLogin = () => {
-    toast({
-      title: "Google OAuth",
-      description: "Connect Supabase to enable Google authentication.",
-    });
+    if (error) {
+      toast({
+        title: "OAuth failed",
+        description: error.message,
+        variant: "destructive",
+      });
+      setOauthLoading(null);
+    }
+    // If no error, browser is redirecting — no need to setOauthLoading(null)
   };
 
   return (
@@ -131,11 +153,7 @@ const LoginForm = () => {
             </Link>
           </div>
 
-          <Button
-            type="submit"
-            className="w-full glow-emerald"
-            disabled={isLoading}
-          >
+          <Button type="submit" className="w-full glow-emerald" disabled={isLoading}>
             {isLoading ? "Signing in..." : "Sign In"}
           </Button>
         </form>
@@ -151,23 +169,25 @@ const LoginForm = () => {
         </div>
       </div>
 
-      {/* GitHub Button */}
+      {/* GitHub */}
       <Button
         type="button"
         variant="outline"
         className="w-full bg-background/50 border-border/50 hover:bg-background hover:border-primary/50 transition-all"
-        onClick={handleGitHubLogin}
+        onClick={() => handleOAuthLogin("github")}
+        disabled={oauthLoading !== null}
       >
         <Github className="mr-2 h-5 w-5" />
-        Continue with GitHub
+        {oauthLoading === "github" ? "Redirecting..." : "Continue with GitHub"}
       </Button>
 
-      {/* Google Button */}
+      {/* Google */}
       <Button
         type="button"
         variant="outline"
         className="w-full bg-background/50 border-border/50 hover:bg-background hover:border-primary/50 transition-all"
-        onClick={handleGoogleLogin}
+        onClick={() => handleOAuthLogin("google")}
+        disabled={oauthLoading !== null}
       >
         <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24">
           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
@@ -175,7 +195,7 @@ const LoginForm = () => {
           <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
         </svg>
-        Continue with Google
+        {oauthLoading === "google" ? "Redirecting..." : "Continue with Google"}
       </Button>
     </div>
   );
