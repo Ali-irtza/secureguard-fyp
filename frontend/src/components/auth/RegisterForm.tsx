@@ -15,6 +15,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
 
 const registerSchema = z.object({
   fullName: z.string().min(2, "Name must be at least 2 characters"),
@@ -32,17 +33,13 @@ const RegisterForm = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<"github" | "google" | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
-    defaultValues: {
-      fullName: "",
-      email: "",
-      password: "",
-      confirmPassword: "",
-    },
+    defaultValues: { fullName: "", email: "", password: "", confirmPassword: "" },
   });
 
   const password = form.watch("password");
@@ -54,35 +51,63 @@ const RegisterForm = () => {
     { label: "Contains number", met: /\d/.test(password) },
   ];
 
+  // ---------------------------------------------------------------------------
+  // Email + Password Signup
+  // ---------------------------------------------------------------------------
+  // How it works:
+  // 1. supabase.auth.signUp creates the user in Supabase Auth
+  // 2. Supabase sends a confirmation email (if email confirm is ON in dashboard)
+  // 3. We store fullName in user_metadata — Supabase saves this alongside the user
+  // 4. Our DB trigger (from migration) auto-creates a profile row
+  // ---------------------------------------------------------------------------
   const onSubmit = async (data: RegisterFormValues) => {
     setIsLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    
-    // Mock auth - accept any valid credentials
-    localStorage.setItem("dev_authenticated", "true");
-    localStorage.setItem("dev_user_email", data.email);
-    
-    toast({
-      title: "Account created!",
-      description: "Welcome to the platform.",
+    const { error } = await supabase.auth.signUp({
+      email: data.email,
+      password: data.password,
+      options: {
+        data: {
+          full_name: data.fullName,  // stored in auth.users.raw_user_meta_data
+        },
+      },
     });
-    
-    navigate("/dashboard");
+
+    if (error) {
+      toast({
+        title: "Sign up failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Account created!",
+        description: "Check your email to confirm your account, then sign in.",
+      });
+      navigate("/auth");
+    }
     setIsLoading(false);
   };
 
-  const handleGitHubRegister = () => {
-    toast({
-      title: "GitHub OAuth",
-      description: "Connect Supabase to enable GitHub authentication.",
+  // ---------------------------------------------------------------------------
+  // OAuth Signup (same flow as login — Supabase creates account if new)
+  // ---------------------------------------------------------------------------
+  const handleOAuthLogin = async (provider: "github" | "google") => {
+    setOauthLoading(provider);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
     });
-  };
 
-  const handleGoogleRegister = () => {
-    toast({
-      title: "Google OAuth",
-      description: "Connect Supabase to enable Google authentication.",
-    });
+    if (error) {
+      toast({
+        title: "OAuth failed",
+        description: error.message,
+        variant: "destructive",
+      });
+      setOauthLoading(null);
+    }
   };
 
   return (
@@ -109,6 +134,7 @@ const RegisterForm = () => {
               </FormItem>
             )}
           />
+
           <FormField
             control={form.control}
             name="email"
@@ -159,7 +185,6 @@ const RegisterForm = () => {
             )}
           />
 
-          {/* Password strength indicator */}
           {password && (
             <div className="space-y-2 p-3 rounded-lg bg-background/30 border border-border/30">
               <p className="text-xs text-muted-foreground font-medium">Password requirements:</p>
@@ -209,11 +234,7 @@ const RegisterForm = () => {
             )}
           />
 
-          <Button
-            type="submit"
-            className="w-full glow-emerald"
-            disabled={isLoading}
-          >
+          <Button type="submit" className="w-full glow-emerald" disabled={isLoading}>
             {isLoading ? "Creating account..." : "Create Account"}
           </Button>
         </form>
@@ -229,23 +250,25 @@ const RegisterForm = () => {
         </div>
       </div>
 
-      {/* GitHub Button */}
+      {/* GitHub */}
       <Button
         type="button"
         variant="outline"
         className="w-full bg-background/50 border-border/50 hover:bg-background hover:border-primary/50 transition-all"
-        onClick={handleGitHubRegister}
+        onClick={() => handleOAuthLogin("github")}
+        disabled={oauthLoading !== null}
       >
         <Github className="mr-2 h-5 w-5" />
-        Continue with GitHub
+        {oauthLoading === "github" ? "Redirecting..." : "Continue with GitHub"}
       </Button>
 
-      {/* Google Button */}
+      {/* Google */}
       <Button
         type="button"
         variant="outline"
         className="w-full bg-background/50 border-border/50 hover:bg-background hover:border-primary/50 transition-all"
-        onClick={handleGoogleRegister}
+        onClick={() => handleOAuthLogin("google")}
+        disabled={oauthLoading !== null}
       >
         <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24">
           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
@@ -253,7 +276,7 @@ const RegisterForm = () => {
           <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
         </svg>
-        Continue with Google
+        {oauthLoading === "google" ? "Redirecting..." : "Continue with Google"}
       </Button>
     </div>
   );
