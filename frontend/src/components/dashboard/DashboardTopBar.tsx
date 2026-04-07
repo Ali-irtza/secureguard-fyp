@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 import { supabase } from "@/lib/supabase";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 interface DashboardTopBarProps {
   hasNotifications?: boolean;
@@ -24,6 +25,7 @@ interface DashboardTopBarProps {
 const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
+  const { displayName, email, avatarUrl, initials } = useCurrentUser();
 
   // Determine primary role (highest privilege across all teams)
   const primaryRole = useMemo(() => {
@@ -117,12 +119,12 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-3 p-1.5 rounded-xl hover:bg-muted/50 transition-colors">
               <Avatar className="h-8 w-8 border border-border/50">
-                <AvatarImage src="" />
-                <AvatarFallback className="bg-primary/20 text-primary text-sm font-medium">JD</AvatarFallback>
+                <AvatarImage src={avatarUrl} />
+                <AvatarFallback className="bg-primary/20 text-primary text-sm font-medium">{initials}</AvatarFallback>
               </Avatar>
               <div className="hidden md:flex flex-col items-start">
-                <span className="text-sm font-medium text-foreground">John Doe</span>
-                <span className="text-xs text-muted-foreground">Admin</span>
+                <span className="text-sm font-medium text-foreground">{displayName}</span>
+                <span className="text-xs text-muted-foreground">{email}</span>
               </div>
             </button>
           </DropdownMenuTrigger>
@@ -130,11 +132,12 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
             {/* Profile Header */}
             <div className="px-3 py-3 flex items-center gap-3">
               <Avatar className="h-10 w-10">
-                <AvatarFallback className="bg-primary/20 text-primary text-sm font-semibold">JD</AvatarFallback>
+                <AvatarImage src={avatarUrl} />
+                <AvatarFallback className="bg-primary/20 text-primary text-sm font-semibold">{initials}</AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-foreground truncate">John Doe</p>
-                <p className="text-xs text-muted-foreground truncate">john.doe@secureguard.io</p>
+                <p className="text-sm font-semibold text-foreground truncate">{displayName}</p>
+                <p className="text-xs text-muted-foreground truncate">{email}</p>
                 {primaryRole && (
                   <Badge variant="outline" className={`text-[10px] px-1.5 py-0 mt-1 ${getRoleBadgeClasses(primaryRole)}`}>
                     {primaryRole}

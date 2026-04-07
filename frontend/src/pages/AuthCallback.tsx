@@ -6,38 +6,78 @@ import { Shield } from "lucide-react";
 // ---------------------------------------------------------------------------
 // AuthCallback Page
 // ---------------------------------------------------------------------------
-// After OAuth (Google/GitHub), Supabase redirects the browser to this URL:
-//   http://localhost:5173/auth/callback
+// After OAuth (Google/GitHub), Supabase redirects the browser here:
+//   http://localhost:8080/auth/callback
 //
-// The URL contains a special token in the hash fragment (#access_token=...).
-// Supabase JS automatically reads this token and creates a session.
-// We just need to wait for that to happen, then redirect to the dashboard.
+// The URL contains a token in the hash (#access_token=...).
+// Supabase JS reads it automatically and creates a session.
+//
+// After the session is ready, we ensure the user has a profiles row.
+// The DB trigger handles this on first signup, but we add a client-side
+// upsert as a safety net (e.g. if the trigger ever fails silently).
+//
+// ON CONFLICT DO NOTHING logic is mirrored here:
+//   - New user  → profile row is created with Google/GitHub data
+//   - Returning user → upsert finds existing row, does nothing (preserves edits)
 // ---------------------------------------------------------------------------
 const AuthCallback = () => {
   const navigate = useNavigate();
 
+  const ensureProfileExists = async (userId: string, userMetadata: Record<string, string>, appMetadata: Record<string, string>) => {
+    // Check if profile already exists
+    const { data: existing } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", userId)
+      .single();
+
+    // Profile exists — do nothing, preserve the user's edits
+    if (existing) return;
+
+    // Profile doesn't exist yet (trigger may have failed) — create it now
+    // This only runs for brand new users
+    const email = (await supabase.auth.getUser()).data.user?.email || "";
+    await supabase.from("profiles").insert({
+      id: userId,
+      full_name:
+        userMetadata?.full_name ||
+        userMetadata?.name ||
+        email.split("@")[0],
+      avatar_url:
+        userMetadata?.avatar_url ||
+        userMetadata?.picture ||
+        null,
+      provider: appMetadata?.provider || "email",
+    });
+  };
+
   useEffect(() => {
-    // Step 1: Check if Supabase already processed the token from the URL
-    // and created a session. This handles the case where the page loads
-    // after the OAuth redirect and the token is in the URL hash.
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session) {
-        // Session exists — go to dashboard
+        await ensureProfileExists(
+          session.user.id,
+          session.user.user_metadata as Record<string, string>,
+          session.user.app_metadata as Record<string, string>
+        );
         navigate("/dashboard", { replace: true });
         return;
       }
 
-      // Step 2: No session yet — listen for it to be created.
-      // Supabase JS reads the token from the URL hash and fires SIGNED_IN.
+      // No session yet — wait for Supabase to process the token from the URL hash
       const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        (event, session) => {
+        async (event, session) => {
           if (event === "SIGNED_IN" && session) {
+            await ensureProfileExists(
+              session.user.id,
+              session.user.user_metadata as Record<string, string>,
+              session.user.app_metadata as Record<string, string>
+            );
             navigate("/dashboard", { replace: true });
           }
         }
       );
 
-      // If nothing happens after 5 seconds, something went wrong
+      // Safety timeout — if nothing happens in 5s, go back to login
       const timeout = setTimeout(() => {
         navigate("/auth", { replace: true });
       }, 5000);
