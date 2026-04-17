@@ -748,8 +748,9 @@ const NewScan = () => {
             {/* Left Panel - Collapsible */}
             <div 
               className={cn(
-                "w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col transition-all duration-300",
-                showPanel ? "translate-x-0" : "-translate-x-full absolute -left-[280px]"
+                "w-[260px] sm:w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col transition-all duration-300 z-20",
+                showPanel ? "translate-x-0" : "-translate-x-full absolute -left-[280px]",
+                showPanel && "absolute sm:relative inset-y-0 left-0 sm:inset-auto sm:left-auto"
               )}
             >
               <div className="flex-1 overflow-y-auto">
