@@ -147,7 +147,7 @@ const Reports = () => {
         {/* Filter Row */}
         <div className="flex items-center gap-3 flex-wrap">
           <Select value={reportTypeFilter} onValueChange={(v) => setReportTypeFilter(v as "all" | "personal" | "team")}>
-            <SelectTrigger className="w-[160px] bg-card/50 border-border/50">
+            <SelectTrigger className="w-full sm:w-[160px] bg-card/50 border-border/50">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -159,7 +159,7 @@ const Reports = () => {
 
           {reportTypeFilter === "team" && hasTeams && (
             <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
-              <SelectTrigger className="w-[220px] bg-card/50 border-border/50">
+              <SelectTrigger className="w-full sm:w-[220px] bg-card/50 border-border/50">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -209,6 +209,7 @@ const Reports = () => {
                 </div>
               )
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -279,6 +280,7 @@ const Reports = () => {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>

@@ -55,13 +55,13 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   };
 
   return (
-    <header className="h-16 border-b border-border/50 bg-card/30 backdrop-blur-xl flex items-center justify-between px-4 lg:px-6">
-      <div className="flex items-center gap-4">
+    <header className="h-16 border-b border-border/50 bg-card/30 backdrop-blur-xl flex items-center justify-between px-3 sm:px-4 lg:px-6">
+      <div className="flex items-center gap-2 sm:gap-4">
         <SidebarTrigger />
         
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         {/* Notification Bell */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
