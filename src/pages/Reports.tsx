@@ -168,12 +168,12 @@ const Reports = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-center">Name</TableHead>
-                    <TableHead className="text-center">Type</TableHead>
-                    <TableHead className="text-center">Date</TableHead>
-                    <TableHead className="text-center">Format</TableHead>
-                    <TableHead className="text-center">Status</TableHead>
-                    <TableHead className="text-center">Actions</TableHead>
+                    <TableHead className="text-justify">Name</TableHead>
+                    <TableHead className="text-justify">Type</TableHead>
+                    <TableHead className="text-justify">Date</TableHead>
+                    <TableHead className="text-justify">Format</TableHead>
+                    <TableHead className="text-justify">Status</TableHead>
+                    <TableHead className="text-justify">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
