@@ -395,6 +395,7 @@ const Team = () => {
                 })}
               </TableBody>
             </Table>
+            </div>
           </CardContent>
         </Card>
 
