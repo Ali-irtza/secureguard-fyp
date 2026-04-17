@@ -206,7 +206,7 @@ const Reports = () => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex justify-end gap-1">
+                        <div className="flex justify-center gap-1">
                           <Button variant="ghost" size="icon" onClick={() => handleDownload(report.name)} className="h-8 w-8">
                             <Download className="h-4 w-4" />
                           </Button>
