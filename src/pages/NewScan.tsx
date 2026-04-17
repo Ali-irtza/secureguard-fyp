@@ -231,8 +231,8 @@ const NewScan = () => {
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
 
-  // Panel visibility state
-  const [showPanel, setShowPanel] = useState(true);
+  // Panel visibility state — collapsed on mobile by default
+  const [showPanel, setShowPanel] = useState(() => typeof window !== "undefined" ? window.innerWidth >= 640 : true);
 
   // Initialize default team selection
   useEffect(() => {
@@ -690,7 +690,7 @@ const NewScan = () => {
               </Button>
               <div className="flex items-center gap-2 min-w-0">
                 <Shield className="h-4 w-4 text-primary shrink-0" />
-                <span className="font-medium text-sm truncate max-w-[200px]">
+                <span className="font-medium text-sm truncate max-w-[120px] sm:max-w-[200px]">
                   {displayName}
                 </span>
                 {isTeamMode && (
@@ -802,7 +802,7 @@ const NewScan = () => {
                 !showPanel && "ml-0"
               )}
             >
-              <div className="flex-1 p-4 lg:p-6 overflow-hidden flex justify-center">
+              <div className="flex-1 p-2 sm:p-4 lg:p-6 overflow-hidden flex justify-center">
                 <div className="w-full max-w-4xl h-full">
                   <CodeViewer
                     lines={codeLines}
