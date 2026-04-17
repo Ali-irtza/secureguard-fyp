@@ -1,5 +1,16 @@
 import { useState, useMemo } from "react";
-import { FileText, Calendar, Download, Trash2, Share2, Plus, FileBarChart, CheckCircle2, Users, Crown } from "lucide-react";
+import {
+  FileText,
+  Calendar,
+  Download,
+  Trash2,
+  Share2,
+  Plus,
+  FileBarChart,
+  CheckCircle2,
+  Users,
+  Crown,
+} from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,19 +34,53 @@ interface Report {
 }
 
 const recentReports: Report[] = [
-  { id: 1, name: "Weekly Security Summary", type: "Team Summary Report", date: "Dec 9, 2024", status: "completed", format: "PDF", scanType: "team", teamId: "team-1", teamName: "SecureGuard Team" },
-  { id: 2, name: "Project Alpha Audit", type: "Full Scan Report", date: "Dec 8, 2024", status: "completed", format: "PDF", scanType: "personal" },
-  { id: 3, name: "Dependencies Analysis", type: "Team Summary Report", date: "Dec 7, 2024", status: "completed", format: "CSV", scanType: "team", teamId: "team-2", teamName: "Ali's Project" },
-  { id: 4, name: "Monthly Compliance", type: "Full Scan Report", date: "Dec 1, 2024", status: "completed", format: "PDF", scanType: "personal" },
+  {
+    id: 1,
+    name: "Weekly Security Summary",
+    type: "Team Summary Report",
+    date: "Dec 9, 2024",
+    status: "completed",
+    format: "PDF",
+    scanType: "team",
+    teamId: "team-1",
+    teamName: "SecureGuard Team",
+  },
+  {
+    id: 2,
+    name: "Project Alpha Audit",
+    type: "Full Scan Report",
+    date: "Dec 8, 2024",
+    status: "completed",
+    format: "PDF",
+    scanType: "personal",
+  },
+  {
+    id: 3,
+    name: "Dependencies Analysis",
+    type: "Team Summary Report",
+    date: "Dec 7, 2024",
+    status: "completed",
+    format: "CSV",
+    scanType: "team",
+    teamId: "team-2",
+    teamName: "Ali's Project",
+  },
+  {
+    id: 4,
+    name: "Monthly Compliance",
+    type: "Full Scan Report",
+    date: "Dec 1, 2024",
+    status: "completed",
+    format: "PDF",
+    scanType: "personal",
+  },
 ];
 
 const Reports = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [reportTypeFilter, setReportTypeFilter] = useState<"all" | "personal" | "team">("all");
 
-  const userTeams = mockTeams.filter((t) =>
-    t.members.some((m) => m.id === CURRENT_USER_ID)
-  );
+  const userTeams = mockTeams.filter((t) => t.members.some((m) => m.id === CURRENT_USER_ID));
   const hasTeams = userTeams.length > 0;
 
   const defaultTeamId = userTeams.find((t) => t.currentUserRole === "admin")?.id || userTeams[0]?.id || "";
@@ -44,7 +89,8 @@ const Reports = () => {
 
   const filteredReports = useMemo(() => {
     if (reportTypeFilter === "personal") return recentReports.filter((r) => r.scanType === "personal");
-    if (reportTypeFilter === "team") return recentReports.filter((r) => r.scanType === "team" && r.teamId === selectedTeamId);
+    if (reportTypeFilter === "team")
+      return recentReports.filter((r) => r.scanType === "team" && r.teamId === selectedTeamId);
     return recentReports;
   }, [reportTypeFilter, selectedTeamId]);
 
@@ -91,9 +137,7 @@ const Reports = () => {
                 <div>
                   <p className="text-2xl font-bold text-foreground">{stat.value}</p>
                   <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  {isTeamFilter && (
-                    <p className="text-[10px] text-muted-foreground">Team</p>
-                  )}
+                  {isTeamFilter && <p className="text-[10px] text-muted-foreground">Team</p>}
                 </div>
               </CardContent>
             </Card>
@@ -173,7 +217,7 @@ const Reports = () => {
                     <TableHead className="text-justify">Date</TableHead>
                     <TableHead className="text-justify">Format</TableHead>
                     <TableHead className="text-justify">Status</TableHead>
-                    <TableHead className="text-justify">Actions</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -183,9 +227,7 @@ const Reports = () => {
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{report.name}</span>
                           {report.scanType === "team" && (
-                            <Badge className="bg-primary/15 text-primary border-0 text-[10px] px-1.5 py-0">
-                              Team
-                            </Badge>
+                            <Badge className="bg-primary/15 text-primary border-0 text-[10px] px-1.5 py-0">Team</Badge>
                           )}
                         </div>
                         {report.scanType === "team" && report.teamName && (
@@ -207,13 +249,28 @@ const Reports = () => {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-center gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => handleDownload(report.name)} className="h-8 w-8">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDownload(report.name)}
+                            className="h-8 w-8"
+                          >
                             <Download className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleShare(report.name)} className="h-8 w-8">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleShare(report.name)}
+                            className="h-8 w-8"
+                          >
                             <Share2 className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleDelete(report.name)} className="h-8 w-8 text-destructive hover:text-destructive">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(report.name)}
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
