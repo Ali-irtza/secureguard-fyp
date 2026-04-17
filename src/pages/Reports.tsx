@@ -168,19 +168,19 @@ const Reports = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Format</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead className="text-center">Name</TableHead>
+                    <TableHead className="text-center">Type</TableHead>
+                    <TableHead className="text-center">Date</TableHead>
+                    <TableHead className="text-center">Format</TableHead>
+                    <TableHead className="text-center">Status</TableHead>
                     <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredReports.map((report) => (
                     <TableRow key={report.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
+                      <TableCell className="text-center">
+                        <div className="flex items-center justify-center gap-2">
                           <span className="font-medium">{report.name}</span>
                           {report.scanType === "team" && (
                             <Badge className="bg-primary/15 text-primary border-0 text-[10px] px-1.5 py-0">
@@ -192,15 +192,15 @@ const Reports = () => {
                           <p className="text-xs text-muted-foreground mt-0.5">{report.teamName}</p>
                         )}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{report.type}</TableCell>
-                      <TableCell className="text-muted-foreground">{report.date}</TableCell>
-                      <TableCell>
+                      <TableCell className="text-center text-muted-foreground">{report.type}</TableCell>
+                      <TableCell className="text-center text-muted-foreground">{report.date}</TableCell>
+                      <TableCell className="text-center">
                         <Badge variant="outline" className="font-mono text-xs">
                           {report.format}
                         </Badge>
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2 text-primary">
+                      <TableCell className="text-center">
+                        <div className="flex items-center justify-center gap-2 text-primary">
                           <CheckCircle2 className="h-4 w-4" />
                           <span className="text-sm capitalize">{report.status}</span>
                         </div>
