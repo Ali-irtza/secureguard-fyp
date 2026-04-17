@@ -26,7 +26,7 @@ const personalProjects = [
 ];
 
 const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeamId }: GenerateReportDialogProps) => {
-  const [reportType, setReportType] = useState("");
+  const [reportType, setReportType] = useState("full");
   const [selectedProject, setSelectedProject] = useState("");
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
     from: undefined,
@@ -53,7 +53,7 @@ const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeam
   const handleGenerate = () => {
     if (!canGenerate) return;
     toast.success("Report generation started. You'll be notified when it's ready.");
-    setReportType("");
+    setReportType("full");
     setSelectedProject("");
     onOpenChange(false);
   };
@@ -73,31 +73,31 @@ const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeam
 
         <div className="flex-1 overflow-y-auto pr-2 min-h-0">
           <div className="space-y-6 py-4">
-            {/* Report Type */}
-            <div className="space-y-2">
-              <Label>Report Type</Label>
-              <Select value={reportType} onValueChange={setReportType}>
-                <SelectTrigger className="bg-background/50">
-                  <SelectValue placeholder="Select report type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="full">
-                    <div>
-                      <span>Full Scan Report</span>
-                      <p className="text-xs text-muted-foreground">Complete vulnerability details for selected project</p>
-                    </div>
-                  </SelectItem>
-                  {hasTeams && isAdmin && (
+            {/* Report Type — only show selector when multiple options are available */}
+            {hasTeams && isAdmin && (
+              <div className="space-y-2">
+                <Label>Report Type</Label>
+                <Select value={reportType} onValueChange={setReportType}>
+                  <SelectTrigger className="bg-background/50">
+                    <SelectValue placeholder="Select report type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full">
+                      <div>
+                        <span>Full Scan Report</span>
+                        <p className="text-xs text-muted-foreground">Complete vulnerability details for selected project</p>
+                      </div>
+                    </SelectItem>
                     <SelectItem value="team-summary">
                       <div>
                         <span>Team Summary Report</span>
                         <p className="text-xs text-muted-foreground">High level overview of all team members' scan results</p>
                       </div>
                     </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Project */}
             <div className="space-y-2">
