@@ -803,6 +803,7 @@ const ScanHistory = () => {
                   )}
                 </TableBody>
               </Table>
+              </div>
             </div>
 
             {/* Pagination */}
