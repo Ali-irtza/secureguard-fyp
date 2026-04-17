@@ -183,12 +183,6 @@ const ScanHistory = () => {
     navigate(`/reports/${scan.id}`);
   };
 
-  const handleRowClick = (scan: ScanRecord) => {
-    if (scan.status === "completed") {
-      navigate(`/reports/${scan.id}`);
-    }
-  };
-
   const handleViewFailureDetails = (e: React.MouseEvent, scan: ScanRecord) => {
     e.stopPropagation();
     setSelectedFailedScan(scan);
