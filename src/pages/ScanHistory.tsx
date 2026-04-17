@@ -779,8 +779,8 @@ const ScanHistory = () => {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-1">
                             {scan.status === "completed" && (
                               <Button
                                 variant="ghost"
