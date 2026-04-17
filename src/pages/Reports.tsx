@@ -217,7 +217,7 @@ const Reports = () => {
                     <TableHead className="text-justify">Date</TableHead>
                     <TableHead className="text-justify">Format</TableHead>
                     <TableHead className="text-justify">Status</TableHead>
-                    <TableHead className="text-center">Actions</TableHead>
+                    <TableHead className="!text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
