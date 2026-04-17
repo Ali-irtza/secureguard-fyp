@@ -698,18 +698,17 @@ const ScanHistory = () => {
                     paginatedScans.map((scan) => (
                       <TableRow
                         key={scan.id}
-                        onClick={() => handleRowClick(scan)}
                         className={`transition-colors ${
                           scan.status === "completed"
-                            ? "cursor-pointer hover:bg-muted/50"
+                            ? "hover:bg-muted/50"
                             : "opacity-75"
                         }`}
                       >
-                        <TableCell className="text-center">
-                          <div className="flex items-center justify-center gap-2">
+                        <TableCell>
+                          <div className="flex items-center gap-2">
                             <FolderKanban className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                             <div>
-                              <div className="flex items-center justify-center gap-2">
+                              <div className="flex items-center gap-2">
                                 <span className="font-medium">{scan.projectName}</span>
                                 {scan.type === "team" && (
                                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-primary/15 text-primary border-primary/30">
@@ -725,18 +724,18 @@ const ScanHistory = () => {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="text-center text-muted-foreground">
+                        <TableCell className="text-muted-foreground">
                           {formatDate(scan.date)}
                         </TableCell>
-                        <TableCell className="text-center">
-                          <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
                             <Clock className="h-3.5 w-3.5" />
                             {formatDuration(scan.duration)}
                           </div>
                         </TableCell>
-                        <TableCell className="text-center">
+                        <TableCell>
                           {scan.status === "completed" ? (
-                            <div className="flex items-center justify-center gap-1.5">
+                            <div className="flex items-center gap-1.5">
                               <span className="font-medium">{getTotalVulnerabilities(scan.vulnerabilities)}</span>
                               <span className="text-muted-foreground text-sm">total</span>
                               {scan.vulnerabilities.critical > 0 && (
@@ -754,8 +753,8 @@ const ScanHistory = () => {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-center">
-                          <div className="flex items-center justify-center gap-2">
+                        <TableCell>
+                          <div className="flex items-center gap-2">
                             <StatusBadge status={scan.status} />
                             {scan.status === "failed" && scan.errorMessage && (
                               <TooltipProvider>

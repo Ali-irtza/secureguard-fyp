@@ -23,10 +23,10 @@ interface Report {
 }
 
 const recentReports: Report[] = [
-  { id: 1, name: "Weekly Security Summary", type: "Executive Summary", date: "Dec 9, 2024", status: "completed", format: "PDF", scanType: "team", teamId: "team-1", teamName: "SecureGuard Team" },
-  { id: 2, name: "Project Alpha Audit", type: "Full Audit", date: "Dec 8, 2024", status: "completed", format: "PDF", scanType: "personal" },
-  { id: 3, name: "Dependencies Analysis", type: "Vulnerability Trends", date: "Dec 7, 2024", status: "completed", format: "CSV", scanType: "team", teamId: "team-2", teamName: "Ali's Project" },
-  { id: 4, name: "Monthly Compliance", type: "Compliance Report", date: "Dec 1, 2024", status: "completed", format: "PDF", scanType: "personal" },
+  { id: 1, name: "Weekly Security Summary", type: "Team Summary Report", date: "Dec 9, 2024", status: "completed", format: "PDF", scanType: "team", teamId: "team-1", teamName: "SecureGuard Team" },
+  { id: 2, name: "Project Alpha Audit", type: "Full Scan Report", date: "Dec 8, 2024", status: "completed", format: "PDF", scanType: "personal" },
+  { id: 3, name: "Dependencies Analysis", type: "Team Summary Report", date: "Dec 7, 2024", status: "completed", format: "CSV", scanType: "team", teamId: "team-2", teamName: "Ali's Project" },
+  { id: 4, name: "Monthly Compliance", type: "Full Scan Report", date: "Dec 1, 2024", status: "completed", format: "PDF", scanType: "personal" },
 ];
 
 const Reports = () => {
@@ -179,8 +179,8 @@ const Reports = () => {
                 <TableBody>
                   {filteredReports.map((report) => (
                     <TableRow key={report.id}>
-                      <TableCell className="text-center">
-                        <div className="flex items-center justify-center gap-2">
+                      <TableCell>
+                        <div className="flex items-center gap-2">
                           <span className="font-medium">{report.name}</span>
                           {report.scanType === "team" && (
                             <Badge className="bg-primary/15 text-primary border-0 text-[10px] px-1.5 py-0">
@@ -192,15 +192,15 @@ const Reports = () => {
                           <p className="text-xs text-muted-foreground mt-0.5">{report.teamName}</p>
                         )}
                       </TableCell>
-                      <TableCell className="text-center text-muted-foreground">{report.type}</TableCell>
-                      <TableCell className="text-center text-muted-foreground">{report.date}</TableCell>
-                      <TableCell className="text-center">
+                      <TableCell className="text-muted-foreground">{report.type}</TableCell>
+                      <TableCell className="text-muted-foreground">{report.date}</TableCell>
+                      <TableCell>
                         <Badge variant="outline" className="font-mono text-xs">
                           {report.format}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex items-center justify-center gap-2 text-primary">
+                      <TableCell>
+                        <div className="flex items-center gap-2 text-primary">
                           <CheckCircle2 className="h-4 w-4" />
                           <span className="text-sm capitalize">{report.status}</span>
                         </div>
