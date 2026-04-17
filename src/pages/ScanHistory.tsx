@@ -624,6 +624,7 @@ const ScanHistory = () => {
           </CardHeader>
           <CardContent>
             <div className="rounded-lg border border-border/50 overflow-hidden">
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/30 hover:bg-muted/30">
