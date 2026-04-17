@@ -272,10 +272,10 @@ const Team = () => {
             <Table>
               <TableHeader>
                 <TableRow className="border-border/50">
-                  <TableHead className="text-center">Member</TableHead>
-                  <TableHead className="text-center">Role</TableHead>
-                  <TableHead className="text-center">Assigned Branch</TableHead>
-                  <TableHead className="text-center">Last Scan</TableHead>
+                  <TableHead>Member</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Assigned Branch</TableHead>
+                  <TableHead>Last Scan</TableHead>
                   {isAdmin && <TableHead className="w-16 text-center">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
