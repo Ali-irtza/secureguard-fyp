@@ -7,7 +7,7 @@ interface RadialProgressProps {
   label?: string;
 }
 
-const RadialProgress = ({ value, size = 64, strokeWidth = 6, label }: RadialProgressProps) => {
+const RadialProgress = ({ value, size = 48, strokeWidth = 5, label }: RadialProgressProps) => {
   const [animatedValue, setAnimatedValue] = useState(0);
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
