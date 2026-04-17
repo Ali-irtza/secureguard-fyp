@@ -173,7 +173,7 @@ const Reports = () => {
                     <TableHead>Date</TableHead>
                     <TableHead>Format</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
