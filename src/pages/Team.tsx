@@ -152,10 +152,10 @@ const Team = () => {
     <DashboardLayout>
       <div className="space-y-6">
         {/* Team Switcher Dropdown + Create Team Button */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {userTeams.length > 1 ? (
             <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
-              <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
+              <SelectTrigger className="w-full sm:w-[300px] h-10 bg-card/50 border-border/50">
                 <SelectValue placeholder="Select a team" />
               </SelectTrigger>
               <SelectContent>
@@ -175,7 +175,7 @@ const Team = () => {
           ) : (
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground">{selectedTeam?.name}</h1>
           )}
-          <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+          <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2 w-full sm:w-auto">
             <Plus className="h-4 w-4" />
             Create Team
           </Button>
@@ -238,12 +238,12 @@ const Team = () => {
 
         {/* Single team — header with actions */}
         {userTeams.length === 1 && isAdmin && (
-          <div className="flex items-center justify-end gap-3">
-            <Button variant="outline" onClick={() => setConnectGithubOpen(true)} className="gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3">
+            <Button variant="outline" onClick={() => setConnectGithubOpen(true)} className="gap-2 w-full sm:w-auto">
               <Github className="h-4 w-4" />
               Connect GitHub Repo
             </Button>
-            <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+            <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2 w-full sm:w-auto">
               <UserPlus className="h-4 w-4" />
               Invite Member
             </Button>
@@ -269,6 +269,7 @@ const Team = () => {
             </div>
           </CardHeader>
           <CardContent>
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow className="border-border/50">
@@ -394,6 +395,7 @@ const Team = () => {
                 })}
               </TableBody>
             </Table>
+            </div>
           </CardContent>
         </Card>
 

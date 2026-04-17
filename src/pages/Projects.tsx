@@ -503,6 +503,7 @@ const Projects = () => {
 
         {/* Table */}
         <div className="rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm overflow-hidden">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="border-border/50 hover:bg-transparent">
@@ -690,6 +691,7 @@ const Projects = () => {
               )}
             </TableBody>
           </Table>
+          </div>
         </div>
       </div>
 

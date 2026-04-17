@@ -52,7 +52,7 @@ const Notifications = () => {
     <DashboardLayout>
       <div className="space-y-6">
         {/* Page Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground flex items-center gap-3">
               <Bell className="h-8 w-8 text-primary" />
@@ -62,7 +62,7 @@ const Notifications = () => {
               Stay updated on your security scans and alerts
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button
               variant={filter === "all" ? "default" : "outline"}
               size="sm"

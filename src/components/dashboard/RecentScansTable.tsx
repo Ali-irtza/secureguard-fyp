@@ -65,6 +65,7 @@ const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
       <div className="p-6 border-b border-border/50">
         <h3 className="text-lg font-semibold text-foreground">Recent Scans</h3>
       </div>
+      <div className="overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow className="border-border/50 hover:bg-transparent">
@@ -126,6 +127,7 @@ const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
           ))}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 };

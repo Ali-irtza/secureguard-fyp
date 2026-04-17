@@ -231,8 +231,8 @@ const NewScan = () => {
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
 
-  // Panel visibility state
-  const [showPanel, setShowPanel] = useState(true);
+  // Panel visibility state — collapsed on mobile by default
+  const [showPanel, setShowPanel] = useState(() => typeof window !== "undefined" ? window.innerWidth >= 640 : true);
 
   // Initialize default team selection
   useEffect(() => {
@@ -690,7 +690,7 @@ const NewScan = () => {
               </Button>
               <div className="flex items-center gap-2 min-w-0">
                 <Shield className="h-4 w-4 text-primary shrink-0" />
-                <span className="font-medium text-sm truncate max-w-[200px]">
+                <span className="font-medium text-sm truncate max-w-[120px] sm:max-w-[200px]">
                   {displayName}
                 </span>
                 {isTeamMode && (
@@ -748,8 +748,9 @@ const NewScan = () => {
             {/* Left Panel - Collapsible */}
             <div 
               className={cn(
-                "w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col transition-all duration-300",
-                showPanel ? "translate-x-0" : "-translate-x-full absolute -left-[280px]"
+                "w-[260px] sm:w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col transition-all duration-300 z-20",
+                showPanel ? "translate-x-0" : "-translate-x-full absolute -left-[280px]",
+                showPanel && "absolute sm:relative inset-y-0 left-0 sm:inset-auto sm:left-auto"
               )}
             >
               <div className="flex-1 overflow-y-auto">
@@ -801,7 +802,7 @@ const NewScan = () => {
                 !showPanel && "ml-0"
               )}
             >
-              <div className="flex-1 p-4 lg:p-6 overflow-hidden flex justify-center">
+              <div className="flex-1 p-2 sm:p-4 lg:p-6 overflow-hidden flex justify-center">
                 <div className="w-full max-w-4xl h-full">
                   <CodeViewer
                     lines={codeLines}
