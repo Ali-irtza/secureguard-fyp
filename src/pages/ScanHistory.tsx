@@ -634,51 +634,51 @@ const ScanHistory = () => {
                 <TableHeader>
                   <TableRow className="bg-muted/30 hover:bg-muted/30">
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("projectName")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Project Name
                         <SortIcon columnKey="projectName" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("date")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Date
                         <SortIcon columnKey="date" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("duration")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Duration
                         <SortIcon columnKey="duration" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("vulnerabilities")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Vulnerabilities
                         <SortIcon columnKey="vulnerabilities" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("status")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Status
                         <SortIcon columnKey="status" />
                       </span>
                     </TableHead>
-                    <TableHead className="font-semibold text-right">Actions</TableHead>
+                    <TableHead className="font-semibold text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
