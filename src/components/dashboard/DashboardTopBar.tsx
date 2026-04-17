@@ -59,18 +59,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
       <div className="flex items-center gap-4">
         <SidebarTrigger />
         
-        {/* Global Search */}
-        <div className="relative hidden sm:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="Search scans, reports, vulnerabilities..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearch}
-            className="w-64 lg:w-96 pl-10 bg-muted/30 border-border/50 focus:border-primary/50 focus:ring-primary/20"
-          />
-        </div>
       </div>
 
       <div className="flex items-center gap-4">
