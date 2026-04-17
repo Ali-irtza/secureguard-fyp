@@ -634,51 +634,51 @@ const ScanHistory = () => {
                 <TableHeader>
                   <TableRow className="bg-muted/30 hover:bg-muted/30">
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("projectName")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Project Name
                         <SortIcon columnKey="projectName" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("date")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Date
                         <SortIcon columnKey="date" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("duration")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Duration
                         <SortIcon columnKey="duration" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("vulnerabilities")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Vulnerabilities
                         <SortIcon columnKey="vulnerabilities" />
                       </span>
                     </TableHead>
                     <TableHead 
-                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors"
+                      className="font-semibold cursor-pointer select-none hover:bg-muted/50 transition-colors text-center"
                       onClick={() => handleSort("status")}
                     >
-                      <span className="flex items-center">
+                      <span className="flex items-center justify-center">
                         Status
                         <SortIcon columnKey="status" />
                       </span>
                     </TableHead>
-                    <TableHead className="font-semibold text-right">Actions</TableHead>
+                    <TableHead className="font-semibold text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -705,11 +705,11 @@ const ScanHistory = () => {
                             : "opacity-75"
                         }`}
                       >
-                        <TableCell>
-                          <div className="flex items-center gap-2">
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-2">
                             <FolderKanban className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center justify-center gap-2">
                                 <span className="font-medium">{scan.projectName}</span>
                                 {scan.type === "team" && (
                                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-primary/15 text-primary border-primary/30">
@@ -725,18 +725,18 @@ const ScanHistory = () => {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
+                        <TableCell className="text-center text-muted-foreground">
                           {formatDate(scan.date)}
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
                             <Clock className="h-3.5 w-3.5" />
                             {formatDuration(scan.duration)}
                           </div>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           {scan.status === "completed" ? (
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center justify-center gap-1.5">
                               <span className="font-medium">{getTotalVulnerabilities(scan.vulnerabilities)}</span>
                               <span className="text-muted-foreground text-sm">total</span>
                               {scan.vulnerabilities.critical > 0 && (
@@ -754,8 +754,8 @@ const ScanHistory = () => {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-2">
                             <StatusBadge status={scan.status} />
                             {scan.status === "failed" && scan.errorMessage && (
                               <TooltipProvider>
@@ -779,8 +779,8 @@ const ScanHistory = () => {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-1">
                             {scan.status === "completed" && (
                               <Button
                                 variant="ghost"
