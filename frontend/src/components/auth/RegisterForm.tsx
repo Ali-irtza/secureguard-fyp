@@ -62,13 +62,16 @@ const RegisterForm = () => {
   // ---------------------------------------------------------------------------
   const onSubmit = async (data: RegisterFormValues) => {
     setIsLoading(true);
-    const { error } = await supabase.auth.signUp({
+    const { data: signUpData, error } = await supabase.auth.signUp({
       email: data.email,
       password: data.password,
       options: {
         data: {
-          full_name: data.fullName,  // stored in auth.users.raw_user_meta_data
+          full_name: data.fullName, // stored in auth.users.raw_user_meta_data
         },
+        // After user clicks the confirmation link in their email,
+        // Supabase redirects here. AuthCallback then sends them to /dashboard.
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
 
@@ -78,10 +81,19 @@ const RegisterForm = () => {
         description: error.message,
         variant: "destructive",
       });
+    } else if (signUpData.user && signUpData.user.identities?.length === 0) {
+      // identities is empty → this email is already registered
+      // Supabase returns a fake success to prevent email enumeration attacks,
+      // but identities array is empty — that's the tell.
+      toast({
+        title: "Email already registered",
+        description: "An account with this email already exists. Try signing in instead.",
+        variant: "destructive",
+      });
     } else {
       toast({
-        title: "Account created!",
-        description: "Check your email to confirm your account, then sign in.",
+        title: "Check your email",
+        description: "We sent a confirmation link to " + data.email + ". Click it to activate your account.",
       });
       navigate("/auth");
     }
