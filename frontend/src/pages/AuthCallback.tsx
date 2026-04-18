@@ -6,87 +6,132 @@ import { Shield } from "lucide-react";
 // ---------------------------------------------------------------------------
 // AuthCallback Page
 // ---------------------------------------------------------------------------
-// After OAuth (Google/GitHub), Supabase redirects the browser here:
-//   http://localhost:8080/auth/callback
+// Handles ALL Supabase auth redirects. Two cases:
 //
-// The URL contains a token in the hash (#access_token=...).
-// Supabase JS reads it automatically and creates a session.
+// Case 1 — OAuth login (Google / GitHub):
+//   URL hash: #access_token=...&type=bearer
+//   Action: ensure profile row exists → navigate to /dashboard
 //
-// After the session is ready, we ensure the user has a profiles row.
-// The DB trigger handles this on first signup, but we add a client-side
-// upsert as a safety net (e.g. if the trigger ever fails silently).
+// Case 2 — Password reset email link:
+//   URL hash: #access_token=...&type=recovery
+//   Action: navigate to /reset-password (user sets new password there)
 //
-// ON CONFLICT DO NOTHING logic is mirrored here:
-//   - New user  → profile row is created with Google/GitHub data
-//   - Returning user → upsert finds existing row, does nothing (preserves edits)
+// Supabase JS reads the hash automatically and fires onAuthStateChange
+// with the correct event: SIGNED_IN or PASSWORD_RECOVERY.
 // ---------------------------------------------------------------------------
 const AuthCallback = () => {
   const navigate = useNavigate();
 
-  const ensureProfileExists = async (userId: string, userMetadata: Record<string, string>, appMetadata: Record<string, string>) => {
-    // Check if profile already exists
+  // Safety net: if the DB trigger failed silently, create the profile row here.
+  // ON CONFLICT DO NOTHING mirrors the trigger — returning users are never touched.
+  const ensureProfileExists = async (
+    userId: string,
+    userMetadata: Record<string, string>,
+    appMetadata: Record<string, string>,
+  ) => {
     const { data: existing } = await supabase
       .from("profiles")
       .select("id")
       .eq("id", userId)
       .single();
 
-    // Profile exists — do nothing, preserve the user's edits
-    if (existing) return;
+    if (existing) return; // profile already exists — preserve user's edits
 
-    // Profile doesn't exist yet (trigger may have failed) — create it now
-    // This only runs for brand new users
     const email = (await supabase.auth.getUser()).data.user?.email || "";
     await supabase.from("profiles").insert({
       id: userId,
-      full_name:
-        userMetadata?.full_name ||
-        userMetadata?.name ||
-        email.split("@")[0],
-      avatar_url:
-        userMetadata?.avatar_url ||
-        userMetadata?.picture ||
-        null,
+      full_name: userMetadata?.full_name || userMetadata?.name || email.split("@")[0],
+      avatar_url: userMetadata?.avatar_url || userMetadata?.picture || null,
       provider: appMetadata?.provider || "email",
     });
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    let subscription: { unsubscribe: () => void } | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    // ---------------------------------------------------------------------------
+    // Detect recovery type FIRST — before checking any existing session.
+    //
+    // Supabase puts the token in the URL hash: #access_token=...&type=recovery
+    // We must check this BEFORE getSession(), because if the user is already
+    // logged in, getSession() returns their existing session and we'd wrongly
+    // send them to /dashboard instead of /reset-password.
+    // ---------------------------------------------------------------------------
+    const hash = window.location.hash;
+    const hashParams = new URLSearchParams(hash.replace("#", ""));
+    const isRecovery = hashParams.get("type") === "recovery";
+
+    const init = async () => {
+      // If the URL already tells us this is a recovery link, handle it immediately.
+      // We don't need to wait for onAuthStateChange — Supabase processes the hash
+      // token synchronously when the page loads.
+      if (isRecovery) {
+        // Give Supabase JS a moment to process the hash token into a session
+        // (it does this automatically on page load, but it's async internally)
+        const { data } = supabase.auth.onAuthStateChange((event, _session) => {
+          if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
+            if (timeout) clearTimeout(timeout);
+            navigate("/reset-password", { replace: true });
+          }
+        });
+        subscription = data.subscription;
+
+        // Fallback: if onAuthStateChange doesn't fire within 3s, navigate anyway.
+        // This handles the case where Supabase already processed the token before
+        // our listener was registered.
+        timeout = setTimeout(async () => {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            navigate("/reset-password", { replace: true });
+          } else {
+            navigate("/forgot-password", { replace: true });
+          }
+        }, 3000);
+        return;
+      }
+
+      // Not a recovery link — normal OAuth login flow.
+      const { data: { session } } = await supabase.auth.getSession();
+
       if (session) {
+        // Session already exists (e.g. page refresh after OAuth)
         await ensureProfileExists(
           session.user.id,
           session.user.user_metadata as Record<string, string>,
-          session.user.app_metadata as Record<string, string>
+          session.user.app_metadata as Record<string, string>,
         );
         navigate("/dashboard", { replace: true });
         return;
       }
 
-      // No session yet — wait for Supabase to process the token from the URL hash
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (event, session) => {
-          if (event === "SIGNED_IN" && session) {
-            await ensureProfileExists(
-              session.user.id,
-              session.user.user_metadata as Record<string, string>,
-              session.user.app_metadata as Record<string, string>
-            );
-            navigate("/dashboard", { replace: true });
-          }
+      // No session yet — wait for Supabase to process the OAuth token from the hash.
+      const { data } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+        if (timeout) clearTimeout(timeout);
+
+        if (event === "SIGNED_IN" && newSession) {
+          await ensureProfileExists(
+            newSession.user.id,
+            newSession.user.user_metadata as Record<string, string>,
+            newSession.user.app_metadata as Record<string, string>,
+          );
+          navigate("/dashboard", { replace: true });
         }
-      );
+      });
+      subscription = data.subscription;
 
       // Safety timeout — if nothing happens in 5s, go back to login
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         navigate("/auth", { replace: true });
       }, 5000);
+    };
 
-      return () => {
-        subscription.unsubscribe();
-        clearTimeout(timeout);
-      };
-    });
+    init();
+
+    return () => {
+      subscription?.unsubscribe();
+      if (timeout) clearTimeout(timeout);
+    };
   }, [navigate]);
 
   return (
