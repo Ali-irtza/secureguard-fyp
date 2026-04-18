@@ -35,7 +35,7 @@ const Settings = () => {
   // ---------------------------------------------------------------------------
   const {
     profile, displayName, email, avatarUrl, initials,
-    isOAuthUser, updateProfile, updatePassword,
+    isOAuthUser, hasEmailIdentity, updateProfile, updatePassword,
   } = useCurrentUser();
 
   // ---------------------------------------------------------------------------
@@ -364,9 +364,11 @@ const Settings = () => {
                   <Separator />
 
                   {/* ----------------------------------------------------------------
-                      Change Password — hidden for OAuth users (they have no password)
+                      Change Password — shown only when user has an email identity.
+                      hasEmailIdentity checks user.identities array — the only
+                      reliable source. Works correctly for linked accounts too.
                   ---------------------------------------------------------------- */}
-                  {isOAuthUser ? (
+                  {!hasEmailIdentity ? (
                     <div className="p-4 rounded-lg bg-muted/30 border border-border/30">
                       <p className="text-sm text-muted-foreground">
                         You signed in with Google or GitHub. Password management is handled by your provider.
