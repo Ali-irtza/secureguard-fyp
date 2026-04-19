@@ -140,6 +140,34 @@ export async function refreshGithubBranches(
   });
 }
 
+// ---------------------------------------------------------------------------
+// GitHub OAuth flow
+// ---------------------------------------------------------------------------
+
+/** GET /teams/:id/github/authorize — get the GitHub OAuth URL to redirect to */
+export async function getGithubAuthorizeUrl(teamId: string): Promise<string> {
+  const data = await apiFetch<{ authorization_url: string }>(`/teams/${teamId}/github/authorize`);
+  return data.authorization_url;
+}
+
+/** GET /teams/:id/github/repos — list repos accessible via stored OAuth token */
+export async function listGithubRepos(teamId: string): Promise<{ full_name: string; private: boolean; url: string }[]> {
+  const data = await apiFetch<{ repos: { full_name: string; private: boolean; url: string }[] }>(`/teams/${teamId}/github/repos`);
+  return data.repos;
+}
+
+/** POST /teams/:id/github/select-repo — connect a specific repo, fetch its branches */
+export async function selectGithubRepo(
+  teamId: string,
+  repoFullName: string,
+  repoUrl: string
+): Promise<Team> {
+  return apiFetch<Team>(`/teams/${teamId}/github/select-repo`, {
+    method: "POST",
+    body: JSON.stringify({ repo_full_name: repoFullName, repo_url: repoUrl }),
+  });
+}
+
 /** POST /teams/:id/members — invite by email */
 export async function inviteMember(
   teamId: string,

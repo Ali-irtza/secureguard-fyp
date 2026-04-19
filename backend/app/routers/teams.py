@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from supabase import Client
 import httpx
+import secrets
 
 from app.dependencies import get_supabase, get_current_user
+from app.config import settings
 from app.models.teams import (
     TeamCreateRequest,
     TeamUpdateRequest,
@@ -15,6 +18,7 @@ from app.models.teams import (
     TeamMemberBase,
     MemberProfile,
     TeamRole,
+    GithubAuthorizeResponse,
 )
 
 router = APIRouter()
@@ -481,6 +485,260 @@ async def refresh_github_branches(
     """
     # Reuse the same logic as connect — it's identical
     return await connect_github(team_id, body, current_user, supabase)
+
+
+# ---------------------------------------------------------------------------
+# GET /teams/{team_id}/github/authorize
+# ---------------------------------------------------------------------------
+# Step 1 of OAuth flow.
+# Returns the GitHub authorization URL the frontend redirects the user to.
+# Embeds team_id in the `state` param so the callback knows which team to update.
+# Admin only.
+# ---------------------------------------------------------------------------
+
+@router.get("/{team_id}/github/authorize", response_model=GithubAuthorizeResponse)
+async def github_authorize(
+    team_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Returns the GitHub OAuth authorization URL.
+
+    The frontend redirects the user to this URL.
+    GitHub shows the "Authorize SecureGuard Pro" screen.
+    After approval, GitHub redirects to our callback URL with a `code`.
+
+    State param = "{team_id}:{random_token}" — prevents CSRF attacks.
+    We store the random token in the team row so the callback can verify it.
+    """
+    if not settings.github_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub OAuth is not configured on this server",
+        )
+
+    user_id = current_user.id
+    _require_admin(team_id, user_id, supabase)
+
+    # Generate a random state token to prevent CSRF
+    # Format: teamId:randomToken — callback splits on ":" to get both
+    csrf_token = secrets.token_urlsafe(32)
+    state = f"{team_id}:{csrf_token}"
+
+    # Store csrf_token temporarily in the team row so callback can verify
+    supabase.table("teams").update({"github_oauth_token": f"pending:{csrf_token}"}).eq("id", team_id).execute()
+
+    authorization_url = (
+        f"https://github.com/login/oauth/authorize"
+        f"?client_id={settings.github_client_id}"
+        f"&scope=repo"
+        f"&state={state}"
+        f"&redirect_uri={settings.github_callback_url}"
+    )
+
+    return GithubAuthorizeResponse(authorization_url=authorization_url)
+
+
+# ---------------------------------------------------------------------------
+# GET /teams/github/callback
+# ---------------------------------------------------------------------------
+# Step 2 of OAuth flow — GitHub redirects here after user approves.
+# This is a PUBLIC endpoint (no JWT) — GitHub calls it, not our frontend.
+# It exchanges the code for a token, fetches branches, saves to DB,
+# then redirects the user back to the frontend /team page.
+# ---------------------------------------------------------------------------
+
+FRONTEND_TEAM_URL = "http://localhost:8080/team"
+
+@router.get("/github/callback")
+async def github_callback(
+    code: str,
+    state: str,
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    GitHub OAuth callback handler.
+
+    Flow:
+    1. Parse team_id and csrf_token from state param
+    2. Verify csrf_token matches what we stored (CSRF protection)
+    3. Exchange code for access token via GitHub API
+    4. Fetch repo list so user can pick which repo to connect
+    5. Store token in DB
+    6. Redirect user back to frontend /team page
+    """
+    # Parse state: "teamId:csrfToken"
+    try:
+        team_id, csrf_token = state.split(":", 1)
+    except ValueError:
+        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=invalid_state")
+
+    # Verify CSRF token matches what we stored
+    team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
+    if not team_result.data:
+        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=team_not_found")
+
+    stored = team_result.data.get("github_oauth_token", "")
+    if stored != f"pending:{csrf_token}":
+        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=csrf_mismatch")
+
+    # Exchange code for access token
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        token_resp = await client.post(
+            "https://github.com/login/oauth/access_token",
+            json={
+                "client_id":     settings.github_client_id,
+                "client_secret": settings.github_client_secret,
+                "code":          code,
+                "redirect_uri":  settings.github_callback_url,
+            },
+            headers={"Accept": "application/json"},
+        )
+
+    if token_resp.status_code != 200:
+        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=token_exchange_failed")
+
+    token_data = token_resp.json()
+    access_token = token_data.get("access_token")
+
+    if not access_token:
+        error = token_data.get("error_description", "unknown_error")
+        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error={error}")
+
+    # Store the token in DB — Supabase encrypts at rest
+    supabase.table("teams").update({"github_oauth_token": access_token}).eq("id", team_id).execute()
+
+    # Redirect user back to frontend — they'll see the repo picker
+    return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_connected=true&team_id={team_id}")
+
+
+# ---------------------------------------------------------------------------
+# GET /teams/{team_id}/github/repos
+# ---------------------------------------------------------------------------
+# After OAuth, fetch the list of repos the user has access to.
+# User picks one, then we call /github/select-repo to connect it.
+# Admin only.
+# ---------------------------------------------------------------------------
+
+@router.get("/{team_id}/github/repos")
+async def list_github_repos(
+    team_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Returns the list of repos accessible via the stored OAuth token.
+    Frontend shows these in a picker after OAuth completes.
+    """
+    user_id = current_user.id
+    _require_admin(team_id, user_id, supabase)
+
+    team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
+    token = team_result.data.get("github_oauth_token") if team_result.data else None
+
+    if not token or token.startswith("pending:"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub is not connected for this team. Complete OAuth first.",
+        )
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    repos = []
+    page = 1
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            resp = await client.get(
+                f"{GITHUB_API}/user/repos",
+                headers=headers,
+                params={"per_page": 100, "page": page, "sort": "updated"},
+            )
+            if resp.status_code != 200:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="GitHub API error")
+            batch = resp.json()
+            if not batch:
+                break
+            repos.extend({"full_name": r["full_name"], "private": r["private"], "url": r["html_url"]} for r in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+    return {"repos": repos}
+
+
+# ---------------------------------------------------------------------------
+# POST /teams/{team_id}/github/select-repo
+# ---------------------------------------------------------------------------
+# User picks a repo from the list. We fetch its branches and save everything.
+# Admin only.
+# ---------------------------------------------------------------------------
+
+@router.post("/{team_id}/github/select-repo", response_model=TeamResponse)
+async def select_github_repo(
+    team_id: str,
+    body: dict,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Connects a specific repo to the team using the stored OAuth token.
+    Fetches all branches and saves them.
+    Body: { "repo_full_name": "owner/repo", "repo_url": "https://github.com/owner/repo" }
+    """
+    user_id = current_user.id
+    _require_admin(team_id, user_id, supabase)
+
+    repo_full_name = body.get("repo_full_name", "").strip()
+    repo_url       = body.get("repo_url", "").strip()
+
+    if not repo_full_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="repo_full_name is required")
+
+    team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
+    token = team_result.data.get("github_oauth_token") if team_result.data else None
+
+    if not token or token.startswith("pending:"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub is not connected. Complete OAuth first.")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    # Fetch branches for the selected repo
+    branches: list[str] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            resp = await client.get(
+                f"{GITHUB_API}/repos/{repo_full_name}/branches",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            if resp.status_code != 200:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch branches")
+            batch = resp.json()
+            if not batch:
+                break
+            branches.extend(b["name"] for b in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+    # Save repo URL + branches
+    team_upd = supabase.table("teams").update({
+        "github_repo":     repo_url or f"https://github.com/{repo_full_name}",
+        "github_branches": branches,
+    }).eq("id", team_id).execute()
+
+    members = _fetch_members_for_team(team_id, supabase)
+    return _build_team_response(team_upd.data[0], members, user_id)
 
 
 # ---------------------------------------------------------------------------

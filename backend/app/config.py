@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:5173"
 
+    # GitHub OAuth App
+    # Register at: github.com → Settings → Developer settings → OAuth Apps
+    github_client_id:     str = ""
+    github_client_secret: str = ""
+    github_callback_url:  str = "http://localhost:8000/teams/github/callback"
+
     @property
     def cors_origins_list(self) -> list[str]:
         """
