@@ -58,7 +58,7 @@ class TeamUpdateRequest(BaseModel):
     """
     PATCH /teams/{team_id}
     Partial update — all fields optional.
-    Covers: rename team, connect/disconnect GitHub repo.
+    Covers: rename team, disconnect GitHub repo.
     """
     name:        Optional[str] = None
     github_repo: Optional[str] = None
@@ -69,6 +69,34 @@ class TeamUpdateRequest(BaseModel):
         if v is not None and not v.strip():
             raise ValueError("Team name cannot be blank")
         return v.strip() if v else v
+
+
+class ConnectGithubRequest(BaseModel):
+    """
+    POST /teams/{team_id}/github
+    Connect a GitHub repository using a Personal Access Token.
+
+    The PAT is used ONCE to:
+      1. Validate the repo exists and is accessible
+      2. Fetch the branch list
+    It is NEVER stored — discarded immediately after the API call.
+    """
+    repo_url: str
+    pat:      str  # Personal Access Token — read-only repo scope required
+
+    @field_validator("repo_url")
+    @classmethod
+    def repo_url_must_not_be_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Repository URL cannot be blank")
+        return v.strip()
+
+    @field_validator("pat")
+    @classmethod
+    def pat_must_not_be_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Personal Access Token cannot be blank")
+        return v.strip()
 
 
 class InviteMemberRequest(BaseModel):
@@ -130,15 +158,16 @@ class TeamResponse(BaseModel):
     Full team object returned to the frontend.
     Includes the current user's role so the UI can gate admin-only controls.
     """
-    id:               str
-    name:             str
-    github_repo:      Optional[str]  = None
-    created_by:       str
-    created_at:       datetime
-    updated_at:       datetime
-    current_user_role: TeamRole      # derived: the calling user's role in this team
-    member_count:     int            # derived: len(members)
-    members:          List[TeamMemberResponse]
+    id:                str
+    name:              str
+    github_repo:       Optional[str]   = None
+    github_branches:   List[str]       = []   # populated after GitHub connect
+    created_by:        str
+    created_at:        datetime
+    updated_at:        datetime
+    current_user_role: TeamRole        # derived: the calling user's role in this team
+    member_count:      int             # derived: len(members)
+    members:           List[TeamMemberResponse]
 
 
 class TeamListResponse(BaseModel):

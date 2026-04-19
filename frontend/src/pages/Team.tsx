@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   listTeams, createTeam, updateTeam, deleteTeam,
+  connectGithub, refreshGithubBranches,
   inviteMember, updateMember, removeMember,
   type Team, type TeamRole,
 } from "@/lib/teams-api";
@@ -130,12 +131,12 @@ const Team = () => {
   };
 
   const handleConnectGithub = async () => {
-    if (!selectedTeam || !repoUrl.trim()) return;
+    if (!selectedTeam || !repoUrl.trim() || !repoPat.trim()) return;
     setActionLoading(true);
     try {
-      const updated = await updateTeam(selectedTeam.id, { github_repo: repoUrl.trim() });
+      const updated = await connectGithub(selectedTeam.id, repoUrl.trim(), repoPat.trim());
       setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
-      toast.success("GitHub repository connected");
+      toast.success(`Repository connected — ${updated.github_branches.length} branches synced`);
       setRepoUrl("");
       setRepoPat("");
       setConnectGithubOpen(false);
@@ -146,12 +147,24 @@ const Team = () => {
     }
   };
 
+  const handleRefreshBranches = async () => {
+    if (!selectedTeam || !selectedTeam.github_repo) return;
+    // Need PAT again — open the connect modal pre-filled with the existing URL
+    setRepoUrl(selectedTeam.github_repo);
+    setConnectGithubOpen(true);
+  };
+
   const handleDisconnectGithub = async () => {
     if (!selectedTeam) return;
     setActionLoading(true);
     try {
       const updated = await updateTeam(selectedTeam.id, { github_repo: "" });
-      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+      // Also clear branches locally
+      setTeams(prev => prev.map(t =>
+        t.id === selectedTeam.id
+          ? { ...updated, github_branches: [] }
+          : t
+      ));
       toast.success("Repository disconnected");
     } catch (err: any) {
       toast.error(err.message ?? "Failed to disconnect repository");
@@ -461,6 +474,33 @@ const Team = () => {
                             <Lock className="h-3 w-3" />
                             <span className="text-xs">No branch</span>
                           </div>
+                        ) : isAdmin && !isSelf && selectedTeam.github_branches.length > 0 ? (
+                          // Admin can assign a real branch from the synced list
+                          <Select
+                            value={member.branch ?? ""}
+                            onValueChange={val =>
+                              updateMember(selectedTeam.id, member.user_id, { branch: val })
+                                .then(updated =>
+                                  setTeams(prev => prev.map(t =>
+                                    t.id === selectedTeam.id
+                                      ? { ...t, members: t.members.map(m => m.user_id === member.user_id ? updated : m) }
+                                      : t
+                                  ))
+                                )
+                                .catch(err => toast.error(err.message ?? "Failed to assign branch"))
+                            }
+                          >
+                            <SelectTrigger className="w-44 h-8 bg-background/50 border-border/50 text-xs">
+                              <SelectValue placeholder="Assign branch…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {selectedTeam.github_branches.map(branch => (
+                                <SelectItem key={branch} value={branch}>{branch}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : isAdmin && !isSelf && !selectedTeam.github_repo ? (
+                          <span className="text-xs text-muted-foreground italic">Connect repo first</span>
                         ) : (
                           <span className="text-sm text-foreground">{member.branch ?? "—"}</span>
                         )}
@@ -526,9 +566,12 @@ const Team = () => {
                   </a>
                   <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
                 </div>
+                <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                  <span>{selectedTeam.github_branches.length} branches synced</span>
+                </div>
                 {isAdmin && (
                   <div className="flex items-center gap-3">
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={() => toast.info("Branch sync coming soon")}>
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches}>
                       <RefreshCw className="h-4 w-4" />
                       Refresh Branches
                     </Button>
@@ -621,8 +664,14 @@ const Team = () => {
       <Dialog open={connectGithubOpen} onOpenChange={setConnectGithubOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Connect GitHub Repository</DialogTitle>
-            <DialogDescription>Link a repository for branch-based scanning</DialogDescription>
+            <DialogTitle>
+              {selectedTeam?.github_repo ? "Refresh GitHub Branches" : "Connect GitHub Repository"}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedTeam?.github_repo
+                ? "Enter your PAT to re-sync the branch list. It will not be stored."
+                : "Link a repository for branch-based scanning"}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -654,7 +703,7 @@ const Team = () => {
                   {showPat ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground">Needs read-only repo scope only</p>
+              <p className="text-xs text-muted-foreground">Needs read-only repo scope. Never stored — used once to fetch branches.</p>
             </div>
             <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 border border-border/30">
               <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
@@ -662,9 +711,16 @@ const Team = () => {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setConnectGithubOpen(false)}>Cancel</Button>
-            <Button onClick={handleConnectGithub} disabled={!repoUrl.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
-              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Connect Repository"}
+            <Button variant="ghost" onClick={() => { setConnectGithubOpen(false); setRepoPat(""); }}>Cancel</Button>
+            <Button
+              onClick={handleConnectGithub}
+              disabled={!repoUrl.trim() || !repoPat.trim() || actionLoading}
+              className="bg-primary hover:bg-primary/90"
+            >
+              {actionLoading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : selectedTeam?.github_repo ? "Refresh Branches" : "Connect Repository"
+              }
             </Button>
           </DialogFooter>
         </DialogContent>

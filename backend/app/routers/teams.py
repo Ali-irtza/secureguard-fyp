@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
+import httpx
 
 from app.dependencies import get_supabase, get_current_user
 from app.models.teams import (
     TeamCreateRequest,
     TeamUpdateRequest,
+    ConnectGithubRequest,
     InviteMemberRequest,
     UpdateMemberRequest,
     TeamResponse,
@@ -99,6 +101,7 @@ def _build_team_response(team: dict, members: list, current_user_id: str) -> Tea
         id=team["id"],
         name=team["name"],
         github_repo=team.get("github_repo"),
+        github_branches=team.get("github_branches") or [],
         created_by=team["created_by"],
         created_at=team["created_at"],
         updated_at=team["updated_at"],
@@ -327,6 +330,157 @@ async def delete_team(
     _require_admin(team_id, user_id, supabase)
 
     supabase.table("teams").delete().eq("id", team_id).execute()
+
+
+# ---------------------------------------------------------------------------
+# POST /teams/{team_id}/github
+# ---------------------------------------------------------------------------
+# Connect a GitHub repo. Uses PAT once to validate + fetch branches, then
+# discards it. Saves repo URL + branch list to DB. PAT never stored.
+# Admin only.
+# ---------------------------------------------------------------------------
+
+GITHUB_API = "https://api.github.com"
+
+def _parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
+    """
+    Extracts owner and repo name from a GitHub URL.
+    Supports:
+      https://github.com/owner/repo
+      https://github.com/owner/repo.git
+    Returns (owner, repo) tuple.
+    """
+    # Strip trailing .git and slashes
+    clean = repo_url.rstrip("/").removesuffix(".git")
+    parts = clean.split("github.com/")
+    if len(parts) != 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid GitHub URL. Expected format: https://github.com/owner/repo",
+        )
+    segments = parts[1].split("/")
+    if len(segments) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid GitHub URL. Expected format: https://github.com/owner/repo",
+        )
+    return segments[0], segments[1]
+
+
+@router.post("/{team_id}/github", response_model=TeamResponse)
+async def connect_github(
+    team_id: str,
+    body: ConnectGithubRequest,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Connects a GitHub repository to the team.
+
+    Flow:
+    1. Validate the repo URL format
+    2. Call GitHub API with the PAT to verify access + fetch branches
+    3. Save repo URL + branch list to DB
+    4. PAT is discarded — never stored
+
+    Admin only.
+    """
+    user_id = current_user.id
+    _require_admin(team_id, user_id, supabase)
+
+    owner, repo = _parse_github_owner_repo(body.repo_url)
+
+    headers = {
+        "Authorization": f"Bearer {body.pat}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # Step 1: verify repo exists and PAT has access
+        repo_resp = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=headers)
+
+        if repo_resp.status_code == 401:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Personal Access Token. Please check your PAT and try again.",
+            )
+        if repo_resp.status_code == 403:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. Make sure your PAT has 'repo' (read) scope.",
+            )
+        if repo_resp.status_code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found. Check the URL and that your PAT has access to this repo.",
+            )
+        if repo_resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"GitHub API error: {repo_resp.status_code}",
+            )
+
+        # Step 2: fetch all branches (paginated — up to 100 per page)
+        branches: list[str] = []
+        page = 1
+        while True:
+            branch_resp = await client.get(
+                f"{GITHUB_API}/repos/{owner}/{repo}/branches",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            if branch_resp.status_code != 200:
+                break
+            batch = branch_resp.json()
+            if not batch:
+                break
+            branches.extend(b["name"] for b in batch)
+            if len(batch) < 100:
+                break  # last page
+            page += 1
+
+    # PAT is now out of scope — never written to DB
+
+    # Step 3: save repo URL + branches to DB
+    team_result = (
+        supabase.table("teams")
+        .update({
+            "github_repo":     body.repo_url,
+            "github_branches": branches,
+        })
+        .eq("id", team_id)
+        .execute()
+    )
+    if not team_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    members = _fetch_members_for_team(team_id, supabase)
+    return _build_team_response(team_result.data[0], members, user_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /teams/{team_id}/github/refresh
+# ---------------------------------------------------------------------------
+# Re-fetch branches from GitHub using a fresh PAT.
+# Same flow as connect — PAT used once, discarded.
+# Admin only.
+# ---------------------------------------------------------------------------
+
+@router.post("/{team_id}/github/refresh", response_model=TeamResponse)
+async def refresh_github_branches(
+    team_id: str,
+    body: ConnectGithubRequest,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Refreshes the branch list from GitHub.
+    Requires the PAT again (we never stored it).
+    Admin only.
+    """
+    # Reuse the same logic as connect — it's identical
+    return await connect_github(team_id, body, current_user, supabase)
 
 
 # ---------------------------------------------------------------------------
