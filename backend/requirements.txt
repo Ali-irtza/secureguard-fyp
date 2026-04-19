@@ -16,3 +16,8 @@ python-multipart==0.0.20
 # HTTPX - async HTTP client (used internally by supabase-py)
 # Version is intentionally unpinned - supabase manages this dependency
 httpx
+
+# PyJWT + cryptography - used to sign GitHub App JWT tokens (RSA private key)
+# Version range satisfies both gotrue (>=2.10.1) and our JWT signing needs
+PyJWT>=2.10.1,<3.0.0
+cryptography==43.0.3

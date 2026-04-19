@@ -3,6 +3,9 @@ from fastapi.responses import RedirectResponse
 from supabase import Client
 import httpx
 import secrets
+import time
+import jwt                    # PyJWT — signs GitHub App JWTs with RSA key
+from pathlib import Path
 
 from app.dependencies import get_supabase, get_current_user
 from app.config import settings
@@ -22,6 +25,73 @@ from app.models.teams import (
 )
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# GitHub App helpers
+# ---------------------------------------------------------------------------
+
+def _load_private_key() -> str:
+    """Reads the RSA private key from the .pem file."""
+    pem_path = Path(settings.github_private_key_path)
+    if not pem_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub App private key not found on server",
+        )
+    return pem_path.read_text()
+
+
+def _make_github_app_jwt() -> str:
+    """
+    Creates a short-lived JWT signed with our RSA private key.
+    GitHub uses this to verify we are the registered GitHub App.
+
+    Why JWT?
+    GitHub Apps authenticate as the app itself using a JWT, then exchange
+    it for an installation access token scoped to a specific user/org.
+    The JWT is valid for max 10 minutes — we use 8 to be safe.
+    """
+    now = int(time.time())
+    payload = {
+        "iat": now - 60,          # issued at (60s in past — clock skew buffer)
+        "exp": now + (8 * 60),    # expires in 8 minutes
+        "iss": settings.github_app_id,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(payload, private_key, algorithm="RS256")
+
+
+async def _get_installation_token(installation_id: int) -> str:
+    """
+    Exchanges a GitHub App JWT for an installation access token.
+
+    Flow:
+    1. We sign a JWT with our private key → proves we are the GitHub App
+    2. We POST to GitHub with that JWT → get an installation token
+    3. Installation token has read-only access to repos the user selected
+    4. Token expires in 1 hour — we use it immediately, don't store it
+
+    Why installation token instead of user token?
+    - Scoped to exactly the repos the user chose during install
+    - Read-only by default (matches our Contents:read permission)
+    - No broad account access
+    """
+    app_jwt = _make_github_app_jwt()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{GITHUB_API}/app/installations/{installation_id}/access_tokens",
+            headers={
+                "Authorization": f"Bearer {app_jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    if resp.status_code != 201:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to get GitHub installation token: {resp.status_code}",
+        )
+    return resp.json()["token"]
 
 
 # ---------------------------------------------------------------------------
@@ -503,78 +573,72 @@ async def github_authorize(
     supabase: Client = Depends(get_supabase),
 ):
     """
-    Returns the GitHub OAuth authorization URL.
+    Returns the GitHub App installation URL.
 
-    The frontend redirects the user to this URL.
-    GitHub shows the "Authorize SecureGuard Pro" screen.
-    After approval, GitHub redirects to our callback URL with a `code`.
+    GitHub App flow is different from OAuth:
+    - User goes to the GitHub App install page
+    - They select which repos to grant access to
+    - GitHub redirects to our callback with an installation_id
+    - We use that installation_id to get tokens on demand
 
-    State param = "{team_id}:{random_token}" — prevents CSRF attacks.
-    We store the random token in the team row so the callback can verify it.
+    State param = "{team_id}:{csrf_token}" — CSRF protection.
     """
-    if not settings.github_client_id:
+    if not settings.github_app_id or not settings.github_client_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="GitHub OAuth is not configured on this server",
+            detail="GitHub App is not configured on this server",
         )
 
     user_id = current_user.id
     _require_admin(team_id, user_id, supabase)
 
-    # Generate a random state token to prevent CSRF
-    # Format: teamId:randomToken — callback splits on ":" to get both
+    # CSRF token stored temporarily so callback can verify
     csrf_token = secrets.token_urlsafe(32)
     state = f"{team_id}:{csrf_token}"
-
-    # Store csrf_token temporarily in the team row so callback can verify
     supabase.table("teams").update({"github_oauth_token": f"pending:{csrf_token}"}).eq("id", team_id).execute()
 
+    # GitHub App installation URL — user picks repos here
+    # After install, GitHub redirects to our callback_url with installation_id
     authorization_url = (
-        f"https://github.com/login/oauth/authorize"
-        f"?client_id={settings.github_client_id}"
-        f"&scope=repo"
-        f"&state={state}"
-        f"&redirect_uri={settings.github_callback_url}"
+        f"https://github.com/apps/secureguard-pro/installations/new"
+        f"?state={state}"
     )
 
     return GithubAuthorizeResponse(authorization_url=authorization_url)
 
 
-# ---------------------------------------------------------------------------
-# GET /teams/github/callback
-# ---------------------------------------------------------------------------
-# Step 2 of OAuth flow — GitHub redirects here after user approves.
-# This is a PUBLIC endpoint (no JWT) — GitHub calls it, not our frontend.
-# It exchanges the code for a token, fetches branches, saves to DB,
-# then redirects the user back to the frontend /team page.
-# ---------------------------------------------------------------------------
-
-FRONTEND_TEAM_URL = "http://localhost:8080/team"
-
 @router.get("/github/callback")
 async def github_callback(
-    code: str,
-    state: str,
+    installation_id: int | None = None,
+    setup_action: str | None = None,
+    state: str | None = None,
+    code: str | None = None,
     supabase: Client = Depends(get_supabase),
 ):
     """
-    GitHub OAuth callback handler.
+    GitHub App callback handler.
+
+    GitHub sends:
+    - installation_id: the unique ID for this user's app installation
+    - setup_action: "install" or "update"
+    - state: our "{team_id}:{csrf_token}" string
 
     Flow:
-    1. Parse team_id and csrf_token from state param
-    2. Verify csrf_token matches what we stored (CSRF protection)
-    3. Exchange code for access token via GitHub API
-    4. Fetch repo list so user can pick which repo to connect
-    5. Store token in DB
-    6. Redirect user back to frontend /team page
+    1. Verify CSRF state
+    2. Store installation_id in DB
+    3. Immediately fetch repos + branches using an installation token
+    4. Redirect user back to /team page
     """
-    # Parse state: "teamId:csrfToken"
+    if not state or not installation_id:
+        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=missing_params")
+
+    # Parse state
     try:
         team_id, csrf_token = state.split(":", 1)
     except ValueError:
         return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=invalid_state")
 
-    # Verify CSRF token matches what we stored
+    # Verify CSRF
     team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
     if not team_result.data:
         return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=team_not_found")
@@ -583,33 +647,13 @@ async def github_callback(
     if stored != f"pending:{csrf_token}":
         return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=csrf_mismatch")
 
-    # Exchange code for access token
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        token_resp = await client.post(
-            "https://github.com/login/oauth/access_token",
-            json={
-                "client_id":     settings.github_client_id,
-                "client_secret": settings.github_client_secret,
-                "code":          code,
-                "redirect_uri":  settings.github_callback_url,
-            },
-            headers={"Accept": "application/json"},
-        )
+    # Store installation_id — this is all we need going forward
+    supabase.table("teams").update({
+        "github_installation_id": installation_id,
+        "github_oauth_token":     None,   # clear the pending CSRF token
+    }).eq("id", team_id).execute()
 
-    if token_resp.status_code != 200:
-        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=token_exchange_failed")
-
-    token_data = token_resp.json()
-    access_token = token_data.get("access_token")
-
-    if not access_token:
-        error = token_data.get("error_description", "unknown_error")
-        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error={error}")
-
-    # Store the token in DB — Supabase encrypts at rest
-    supabase.table("teams").update({"github_oauth_token": access_token}).eq("id", team_id).execute()
-
-    # Redirect user back to frontend — they'll see the repo picker
+    # Redirect to frontend — repo picker will load via /github/repos
     return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_connected=true&team_id={team_id}")
 
 
@@ -628,21 +672,22 @@ async def list_github_repos(
     supabase: Client = Depends(get_supabase),
 ):
     """
-    Returns the list of repos accessible via the stored OAuth token.
-    Frontend shows these in a picker after OAuth completes.
+    Returns repos accessible via the GitHub App installation.
+    Uses a fresh installation token — never stored.
     """
     user_id = current_user.id
     _require_admin(team_id, user_id, supabase)
 
-    team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
-    token = team_result.data.get("github_oauth_token") if team_result.data else None
+    team_result = supabase.table("teams").select("github_installation_id").eq("id", team_id).single().execute()
+    installation_id = team_result.data.get("github_installation_id") if team_result.data else None
 
-    if not token or token.startswith("pending:"):
+    if not installation_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="GitHub is not connected for this team. Complete OAuth first.",
+            detail="GitHub App is not installed for this team. Click 'Connect with GitHub' first.",
         )
 
+    token = await _get_installation_token(installation_id)
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -654,13 +699,14 @@ async def list_github_repos(
     async with httpx.AsyncClient(timeout=10.0) as client:
         while True:
             resp = await client.get(
-                f"{GITHUB_API}/user/repos",
+                f"{GITHUB_API}/installation/repositories",
                 headers=headers,
-                params={"per_page": 100, "page": page, "sort": "updated"},
+                params={"per_page": 100, "page": page},
             )
             if resp.status_code != 200:
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="GitHub API error")
-            batch = resp.json()
+            data = resp.json()
+            batch = data.get("repositories", [])
             if not batch:
                 break
             repos.extend({"full_name": r["full_name"], "private": r["private"], "url": r["html_url"]} for r in batch)
@@ -671,13 +717,6 @@ async def list_github_repos(
     return {"repos": repos}
 
 
-# ---------------------------------------------------------------------------
-# POST /teams/{team_id}/github/select-repo
-# ---------------------------------------------------------------------------
-# User picks a repo from the list. We fetch its branches and save everything.
-# Admin only.
-# ---------------------------------------------------------------------------
-
 @router.post("/{team_id}/github/select-repo", response_model=TeamResponse)
 async def select_github_repo(
     team_id: str,
@@ -686,9 +725,8 @@ async def select_github_repo(
     supabase: Client = Depends(get_supabase),
 ):
     """
-    Connects a specific repo to the team using the stored OAuth token.
-    Fetches all branches and saves them.
-    Body: { "repo_full_name": "owner/repo", "repo_url": "https://github.com/owner/repo" }
+    Connects a specific repo and fetches its branches using an installation token.
+    Token is used once and discarded — never stored.
     """
     user_id = current_user.id
     _require_admin(team_id, user_id, supabase)
@@ -699,19 +737,19 @@ async def select_github_repo(
     if not repo_full_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="repo_full_name is required")
 
-    team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
-    token = team_result.data.get("github_oauth_token") if team_result.data else None
+    team_result = supabase.table("teams").select("github_installation_id").eq("id", team_id).single().execute()
+    installation_id = team_result.data.get("github_installation_id") if team_result.data else None
 
-    if not token or token.startswith("pending:"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub is not connected. Complete OAuth first.")
+    if not installation_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub App not installed. Connect first.")
 
+    token = await _get_installation_token(installation_id)
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # Fetch branches for the selected repo
     branches: list[str] = []
     page = 1
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -731,7 +769,6 @@ async def select_github_repo(
                 break
             page += 1
 
-    # Save repo URL + branches
     team_upd = supabase.table("teams").update({
         "github_repo":     repo_url or f"https://github.com/{repo_full_name}",
         "github_branches": branches,

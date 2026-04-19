@@ -46,6 +46,7 @@ backend/**/__pycache__/
 backend/.env
 backend/.env.*
 !backend/.env.example
+backend/*.pem
 
 # Private dev log (local only)
 backend/DEVLOG.md
