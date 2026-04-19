@@ -26,6 +26,7 @@ export interface Team {
   id: string;
   name: string;
   github_repo: string | null;
+  github_branches: string[];
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -113,6 +114,30 @@ export async function updateTeam(
 /** DELETE /teams/:id */
 export async function deleteTeam(teamId: string): Promise<void> {
   return apiFetch<void>(`/teams/${teamId}`, { method: "DELETE" });
+}
+
+/** POST /teams/:id/github — connect repo, fetch branches, PAT discarded after */
+export async function connectGithub(
+  teamId: string,
+  repoUrl: string,
+  pat: string
+): Promise<Team> {
+  return apiFetch<Team>(`/teams/${teamId}/github`, {
+    method: "POST",
+    body: JSON.stringify({ repo_url: repoUrl, pat }),
+  });
+}
+
+/** POST /teams/:id/github/refresh — re-fetch branches with a fresh PAT */
+export async function refreshGithubBranches(
+  teamId: string,
+  repoUrl: string,
+  pat: string
+): Promise<Team> {
+  return apiFetch<Team>(`/teams/${teamId}/github/refresh`, {
+    method: "POST",
+    body: JSON.stringify({ repo_url: repoUrl, pat }),
+  });
 }
 
 /** POST /teams/:id/members — invite by email */
