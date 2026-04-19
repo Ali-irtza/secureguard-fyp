@@ -1,9 +1,13 @@
-import { useState, useMemo } from "react";
-import { Users, Crown, Pencil, Trash2, Lock, Github, Info, Eye, EyeOff, UserPlus, ExternalLink, RefreshCw, Plus } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import {
+  Users, Crown, Pencil, Trash2, Lock, Github,
+  Info, Eye, EyeOff, UserPlus, ExternalLink,
+  RefreshCw, Plus, Loader2,
+} from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,90 +15,216 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
+import {
+  listTeams, createTeam, updateTeam, deleteTeam,
+  inviteMember, updateMember, removeMember,
+  type Team, type TeamRole,
+} from "@/lib/teams-api";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function getRoleBadgeClasses(role: TeamRole) {
+  switch (role) {
+    case "admin":     return "bg-primary/15 text-primary border-primary/30";
+    case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+    case "viewer":    return "bg-muted text-muted-foreground border-border/50";
+  }
+}
+
+function getInitials(name: string | null, email: string | null): string {
+  if (name) return name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+  if (email) return email[0].toUpperCase();
+  return "?";
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 const Team = () => {
-  const userTeams = useMemo(() => mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID)), []);
-  const hasTeams = userTeams.length > 0;
+  const { user } = useCurrentUser();
 
-  // Default to first admin team, else first team
-  const defaultTeamId = useMemo(() => {
-    const adminTeam = userTeams.find(t => t.currentUserRole === "admin");
-    return adminTeam?.id || userTeams[0]?.id || "";
-  }, [userTeams]);
+  // ── Data state ────────────────────────────────────────────────────────────
+  const [teams, setTeams]               = useState<Team[]>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [loading, setLoading]           = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
 
-  const [selectedTeamId, setSelectedTeamId] = useState(defaultTeamId);
-  const [createTeamOpen, setCreateTeamOpen] = useState(false);
-  const [newTeamName, setNewTeamName] = useState("");
-  const [inviteModalOpen, setInviteModalOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<"developer" | "viewer">("developer");
+  // ── Modal state ───────────────────────────────────────────────────────────
+  const [createTeamOpen, setCreateTeamOpen]     = useState(false);
+  const [newTeamName, setNewTeamName]           = useState("");
+  const [inviteModalOpen, setInviteModalOpen]   = useState(false);
+  const [inviteEmail, setInviteEmail]           = useState("");
+  const [inviteRole, setInviteRole]             = useState<"developer" | "viewer">("developer");
   const [connectGithubOpen, setConnectGithubOpen] = useState(false);
-  const [repoUrl, setRepoUrl] = useState("");
-  const [repoPat, setRepoPat] = useState("");
-  const [showPat, setShowPat] = useState(false);
-  const [editingTeamName, setEditingTeamName] = useState(false);
-  const [tempTeamName, setTempTeamName] = useState("");
+  const [repoUrl, setRepoUrl]                   = useState("");
+  const [repoPat, setRepoPat]                   = useState("");
+  const [showPat, setShowPat]                   = useState(false);
+  const [editingTeamName, setEditingTeamName]   = useState(false);
+  const [tempTeamName, setTempTeamName]         = useState("");
 
-  const selectedTeam = useMemo(() => userTeams.find(t => t.id === selectedTeamId), [userTeams, selectedTeamId]);
-  const currentUserRole = selectedTeam?.currentUserRole || "viewer";
-  const isAdmin = currentUserRole === "admin";
+  // ── Derived ───────────────────────────────────────────────────────────────
+  const selectedTeam    = teams.find(t => t.id === selectedTeamId);
+  const currentUserRole = selectedTeam?.current_user_role ?? "viewer";
+  const isAdmin         = currentUserRole === "admin";
 
-  const getRoleBadgeClasses = (role: string) => {
-    switch (role) {
-      case "admin": return "bg-primary/15 text-primary border-primary/30";
-      case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
-      case "viewer": return "bg-muted text-muted-foreground border-border/50";
-      default: return "bg-muted text-muted-foreground border-border/50";
+  // ── Load teams on mount ───────────────────────────────────────────────────
+  const fetchTeams = useCallback(async () => {
+    try {
+      const data = await listTeams();
+      setTeams(data);
+      // Auto-select: prefer first admin team, else first team
+      if (!selectedTeamId || !data.find(t => t.id === selectedTeamId)) {
+        const adminTeam = data.find(t => t.current_user_role === "admin");
+        setSelectedTeamId(adminTeam?.id ?? data[0]?.id ?? "");
+      }
+    } catch (err) {
+      toast.error("Failed to load teams");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedTeamId]);
+
+  useEffect(() => { fetchTeams(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const handleCreateTeam = async () => {
+    if (!newTeamName.trim()) return;
+    setActionLoading(true);
+    try {
+      const team = await createTeam(newTeamName.trim());
+      setTeams(prev => [...prev, team]);
+      setSelectedTeamId(team.id);
+      toast.success(`Team "${team.name}" created`);
+      setNewTeamName("");
+      setCreateTeamOpen(false);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to create team");
+    } finally {
+      setActionLoading(false);
     }
   };
 
-  const getMemberRole = (member: typeof selectedTeam extends { members: (infer M)[] } | undefined ? M : never, index: number) => {
-    const isSelf = member.id === CURRENT_USER_ID;
-    if (isSelf) return currentUserRole;
-    if (index === 0) return selectedTeam?.currentUserRole === "admin" ? "developer" : "developer";
-    if (member.healthScore === null) return "viewer";
-    return "developer";
+  const handleRenameTeam = async () => {
+    if (!selectedTeam || !tempTeamName.trim()) return;
+    setActionLoading(true);
+    try {
+      const updated = await updateTeam(selectedTeam.id, { name: tempTeamName.trim() });
+      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+      toast.success("Team renamed");
+      setEditingTeamName(false);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to rename team");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const handleCreateTeam = () => {
-    if (!newTeamName.trim()) return;
-    toast.success(`Team "${newTeamName}" created successfully`);
-    setNewTeamName("");
-    setCreateTeamOpen(false);
+  const handleConnectGithub = async () => {
+    if (!selectedTeam || !repoUrl.trim()) return;
+    setActionLoading(true);
+    try {
+      const updated = await updateTeam(selectedTeam.id, { github_repo: repoUrl.trim() });
+      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+      toast.success("GitHub repository connected");
+      setRepoUrl("");
+      setRepoPat("");
+      setConnectGithubOpen(false);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to connect repository");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const handleInviteMember = () => {
-    if (!inviteEmail) return;
-    toast.success(`Invite sent to ${inviteEmail}`);
-    setInviteEmail("");
-    setInviteRole("developer");
-    setInviteModalOpen(false);
+  const handleDisconnectGithub = async () => {
+    if (!selectedTeam) return;
+    setActionLoading(true);
+    try {
+      const updated = await updateTeam(selectedTeam.id, { github_repo: "" });
+      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+      toast.success("Repository disconnected");
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to disconnect repository");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const handleConnectGithub = () => {
-    if (!repoUrl) return;
-    toast.success("GitHub repository connected successfully");
-    setRepoUrl("");
-    setRepoPat("");
-    setConnectGithubOpen(false);
+  const handleInviteMember = async () => {
+    if (!selectedTeam || !inviteEmail.trim()) return;
+    setActionLoading(true);
+    try {
+      const member = await inviteMember(selectedTeam.id, inviteEmail.trim(), inviteRole);
+      // Optimistically add the new member to local state
+      setTeams(prev => prev.map(t =>
+        t.id === selectedTeam.id
+          ? { ...t, members: [...t.members, member], member_count: t.member_count + 1 }
+          : t
+      ));
+      toast.success(`${member.profile.full_name ?? inviteEmail} added to team`);
+      setInviteEmail("");
+      setInviteRole("developer");
+      setInviteModalOpen(false);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to invite member");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  // Empty state — no teams
-  if (!hasTeams) {
+  const handleUpdateMemberRole = async (memberUserId: string, role: TeamRole) => {
+    if (!selectedTeam) return;
+    try {
+      const updated = await updateMember(selectedTeam.id, memberUserId, { role });
+      setTeams(prev => prev.map(t =>
+        t.id === selectedTeam.id
+          ? { ...t, members: t.members.map(m => m.user_id === memberUserId ? updated : m) }
+          : t
+      ));
+      toast.success("Role updated");
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to update role");
+    }
+  };
+
+  const handleRemoveMember = async (memberUserId: string, memberName: string) => {
+    if (!selectedTeam) return;
+    try {
+      await removeMember(selectedTeam.id, memberUserId);
+      setTeams(prev => prev.map(t =>
+        t.id === selectedTeam.id
+          ? { ...t, members: t.members.filter(m => m.user_id !== memberUserId), member_count: t.member_count - 1 }
+          : t
+      ));
+      toast.success(`${memberName} removed from team`);
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to remove member");
+    }
+  };
+
+  // ── Loading skeleton ──────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // ── Empty state ───────────────────────────────────────────────────────────
+  if (teams.length === 0) {
     return (
       <DashboardLayout>
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6">
@@ -102,7 +232,7 @@ const Team = () => {
             <Users className="h-12 w-12 text-muted-foreground" />
           </div>
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-bold text-foreground">No Team Yet</h2>
+            <h2 className="text-2xl font-bold">No Team Yet</h2>
             <p className="text-muted-foreground max-w-md">
               Create a team to collaborate and manage branch scanning with your members
             </p>
@@ -112,7 +242,6 @@ const Team = () => {
             Create Team
           </Button>
 
-          {/* Create Team Modal */}
           <Dialog open={createTeamOpen} onOpenChange={setCreateTeamOpen}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
@@ -121,11 +250,12 @@ const Team = () => {
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
-                  <Label htmlFor="team-name">Team Name</Label>
+                  <Label htmlFor="team-name-empty">Team Name</Label>
                   <Input
-                    id="team-name"
+                    id="team-name-empty"
                     value={newTeamName}
-                    onChange={(e) => setNewTeamName(e.target.value)}
+                    onChange={e => setNewTeamName(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && handleCreateTeam()}
                     placeholder="e.g. SecureGuard Team"
                     className="bg-background/50 border-border/50"
                   />
@@ -133,12 +263,8 @@ const Team = () => {
               </div>
               <DialogFooter>
                 <Button variant="ghost" onClick={() => setCreateTeamOpen(false)}>Cancel</Button>
-                <Button
-                  onClick={handleCreateTeam}
-                  disabled={!newTeamName.trim()}
-                  className="bg-primary hover:bg-primary/90"
-                >
-                  Create Team
+                <Button onClick={handleCreateTeam} disabled={!newTeamName.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
+                  {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Team"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -148,24 +274,26 @@ const Team = () => {
     );
   }
 
+  // ── Main view ─────────────────────────────────────────────────────────────
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Team Switcher Dropdown + Create Team Button */}
-        <div className="flex items-center gap-3">
-          {userTeams.length > 1 ? (
+
+        {/* Team switcher + Create button */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {teams.length > 1 ? (
             <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
               <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
                 <SelectValue placeholder="Select a team" />
               </SelectTrigger>
               <SelectContent>
-                {userTeams.map((team) => (
+                {teams.map(team => (
                   <SelectItem key={team.id} value={team.id}>
                     <span className="flex items-center gap-2">
-                      {team.currentUserRole === "admin" && <Crown className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
+                      {team.current_user_role === "admin" && <Crown className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
                       <span className="truncate">{team.name}</span>
-                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 capitalize ${getRoleBadgeClasses(team.currentUserRole)}`}>
-                        {team.currentUserRole}
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 capitalize ${getRoleBadgeClasses(team.current_user_role)}`}>
+                        {team.current_user_role}
                       </Badge>
                     </span>
                   </SelectItem>
@@ -173,59 +301,62 @@ const Team = () => {
               </SelectContent>
             </Select>
           ) : (
-            <h1 className="text-2xl lg:text-3xl font-bold text-foreground">{selectedTeam?.name}</h1>
+            <h1 className="text-2xl lg:text-3xl font-bold">{selectedTeam?.name}</h1>
           )}
           <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
             <Plus className="h-4 w-4" />
             Create Team
           </Button>
         </div>
-        {userTeams.length === 1 && (
-          <p className="text-muted-foreground -mt-4">Team · {selectedTeam?.members.length} members</p>
+
+        {teams.length === 1 && (
+          <p className="text-muted-foreground -mt-4">Team · {selectedTeam?.member_count} members</p>
         )}
 
-        {/* Page Header */}
-        {userTeams.length > 1 && selectedTeam && (
+        {/* Header with team name edit + action buttons */}
+        {selectedTeam && (
           <div className="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              {editingTeamName && isAdmin ? (
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={tempTeamName}
-                    onChange={(e) => setTempTeamName(e.target.value)}
-                    className="bg-background/50 border-border/50 h-9 w-64"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        toast.success("Team name updated");
-                        setEditingTeamName(false);
-                      }
-                      if (e.key === "Escape") setEditingTeamName(false);
-                    }}
-                    autoFocus
-                  />
-                  <Button size="sm" variant="ghost" onClick={() => setEditingTeamName(false)}>Cancel</Button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <h1 className="text-2xl lg:text-3xl font-bold text-foreground">{selectedTeam.name}</h1>
-                  {isAdmin && (
-                    <button
-                      onClick={() => { setTempTeamName(selectedTeam.name); setEditingTeamName(true); }}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              )}
-              <p className="text-muted-foreground mt-1">Team · {selectedTeam.members.length} members</p>
-            </div>
+            {teams.length > 1 && (
+              <div>
+                {editingTeamName && isAdmin ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={tempTeamName}
+                      onChange={e => setTempTeamName(e.target.value)}
+                      className="bg-background/50 border-border/50 h-9 w-64"
+                      onKeyDown={e => {
+                        if (e.key === "Enter") handleRenameTeam();
+                        if (e.key === "Escape") setEditingTeamName(false);
+                      }}
+                      autoFocus
+                    />
+                    <Button size="sm" onClick={handleRenameTeam} disabled={actionLoading} className="bg-primary hover:bg-primary/90">
+                      {actionLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingTeamName(false)}>Cancel</Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-2xl lg:text-3xl font-bold">{selectedTeam.name}</h1>
+                    {isAdmin && (
+                      <button
+                        onClick={() => { setTempTeamName(selectedTeam.name); setEditingTeamName(true); }}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
+                <p className="text-muted-foreground mt-1">Team · {selectedTeam.member_count} members</p>
+              </div>
+            )}
 
             {isAdmin && (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 ml-auto">
                 <Button variant="outline" onClick={() => setConnectGithubOpen(true)} className="gap-2">
                   <Github className="h-4 w-4" />
-                  Connect GitHub Repo
+                  {selectedTeam.github_repo ? "Manage Repo" : "Connect GitHub Repo"}
                 </Button>
                 <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
                   <UserPlus className="h-4 w-4" />
@@ -233,20 +364,6 @@ const Team = () => {
                 </Button>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Single team — header with actions */}
-        {userTeams.length === 1 && isAdmin && (
-          <div className="flex items-center justify-end gap-3">
-            <Button variant="outline" onClick={() => setConnectGithubOpen(true)} className="gap-2">
-              <Github className="h-4 w-4" />
-              Connect GitHub Repo
-            </Button>
-            <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
-              <UserPlus className="h-4 w-4" />
-              Invite Member
-            </Button>
           </div>
         )}
 
@@ -258,13 +375,13 @@ const Team = () => {
           </div>
         )}
 
-        {/* Members Card */}
+        {/* Members table */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
             <div className="flex items-center gap-3">
               <CardTitle>Members</CardTitle>
               <Badge variant="outline" className="bg-muted/50 border-border/50">
-                {selectedTeam?.members.length || 0} members
+                {selectedTeam?.member_count ?? 0} members
               </Badge>
             </div>
           </CardHeader>
@@ -275,43 +392,50 @@ const Team = () => {
                   <TableHead>Member</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Assigned Branch</TableHead>
-                  <TableHead>Last Scan</TableHead>
                   {isAdmin && <TableHead className="w-16">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {selectedTeam?.members.map((member, index) => {
-                  const isSelf = member.id === CURRENT_USER_ID;
-                  const displayRole = getMemberRole(member, index);
+                {selectedTeam?.members.map(member => {
+                  const isSelf = member.user_id === user?.id;
+                  const displayName = member.profile.full_name ?? member.profile.email ?? "Unknown";
+                  const initials = getInitials(member.profile.full_name, member.profile.email);
 
                   return (
                     <TableRow
                       key={member.id}
                       className={`border-border/30 hover:bg-muted/10 ${isSelf ? "border-l-2 border-l-primary" : ""}`}
                     >
+                      {/* Member info */}
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar className="h-8 w-8">
+                            <AvatarImage src={member.profile.avatar_url ?? undefined} />
                             <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-                              {member.initials}
+                              {initials}
                             </AvatarFallback>
                           </Avatar>
                           <div>
                             <div className="flex items-center gap-2">
-                              <span className="font-medium text-foreground">{member.name}</span>
+                              <span className="font-medium text-foreground">{displayName}</span>
                               {isSelf && (
                                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-primary/10 text-primary border-primary/30">You</Badge>
                               )}
                             </div>
-                            <span className="text-xs text-muted-foreground">
-                              {member.name.toLowerCase().replace(" ", ".")}@email.com
-                            </span>
+                            {member.profile.email && (
+                              <span className="text-xs text-muted-foreground">{member.profile.email}</span>
+                            )}
                           </div>
                         </div>
                       </TableCell>
+
+                      {/* Role */}
                       <TableCell>
                         {isAdmin && !isSelf ? (
-                          <Select defaultValue={displayRole}>
+                          <Select
+                            value={member.role}
+                            onValueChange={val => handleUpdateMemberRole(member.user_id, val as TeamRole)}
+                          >
                             <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs">
                               <SelectValue />
                             </SelectTrigger>
@@ -322,43 +446,27 @@ const Team = () => {
                             </SelectContent>
                           </Select>
                         ) : (
-                          <Badge variant="outline" className={`text-xs ${getRoleBadgeClasses(displayRole)}`}>
-                            {displayRole}
+                          <Badge variant="outline" className={`text-xs ${getRoleBadgeClasses(member.role)}`}>
+                            {member.role}
                           </Badge>
                         )}
                       </TableCell>
+
+                      {/* Branch */}
                       <TableCell>
-                        {displayRole === "admin" ? (
+                        {member.role === "admin" ? (
                           <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">All Branches</Badge>
-                        ) : displayRole === "viewer" ? (
+                        ) : member.role === "viewer" ? (
                           <div className="flex items-center gap-1 text-muted-foreground">
                             <Lock className="h-3 w-3" />
                             <span className="text-xs">No branch</span>
                           </div>
-                        ) : isAdmin && !isSelf ? (
-                          selectedTeam?.githubRepo ? (
-                            <Select defaultValue={member.branch}>
-                              <SelectTrigger className="w-44 h-8 bg-background/50 border-border/50 text-xs">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {selectedTeam.branches?.map((branch) => (
-                                  <SelectItem key={branch} value={branch}>{branch}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <span className="text-xs text-muted-foreground italic">Connect repo first</span>
-                          )
                         ) : (
-                          <span className="text-sm text-foreground">{member.branch}</span>
+                          <span className="text-sm text-foreground">{member.branch ?? "—"}</span>
                         )}
                       </TableCell>
-                      <TableCell>
-                        <span className="text-sm text-muted-foreground">
-                          {member.lastScan || "Never"}
-                        </span>
-                      </TableCell>
+
+                      {/* Actions */}
                       {isAdmin && (
                         <TableCell>
                           {!isSelf && (
@@ -370,7 +478,7 @@ const Team = () => {
                               </AlertDialogTrigger>
                               <AlertDialogContent>
                                 <AlertDialogHeader>
-                                  <AlertDialogTitle>Remove {member.name} from the team?</AlertDialogTitle>
+                                  <AlertDialogTitle>Remove {displayName}?</AlertDialogTitle>
                                   <AlertDialogDescription>
                                     This will remove their access to all team projects and scans.
                                   </AlertDialogDescription>
@@ -378,10 +486,10 @@ const Team = () => {
                                 <AlertDialogFooter>
                                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                                   <AlertDialogAction
-                                    onClick={() => toast.success(`${member.name} removed from team`)}
+                                    onClick={() => handleRemoveMember(member.user_id, displayName)}
                                     className="bg-destructive hover:bg-destructive/90"
                                   >
-                                    Confirm
+                                    Remove
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
@@ -397,43 +505,39 @@ const Team = () => {
           </CardContent>
         </Card>
 
-        {/* GitHub Repository Card */}
+        {/* GitHub Repository card */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
             <CardTitle>GitHub Repository</CardTitle>
           </CardHeader>
           <CardContent>
-            {selectedTeam?.githubRepo ? (
+            {selectedTeam?.github_repo ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-3 flex-wrap">
                   <Github className="h-5 w-5 text-foreground" />
                   <a
-                    href={selectedTeam.githubRepo}
+                    href={selectedTeam.github_repo}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary hover:underline text-sm flex items-center gap-1"
                   >
-                    {selectedTeam.githubRepo.replace("https://github.com/", "")}
+                    {selectedTeam.github_repo.replace("https://github.com/", "")}
                     <ExternalLink className="h-3 w-3" />
                   </a>
                   <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
                 </div>
-                <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                  <span>Connected on Jan 15, 2024</span>
-                  <span>·</span>
-                  <span>{selectedTeam.branches?.length || 0} branches synced</span>
-                </div>
                 {isAdmin && (
                   <div className="flex items-center gap-3">
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={() => toast.success("Branches refreshed")}>
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={() => toast.info("Branch sync coming soon")}>
                       <RefreshCw className="h-4 w-4" />
                       Refresh Branches
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={actionLoading}
                       className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
-                      onClick={() => toast.success("Repository disconnected")}
+                      onClick={handleDisconnectGithub}
                     >
                       Disconnect
                     </Button>
@@ -444,7 +548,7 @@ const Team = () => {
               <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-4">
                 <Github className="h-10 w-10 text-muted-foreground" />
                 <div className="text-center space-y-1">
-                  <p className="font-medium text-foreground">No repository connected</p>
+                  <p className="font-medium">No repository connected</p>
                   <p className="text-sm text-muted-foreground">
                     Connect a GitHub repository to enable branch-based scanning for your team
                   </p>
@@ -462,12 +566,14 @@ const Team = () => {
 
       </div>
 
-      {/* Invite Member Modal */}
+      {/* ── Modals ─────────────────────────────────────────────────────────── */}
+
+      {/* Invite Member */}
       <Dialog open={inviteModalOpen} onOpenChange={setInviteModalOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Invite Member</DialogTitle>
-            <DialogDescription>Add a new member to your team</DialogDescription>
+            <DialogDescription>Add a new member to your team by their email address</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -476,52 +582,42 @@ const Team = () => {
                 id="invite-email"
                 type="email"
                 value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="Enter email address"
+                onChange={e => setInviteEmail(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleInviteMember()}
+                placeholder="colleague@company.com"
                 className="bg-background/50 border-border/50"
               />
             </div>
             <div className="space-y-2">
               <Label>Role</Label>
               <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => setInviteRole("developer")}
-                  className={`p-3 rounded-xl border text-center transition-all ${
-                    inviteRole === "developer"
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : "border-border/50 bg-card/50 text-muted-foreground hover:text-foreground hover:border-border"
-                  }`}
-                >
-                  <span className="text-sm font-medium">Developer</span>
-                </button>
-                <button
-                  onClick={() => setInviteRole("viewer")}
-                  className={`p-3 rounded-xl border text-center transition-all ${
-                    inviteRole === "viewer"
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : "border-border/50 bg-card/50 text-muted-foreground hover:text-foreground hover:border-border"
-                  }`}
-                >
-                  <span className="text-sm font-medium">Viewer</span>
-                </button>
+                {(["developer", "viewer"] as const).map(r => (
+                  <button
+                    key={r}
+                    onClick={() => setInviteRole(r)}
+                    className={`p-3 rounded-xl border text-center transition-all capitalize ${
+                      inviteRole === r
+                        ? "border-primary/40 bg-primary/10 text-foreground"
+                        : "border-border/50 bg-card/50 text-muted-foreground hover:text-foreground hover:border-border"
+                    }`}
+                  >
+                    <span className="text-sm font-medium">{r}</span>
+                  </button>
+                ))}
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">An invite link will be sent to their email address</p>
+            <p className="text-xs text-muted-foreground">The user must already have an account in SecureGuard Pro.</p>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setInviteModalOpen(false)}>Cancel</Button>
-            <Button
-              onClick={handleInviteMember}
-              disabled={!inviteEmail}
-              className="bg-primary hover:bg-primary/90"
-            >
-              Send Invite
+            <Button onClick={handleInviteMember} disabled={!inviteEmail.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
+              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add Member"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Connect GitHub Modal */}
+      {/* Connect GitHub */}
       <Dialog open={connectGithubOpen} onOpenChange={setConnectGithubOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -534,7 +630,7 @@ const Team = () => {
               <Input
                 id="repo-url"
                 value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
+                onChange={e => setRepoUrl(e.target.value)}
                 placeholder="https://github.com/username/repo"
                 className="bg-background/50 border-border/50"
               />
@@ -546,7 +642,7 @@ const Team = () => {
                   id="repo-pat"
                   type={showPat ? "text" : "password"}
                   value={repoPat}
-                  onChange={(e) => setRepoPat(e.target.value)}
+                  onChange={e => setRepoPat(e.target.value)}
                   placeholder="ghp_xxxxxxxxxxxx"
                   className="bg-background/50 border-border/50 pr-10"
                 />
@@ -562,25 +658,19 @@ const Team = () => {
             </div>
             <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 border border-border/30">
               <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-              <p className="text-xs text-muted-foreground">
-                We only read your code for scanning. We never modify your repository.
-              </p>
+              <p className="text-xs text-muted-foreground">We only read your code for scanning. We never modify your repository.</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConnectGithubOpen(false)}>Cancel</Button>
-            <Button
-              onClick={handleConnectGithub}
-              disabled={!repoUrl}
-              className="bg-primary hover:bg-primary/90"
-            >
-              Connect Repository
+            <Button onClick={handleConnectGithub} disabled={!repoUrl.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
+              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Connect Repository"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Create Team Modal */}
+      {/* Create Team */}
       <Dialog open={createTeamOpen} onOpenChange={setCreateTeamOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -593,7 +683,8 @@ const Team = () => {
               <Input
                 id="create-team-name"
                 value={newTeamName}
-                onChange={(e) => setNewTeamName(e.target.value)}
+                onChange={e => setNewTeamName(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleCreateTeam()}
                 placeholder="e.g. SecureGuard Team"
                 className="bg-background/50 border-border/50"
               />
@@ -601,16 +692,13 @@ const Team = () => {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreateTeamOpen(false)}>Cancel</Button>
-            <Button
-              onClick={handleCreateTeam}
-              disabled={!newTeamName.trim()}
-              className="bg-primary hover:bg-primary/90"
-            >
-              Create Team
+            <Button onClick={handleCreateTeam} disabled={!newTeamName.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
+              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Team"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </DashboardLayout>
   );
 };
