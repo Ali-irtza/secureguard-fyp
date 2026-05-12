@@ -3,10 +3,9 @@ import { Upload, FileCode, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-const SUPPORTED_EXTENSIONS = [".py", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".zip"];
+const SUPPORTED_EXTENSIONS = [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".zip"];
 
 const LANGUAGE_BADGES = [
-  { ext: ".py", label: "Python", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
   { ext: ".c", label: "C", color: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
   { ext: ".cpp", label: "C++", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
   { ext: ".zip", label: "ZIP", color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" },
@@ -26,7 +25,7 @@ const validateFile = (file: File): boolean => {
   const extension = "." + file.name.split(".").pop()?.toLowerCase();
   if (!SUPPORTED_EXTENSIONS.includes(extension)) {
     toast.error(`Unsupported file type: ${extension}`, {
-      description: "Please upload Python (.py), C (.c, .h), C++ (.cpp, .hpp), or .zip files only.",
+      description: "Please upload C (.c, .h), C++ (.cpp, .hpp), or .zip files only.",
     });
     return false;
   }
@@ -129,7 +128,7 @@ export const FileUploadArea = ({
           </div>
           {uploadedFiles.length === 0 && (
             <p className="text-xs text-muted-foreground/70">
-              Supports .py, .c, .cpp, .h, .hpp files or a .zip archive up to 50MB
+              Supports .c, .cpp, .h, .hpp files or a .zip archive up to 50MB
             </p>
           )}
         </div>

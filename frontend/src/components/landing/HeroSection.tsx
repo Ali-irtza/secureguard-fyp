@@ -33,7 +33,7 @@ const HeroSection = () => {
 
           {/* Subhead */}
           <p className="text-lg md:text-xl text-muted-foreground mb-10 max-w-2xl mx-auto">
-            Detect hidden vulnerabilities in Python and C++ before deployment. 
+            Detect hidden vulnerabilities in C and C++ before deployment. 
             Protect your applications with enterprise-grade security analysis.
           </p>
 

@@ -58,7 +58,7 @@ import { mockTeams, CURRENT_USER_ID, type TeamRole } from "@/lib/team-data";
 interface Project {
   id: string;
   name: string;
-  language: "Python" | "C" | "C++";
+  language: "C" | "C++";
   lastScan: string;
   healthScore: "A" | "B" | "C" | "D" | "F";
   type: "personal" | "team";
@@ -71,18 +71,17 @@ type SortField = "name" | "language" | "lastScan" | "healthScore";
 type SortDirection = "asc" | "desc";
 
 const mockProjects: Project[] = [
-  { id: "1", name: "api-gateway", language: "Python", lastScan: "2024-12-08", healthScore: "A", type: "personal" },
+  { id: "1", name: "api-gateway", language: "C", lastScan: "2024-12-08", healthScore: "A", type: "personal" },
   { id: "2", name: "auth-service", language: "C++", lastScan: "2024-12-07", healthScore: "B", type: "team", teamId: "team-1", teamName: "SecureGuard Team", hasGithubRepo: true },
-  { id: "3", name: "payment-module", language: "Python", lastScan: "2024-12-05", healthScore: "C", type: "team", teamId: "team-1", teamName: "SecureGuard Team", hasGithubRepo: true },
+  { id: "3", name: "payment-module", language: "C++", lastScan: "2024-12-05", healthScore: "C", type: "team", teamId: "team-1", teamName: "SecureGuard Team", hasGithubRepo: true },
   { id: "4", name: "data-processor", language: "C", lastScan: "2024-12-04", healthScore: "A", type: "personal" },
-  { id: "5", name: "ml-pipeline", language: "Python", lastScan: "2024-12-03", healthScore: "D", type: "personal" },
+  { id: "5", name: "ml-pipeline", language: "C++", lastScan: "2024-12-03", healthScore: "D", type: "personal" },
   { id: "6", name: "embedded-firmware", language: "C", lastScan: "2024-12-01", healthScore: "B", type: "team", teamId: "team-2", teamName: "Ali's Project", hasGithubRepo: true },
   { id: "7", name: "crypto-lib", language: "C++", lastScan: "2024-11-28", healthScore: "F", type: "personal" },
-  { id: "8", name: "web-scraper", language: "Python", lastScan: "2024-11-25", healthScore: "A", type: "personal" },
+  { id: "8", name: "web-scraper", language: "C", lastScan: "2024-11-25", healthScore: "A", type: "personal" },
 ];
 
 const languageBadgeStyles: Record<string, string> = {
-  Python: "bg-blue-500/20 text-blue-400 border-blue-500/30",
   C: "bg-gray-500/20 text-gray-400 border-gray-500/30",
   "C++": "bg-purple-500/20 text-purple-400 border-purple-500/30",
 };
@@ -265,7 +264,7 @@ const Projects = () => {
     const newProject: Project = {
       id: `proj-${Date.now()}`,
       name: newProjectName.trim(),
-      language: "Python",
+      language: "C",
       lastScan: new Date().toISOString().split("T")[0],
       healthScore: "A",
       type: newProjectType,
@@ -424,7 +423,6 @@ const Projects = () => {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Languages</SelectItem>
-              <SelectItem value="Python">Python</SelectItem>
               <SelectItem value="C">C</SelectItem>
               <SelectItem value="C++">C++</SelectItem>
             </SelectContent>

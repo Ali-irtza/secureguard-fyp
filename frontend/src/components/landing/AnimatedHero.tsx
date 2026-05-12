@@ -122,7 +122,7 @@ const AnimatedHero = () => {
             }`}
             style={{ transitionDelay: "800ms" }}
           >
-            Detect hidden vulnerabilities in Python and C++ before deployment. 
+            Detect hidden vulnerabilities in C and C++ before deployment. 
             Protect your applications with enterprise-grade security analysis.
           </p>
 

@@ -17,11 +17,10 @@ interface CodeViewerProps {
 
 const getLanguageKeywords = (language: string): string[] => {
   const keywords: Record<string, string[]> = {
-    python: ["def", "class", "import", "from", "if", "else", "elif", "for", "while", "return", "try", "except", "with", "as", "lambda", "yield", "raise", "pass", "break", "continue", "and", "or", "not", "in", "is", "None", "True", "False", "async", "await", "global", "nonlocal"],
     c: ["int", "char", "float", "double", "void", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "return", "struct", "typedef", "enum", "union", "const", "static", "extern", "sizeof", "unsigned", "signed", "long", "short", "include", "define", "NULL"],
     cpp: ["int", "char", "float", "double", "void", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "return", "struct", "typedef", "enum", "union", "const", "static", "extern", "sizeof", "unsigned", "signed", "long", "short", "include", "define", "NULL", "class", "public", "private", "protected", "virtual", "override", "new", "delete", "template", "typename", "namespace", "using", "try", "catch", "throw", "nullptr", "auto", "bool", "true", "false", "const_cast", "static_cast", "dynamic_cast", "reinterpret_cast"]
   };
-  return keywords[language] || keywords.python;
+  return keywords[language] || keywords.c;
 };
 
 const highlightSyntax = (content: string, language: string): React.ReactNode => {
@@ -33,12 +32,8 @@ const highlightSyntax = (content: string, language: string): React.ReactNode => 
   // Highlight strings
   result = result.replace(/(["'`])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="text-amber-400">$&</span>');
   
-  // Highlight comments
-  if (language === "python") {
-    result = result.replace(/(#.*)$/gm, '<span class="text-muted-foreground italic">$1</span>');
-  } else {
-    result = result.replace(/(\/\/.*)$/gm, '<span class="text-muted-foreground italic">$1</span>');
-  }
+  // Highlight comments (C/C++ style only)
+  result = result.replace(/(\/\/.*)$/gm, '<span class="text-muted-foreground italic">$1</span>');
   
   // Highlight keywords
   keywords.forEach(keyword => {

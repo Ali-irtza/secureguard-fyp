@@ -175,3 +175,11 @@ class TeamListResponse(BaseModel):
     Response for GET /teams — list of all teams the user belongs to.
     """
     teams: List[TeamResponse]
+
+
+class GithubAuthorizeResponse(BaseModel):
+    """
+    Response for GET /teams/{team_id}/github/authorize
+    Returns the GitHub OAuth URL the frontend should redirect the user to.
+    """
+    authorization_url: str
