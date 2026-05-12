@@ -27,6 +27,16 @@ from app.models.teams import (
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+GITHUB_API = "https://api.github.com"
+FRONTEND_TEAM_URL = "http://localhost:8080/team"
+
+# GitHub App slug — must match the URL slug on github.com/settings/apps
+GITHUB_APP_SLUG = "secureguard-pro"
+
+# ---------------------------------------------------------------------------
 # GitHub App helpers
 # ---------------------------------------------------------------------------
 
@@ -414,8 +424,6 @@ async def delete_team(
 # Admin only.
 # ---------------------------------------------------------------------------
 
-GITHUB_API = "https://api.github.com"
-
 def _parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
     """
     Extracts owner and repo name from a GitHub URL.
@@ -558,54 +566,12 @@ async def refresh_github_branches(
 
 
 # ---------------------------------------------------------------------------
-# GET /teams/{team_id}/github/authorize
+# GET /teams/github/callback
 # ---------------------------------------------------------------------------
-# Step 1 of OAuth flow.
-# Returns the GitHub authorization URL the frontend redirects the user to.
-# Embeds team_id in the `state` param so the callback knows which team to update.
-# Admin only.
+# IMPORTANT: This route MUST be registered before /{team_id}/... routes.
+# If it comes after, FastAPI will match "github" as a team_id and never
+# reach this handler.
 # ---------------------------------------------------------------------------
-
-@router.get("/{team_id}/github/authorize", response_model=GithubAuthorizeResponse)
-async def github_authorize(
-    team_id: str,
-    current_user=Depends(get_current_user),
-    supabase: Client = Depends(get_supabase),
-):
-    """
-    Returns the GitHub App installation URL.
-
-    GitHub App flow is different from OAuth:
-    - User goes to the GitHub App install page
-    - They select which repos to grant access to
-    - GitHub redirects to our callback with an installation_id
-    - We use that installation_id to get tokens on demand
-
-    State param = "{team_id}:{csrf_token}" — CSRF protection.
-    """
-    if not settings.github_app_id or not settings.github_client_id:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="GitHub App is not configured on this server",
-        )
-
-    user_id = current_user.id
-    _require_admin(team_id, user_id, supabase)
-
-    # CSRF token stored temporarily so callback can verify
-    csrf_token = secrets.token_urlsafe(32)
-    state = f"{team_id}:{csrf_token}"
-    supabase.table("teams").update({"github_oauth_token": f"pending:{csrf_token}"}).eq("id", team_id).execute()
-
-    # GitHub App installation URL — user picks repos here
-    # After install, GitHub redirects to our callback_url with installation_id
-    authorization_url = (
-        f"https://github.com/apps/secureguard-pro/installations/new"
-        f"?state={state}"
-    )
-
-    return GithubAuthorizeResponse(authorization_url=authorization_url)
-
 
 @router.get("/github/callback")
 async def github_callback(
@@ -655,6 +621,56 @@ async def github_callback(
 
     # Redirect to frontend — repo picker will load via /github/repos
     return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_connected=true&team_id={team_id}")
+
+
+# ---------------------------------------------------------------------------
+# GET /teams/{team_id}/github/authorize
+# ---------------------------------------------------------------------------
+# Step 1 of GitHub App flow.
+# Returns the GitHub App installation URL the frontend redirects the user to.
+# Embeds team_id in the `state` param so the callback knows which team to update.
+# Admin only.
+# ---------------------------------------------------------------------------
+
+@router.get("/{team_id}/github/authorize", response_model=GithubAuthorizeResponse)
+async def github_authorize(
+    team_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Returns the GitHub App installation URL.
+
+    GitHub App flow:
+    - User goes to the GitHub App install page
+    - They select which repos to grant access to
+    - GitHub redirects to our callback with an installation_id
+    - We use that installation_id to get tokens on demand
+
+    State param = "{team_id}:{csrf_token}" — CSRF protection.
+    """
+    if not settings.github_app_id or not settings.github_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub App is not configured on this server",
+        )
+
+    user_id = current_user.id
+    _require_admin(team_id, user_id, supabase)
+
+    # CSRF token stored temporarily so callback can verify
+    csrf_token = secrets.token_urlsafe(32)
+    state = f"{team_id}:{csrf_token}"
+    supabase.table("teams").update({"github_oauth_token": f"pending:{csrf_token}"}).eq("id", team_id).execute()
+
+    # GitHub App installation URL — user picks repos here
+    # After install, GitHub redirects to our callback_url with installation_id
+    authorization_url = (
+        f"https://github.com/apps/{GITHUB_APP_SLUG}/installations/new"
+        f"?state={state}"
+    )
+
+    return GithubAuthorizeResponse(authorization_url=authorization_url)
 
 
 # ---------------------------------------------------------------------------

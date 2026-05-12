@@ -44,40 +44,6 @@ import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 
 // Mock code samples for different languages
 const MOCK_CODE = {
-  python: `import os
-import sqlite3
-from flask import Flask, request
-
-app = Flask(__name__)
-
-def get_user(user_id):
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    # SQL Injection vulnerability
-    query = f"SELECT * FROM users WHERE id = {user_id}"
-    cursor.execute(query)
-    return cursor.fetchone()
-
-@app.route('/login', methods=['POST'])
-def login():
-    username = request.form['username']
-    password = request.form['password']
-    
-    # Hardcoded credentials
-    if username == 'admin' and password == 'password123':
-        return 'Login successful'
-    
-    return 'Invalid credentials'
-
-@app.route('/exec', methods=['POST'])
-def execute():
-    # Command injection vulnerability
-    cmd = request.form['cmd']
-    os.system(cmd)
-    return 'Executed'
-
-if __name__ == '__main__':
-    app.run(debug=True)`,
   c: `#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -176,9 +142,6 @@ int main() {
 
 // Vulnerability patterns for simulation
 const VULNERABILITY_PATTERNS = [
-  { line: 11, message: "SQL Injection", lang: "python" },
-  { line: 18, message: "Hardcoded Credentials", lang: "python" },
-  { line: 26, message: "Command Injection", lang: "python" },
   { line: 7, message: "Buffer Overflow", lang: "c" },
   { line: 12, message: "Hardcoded Password", lang: "c" },
   { line: 18, message: "Format String Vuln", lang: "c" },
@@ -269,10 +232,10 @@ const NewScan = () => {
 
   const detectLanguage = (filename: string): string => {
     const ext = filename.split(".").pop()?.toLowerCase();
-    if (ext === "py") return "python";
+    if (ext === "py") return "c"; // fallback to c if somehow a .py slips through
     if (ext === "c" || ext === "h") return "c";
     if (["cpp", "cc", "cxx", "hpp"].includes(ext || "")) return "cpp";
-    return "python";
+    return "c";
   };
 
   const addLog = useCallback((message: string, type: LogEntry["type"] = "info") => {
@@ -298,9 +261,9 @@ const NewScan = () => {
     const firstFile = uploadedFiles[0];
     const detectedLang = firstFile 
       ? detectLanguage(firstFile.name) 
-      : language === "auto" ? "python" : language;
+      : language === "auto" ? "c" : language;
     
-    const code = fileContent || MOCK_CODE[detectedLang as keyof typeof MOCK_CODE] || MOCK_CODE.python;
+    const code = fileContent || MOCK_CODE[detectedLang as keyof typeof MOCK_CODE] || MOCK_CODE.c;
     const lines = code.split("\n");
     
     const initialLines: CodeLine[] = lines.map((content, index) => ({
@@ -806,7 +769,7 @@ const NewScan = () => {
                   <CodeViewer
                     lines={codeLines}
                     currentLine={currentLine}
-                    language={firstFile ? detectLanguage(firstFile.name) : "python"}
+                    language={firstFile ? detectLanguage(firstFile.name) : "c"}
                   />
                 </div>
               </div>
@@ -834,7 +797,7 @@ const NewScan = () => {
               </h1>
             </div>
             <p className="text-muted-foreground max-w-lg">
-              Upload your Python, C, or C++ code to detect vulnerabilities, 
+              Upload your C or C++ code to detect vulnerabilities, 
               security flaws, and potential exploits using AI-powered analysis.
             </p>
           </div>
@@ -939,7 +902,6 @@ const NewScan = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="auto">Auto-detect</SelectItem>
-                      <SelectItem value="python">Python</SelectItem>
                       <SelectItem value="c">C</SelectItem>
                       <SelectItem value="cpp">C++</SelectItem>
                     </SelectContent>

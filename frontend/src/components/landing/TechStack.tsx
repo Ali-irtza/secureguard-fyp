@@ -1,7 +1,7 @@
 const technologies = [
   {
-    name: "Python",
-    icon: "🐍",
+    name: "C / C++",
+    icon: "⚙️",
     description: "Core Analysis Engine",
   },
   {

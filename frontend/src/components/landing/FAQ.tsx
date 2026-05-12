@@ -8,7 +8,7 @@ import {
 const faqs = [
   {
     question: "What programming languages are supported?",
-    answer: "SecureGuard Pro currently supports Python and C++ with deep analysis capabilities. Our AI models are trained specifically on security patterns for each supported language.",
+    answer: "SecureGuard Pro currently supports C and C++ with deep analysis capabilities. Our AI models are trained specifically on security patterns for each supported language.",
   },
   {
     question: "How secure is my code during scanning?",
