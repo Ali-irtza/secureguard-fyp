@@ -78,17 +78,40 @@ async function apiFetch<T>(
 }
 
 // ---------------------------------------------------------------------------
+// Teams Cache — avoids re-fetching on every page navigation
+// ---------------------------------------------------------------------------
+// Simple in-memory cache with TTL. Mutations auto-invalidate it.
+// Survives SPA navigation but clears on full page refresh (which is fine).
+// ---------------------------------------------------------------------------
+
+const TEAMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+let _teamsCache: { data: Team[]; timestamp: number } | null = null;
+
+/** Clear the teams cache — called after any mutation */
+export function invalidateTeamsCache(): void {
+  _teamsCache = null;
+}
+
+// ---------------------------------------------------------------------------
 // Teams API
 // ---------------------------------------------------------------------------
 
-/** GET /teams — all teams the current user belongs to */
+/** GET /teams — all teams the current user belongs to (cached) */
 export async function listTeams(): Promise<Team[]> {
+  // Return cached data if fresh
+  if (_teamsCache && Date.now() - _teamsCache.timestamp < TEAMS_CACHE_TTL_MS) {
+    return _teamsCache.data;
+  }
+
   const data = await apiFetch<{ teams: Team[] }>("/teams");
+  _teamsCache = { data: data.teams, timestamp: Date.now() };
   return data.teams;
 }
 
 /** POST /teams — create a new team */
 export async function createTeam(name: string): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>("/teams", {
     method: "POST",
     body: JSON.stringify({ name }),
@@ -105,6 +128,7 @@ export async function updateTeam(
   teamId: string,
   updates: { name?: string; github_repo?: string }
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}`, {
     method: "PATCH",
     body: JSON.stringify(updates),
@@ -113,6 +137,7 @@ export async function updateTeam(
 
 /** DELETE /teams/:id */
 export async function deleteTeam(teamId: string): Promise<void> {
+  invalidateTeamsCache();
   return apiFetch<void>(`/teams/${teamId}`, { method: "DELETE" });
 }
 
@@ -122,6 +147,7 @@ export async function connectGithub(
   repoUrl: string,
   pat: string
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}/github`, {
     method: "POST",
     body: JSON.stringify({ repo_url: repoUrl, pat }),
@@ -134,6 +160,7 @@ export async function refreshGithubBranches(
   repoUrl: string,
   pat: string
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}/github/refresh`, {
     method: "POST",
     body: JSON.stringify({ repo_url: repoUrl, pat }),
@@ -162,6 +189,7 @@ export async function selectGithubRepo(
   repoFullName: string,
   repoUrl: string
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}/github/select-repo`, {
     method: "POST",
     body: JSON.stringify({ repo_full_name: repoFullName, repo_url: repoUrl }),
@@ -174,6 +202,7 @@ export async function inviteMember(
   email: string,
   role: "developer" | "viewer"
 ): Promise<TeamMember> {
+  invalidateTeamsCache();
   return apiFetch<TeamMember>(`/teams/${teamId}/members`, {
     method: "POST",
     body: JSON.stringify({ email, role }),
@@ -186,6 +215,7 @@ export async function updateMember(
   userId: string,
   updates: { role?: TeamRole; branch?: string }
 ): Promise<TeamMember> {
+  invalidateTeamsCache();
   return apiFetch<TeamMember>(`/teams/${teamId}/members/${userId}`, {
     method: "PATCH",
     body: JSON.stringify(updates),
@@ -197,7 +227,52 @@ export async function removeMember(
   teamId: string,
   userId: string
 ): Promise<void> {
+  invalidateTeamsCache();
   return apiFetch<void>(`/teams/${teamId}/members/${userId}`, {
     method: "DELETE",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Branch File Browsing
+// ---------------------------------------------------------------------------
+
+export interface BranchFileItem {
+  path: string;
+  type: "file" | "directory";
+  size: number | null;
+}
+
+export interface BranchFilesResponse {
+  branch: string;
+  files: BranchFileItem[];
+}
+
+export interface FileContentResponse {
+  branch: string;
+  path: string;
+  content: string;
+  size: number;
+  encoding: string;
+}
+
+/** GET /teams/:id/branches/:branch/files — fetch file tree for a branch */
+export async function fetchBranchFiles(
+  teamId: string,
+  branch: string
+): Promise<BranchFilesResponse> {
+  return apiFetch<BranchFilesResponse>(
+    `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files`
+  );
+}
+
+/** GET /teams/:id/branches/:branch/files/content?path=... — fetch single file content */
+export async function fetchFileContent(
+  teamId: string,
+  branch: string,
+  filePath: string
+): Promise<FileContentResponse> {
+  return apiFetch<FileContentResponse>(
+    `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files/content?path=${encodeURIComponent(filePath)}`
+  );
 }
