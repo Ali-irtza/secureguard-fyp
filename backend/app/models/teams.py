@@ -116,13 +116,14 @@ class InviteMemberRequest(BaseModel):
         return v.strip().lower()
 
 
-class UpdateMemberRequest(TeamMemberBase):
+class UpdateMemberRequest(BaseModel):
     """
     PATCH /teams/{team_id}/members/{user_id}
     Update a member's role and/or assigned branch.
     Only admins can call this endpoint.
     """
-    pass  # inherits role + branch from TeamMemberBase
+    role:   Optional[TeamRole] = None
+    branch: Optional[str]      = None
 
 
 # ---------------------------------------------------------------------------
@@ -183,3 +184,33 @@ class GithubAuthorizeResponse(BaseModel):
     Returns the GitHub OAuth URL the frontend should redirect the user to.
     """
     authorization_url: str
+
+
+class BranchFileItem(BaseModel):
+    """
+    A single file or directory entry in a branch's file tree.
+    Returned by the Git Trees API.
+    """
+    path:  str
+    type:  str            # "file" or "directory"
+    size:  Optional[int] = None  # bytes, only for files (blobs)
+
+
+class BranchFilesResponse(BaseModel):
+    """
+    Response for GET /teams/{team_id}/branches/{branch}/files
+    """
+    branch: str
+    files:  List[BranchFileItem]
+
+
+class FileContentResponse(BaseModel):
+    """
+    Response for GET /teams/{team_id}/branches/{branch}/files/content
+    Returns the decoded text content of a single file.
+    """
+    branch:   str
+    path:     str
+    content:  str           # decoded file content (UTF-8 text)
+    size:     int           # size in bytes
+    encoding: str = "utf-8"
