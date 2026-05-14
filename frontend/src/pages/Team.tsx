@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import BranchFileExplorer from "@/components/dashboard/BranchFileExplorer";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -178,10 +179,26 @@ const Team = () => {
   const handleOAuthCallback = useCallback(async (teamId: string) => {
     // Called when user returns from GitHub OAuth — load their repos
     setReposLoading(true);
-    setRepoPicker(true);
     try {
       const repos = await listGithubRepos(teamId);
-      setGithubRepos(repos);
+      
+      if (repos.length === 1) {
+        // Auto-connect if exactly one repository is selected
+        setActionLoading(true);
+        try {
+          const updated = await selectGithubRepo(teamId, repos[0].full_name, repos[0].url);
+          setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+          toast.success(`Connected ${repos[0].full_name} — ${updated.github_branches.length} branches synced`);
+        } catch (err: any) {
+          toast.error(err.message ?? "Failed to connect repository");
+        } finally {
+          setActionLoading(false);
+        }
+      } else {
+        // Multiple repos selected, show the picker modal
+        setGithubRepos(repos);
+        setRepoPicker(true);
+      }
     } catch (err: any) {
       toast.error(err.message ?? "Failed to load repositories");
       setRepoPicker(false);
@@ -642,8 +659,15 @@ const Team = () => {
                   </a>
                   <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
                 </div>
-                <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                  <span>{selectedTeam.github_branches.length} branches synced</span>
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm text-muted-foreground">{selectedTeam.github_branches.length} branches synced</span>
+                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-2">
+                    {selectedTeam.github_branches.map(branch => (
+                      <Badge key={branch} variant="secondary" className="text-[10px] font-normal bg-muted/50 hover:bg-muted/80">
+                        {branch}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
                 {isAdmin && (
                   <div className="flex items-center gap-3">
@@ -682,6 +706,17 @@ const Team = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* Branch File Explorer */}
+        {selectedTeam && selectedTeam.github_repo && (
+          <BranchFileExplorer
+            team={selectedTeam}
+            currentUserRole={currentUserRole}
+            currentUserBranch={
+              selectedTeam.members.find(m => m.user_id === user?.id)?.branch ?? null
+            }
+          />
+        )}
 
       </div>
 
