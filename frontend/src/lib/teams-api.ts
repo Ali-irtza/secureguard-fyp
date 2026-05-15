@@ -17,7 +17,7 @@ export interface TeamMember {
   id: string;           // team_members row id
   user_id: string;
   role: TeamRole;
-  branch: string | null;
+  branches: string[] | null;
   profile: MemberProfile;
   joined_at: string;
 }
@@ -209,11 +209,11 @@ export async function inviteMember(
   });
 }
 
-/** PATCH /teams/:id/members/:userId — update role and/or branch */
+/** PATCH /teams/:id/members/:userId — update role and/or branches */
 export async function updateMember(
   teamId: string,
   userId: string,
-  updates: { role?: TeamRole; branch?: string }
+  updates: { role?: TeamRole; branches?: string[] }
 ): Promise<TeamMember> {
   invalidateTeamsCache();
   return apiFetch<TeamMember>(`/teams/${teamId}/members/${userId}`, {

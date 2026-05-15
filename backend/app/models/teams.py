@@ -119,11 +119,11 @@ class InviteMemberRequest(BaseModel):
 class UpdateMemberRequest(BaseModel):
     """
     PATCH /teams/{team_id}/members/{user_id}
-    Update a member's role and/or assigned branch.
+    Update a member's role and/or assigned branches.
     Only admins can call this endpoint.
     """
-    role:   Optional[TeamRole] = None
-    branch: Optional[str]      = None
+    role:     Optional[TeamRole]   = None
+    branches: Optional[List[str]]  = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +146,12 @@ class TeamMemberResponse(BaseModel):
     A single member row as returned by the API.
     Combines team_members table data with the member's profile.
     """
-    id:         str           # team_members.id (the junction row id)
+    id:         str               # team_members.id (the junction row id)
     user_id:    str
     role:       TeamRole
-    branch:     Optional[str] = None
+    branches:   Optional[List[str]] = None
     profile:    MemberProfile
-    joined_at:  datetime      # team_members.created_at
+    joined_at:  datetime            # team_members.created_at
 
 
 class TeamResponse(BaseModel):

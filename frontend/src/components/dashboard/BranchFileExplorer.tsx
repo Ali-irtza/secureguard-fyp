@@ -197,13 +197,13 @@ function sortNodes(nodes: TreeNode[]): TreeNode[] {
 interface BranchFileExplorerProps {
   team: Team;
   currentUserRole: TeamRole;
-  currentUserBranch: string | null;
+  currentUserBranches: string[] | null;
 }
 
 export default function BranchFileExplorer({
   team,
   currentUserRole,
-  currentUserBranch,
+  currentUserBranches,
 }: BranchFileExplorerProps) {
   const isAdmin = currentUserRole === "admin";
   const isDeveloper = currentUserRole === "developer";
@@ -219,12 +219,20 @@ export default function BranchFileExplorer({
   const [fileSize, setFileSize] = useState<number>(0);
   const [expandedFile, setExpandedFile] = useState(false);
 
-  // Auto-select branch for developers
+  // Auto-select branch for developers: pick first assigned branch
+  // Load cached content if available
   useEffect(() => {
-    if (isDeveloper && currentUserBranch) {
-      setSelectedBranch(currentUserBranch);
+    if (isDeveloper && currentUserBranches && currentUserBranches.length > 0) {
+      const firstBranch = currentUserBranches[0];
+      setSelectedBranch(firstBranch);
+      
+      // Try to load cached files for this branch
+      const cachedFiles = getCachedBranchFiles(team.id, firstBranch);
+      if (cachedFiles) {
+        setFiles(cachedFiles.files);
+      }
     }
-  }, [isDeveloper, currentUserBranch]);
+  }, [isDeveloper, currentUserBranches, team.id]);
 
   // Fetch file tree when branch changes — stale-while-revalidate
   useEffect(() => {
@@ -326,8 +334,8 @@ export default function BranchFileExplorer({
   // ── No repo connected ────────────────────────────────────────────────────
   if (!team.github_repo) return null;
 
-  // ── Developer without assigned branch ────────────────────────────────────
-  if (isDeveloper && !currentUserBranch) {
+  // ── Developer without assigned branches ──────────────────────────────────
+  if (isDeveloper && (!currentUserBranches || currentUserBranches.length === 0)) {
     return (
       <Card className="bg-card/50 backdrop-blur-sm border-border/50">
         <CardHeader>
@@ -358,7 +366,7 @@ export default function BranchFileExplorer({
             Branch Files
           </CardTitle>
 
-          {/* Branch selector — admin only */}
+          {/* Branch selector — admin can select from all branches */}
           {isAdmin ? (
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Branch:</span>
@@ -379,11 +387,31 @@ export default function BranchFileExplorer({
               </Select>
             </div>
           ) : (
-            /* Developer — fixed label */
-            <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30 gap-1.5">
-              <GitBranch className="h-3 w-3" />
-              {currentUserBranch}
-            </Badge>
+            /* Developer — dropdown of assigned branches */
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Branch:</span>
+              {currentUserBranches && currentUserBranches.length > 0 ? (
+                <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+                  <SelectTrigger className="w-56 h-9 bg-background/50 border-border/50 text-sm">
+                    <SelectValue placeholder="Select a branch…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {currentUserBranches.map(branch => (
+                      <SelectItem key={branch} value={branch}>
+                        <span className="flex items-center gap-2">
+                          <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
+                          {branch}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Badge variant="outline" className="text-xs bg-muted text-muted-foreground border-border/50">
+                  No branches assigned
+                </Badge>
+              )}
+            </div>
           )}
         </div>
       </CardHeader>

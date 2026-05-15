@@ -533,7 +533,7 @@ const Team = () => {
                 <TableRow className="border-border/50">
                   <TableHead>Member</TableHead>
                   <TableHead>Role</TableHead>
-                  <TableHead>Assigned Branch</TableHead>
+                  <TableHead>Assigned Branches</TableHead>
                   {isAdmin && <TableHead className="w-16">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
