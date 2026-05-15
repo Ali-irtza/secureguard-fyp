@@ -267,7 +267,7 @@ def _check_branch_access(team_id: str, user_id: str, branch: str, supabase: Clie
     """
     Ensures the user has permission to view files for the given branch.
     - admin  → any branch
-    - developer → only their assigned branch
+    - developer → only their assigned branches (can have multiple)
     - viewer → denied
     """
     membership = require_member(team_id, user_id, supabase)
@@ -280,16 +280,16 @@ def _check_branch_access(team_id: str, user_id: str, branch: str, supabase: Clie
         )
 
     if role == "developer":
-        assigned_branch = membership.get("branch")
-        if not assigned_branch:
+        assigned_branches = membership.get("branches")
+        if not assigned_branches:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="No branch assigned. Ask your team admin to assign a branch.",
+                detail="No branches assigned. Ask your team admin to assign branches.",
             )
-        if assigned_branch != branch:
+        if branch not in assigned_branches:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"You only have access to branch '{assigned_branch}'",
+                detail=f"You only have access to branches: {', '.join(assigned_branches)}",
             )
     # admin → allowed for any branch
 
