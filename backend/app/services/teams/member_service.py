@@ -66,7 +66,7 @@ def invite_user_to_team(team_id: str, email: str, role: str, current_user_id: st
         id=new_member["id"],
         user_id=invitee.id,
         role=TeamRole(new_member["role"]),
-        branch=new_member.get("branch"),
+        branches=new_member.get("branches"),
         joined_at=new_member["created_at"],
         profile=MemberProfile(
             id=invitee.id,
@@ -76,8 +76,8 @@ def invite_user_to_team(team_id: str, email: str, role: str, current_user_id: st
         ),
     )
 
-def update_team_member(team_id: str, member_user_id: str, role: str | None, branch: str | None, current_user_id: str, supabase: Client) -> TeamMemberResponse:
-    """Updates a team member's role and/or branch assignment."""
+def update_team_member(team_id: str, member_user_id: str, role: str | None, branches: list[str] | None, current_user_id: str, supabase: Client) -> TeamMemberResponse:
+    """Updates a team member's role and/or branch assignments."""
     require_admin(team_id, current_user_id, supabase)
 
     updates: dict = {}
@@ -90,8 +90,8 @@ def update_team_member(team_id: str, member_user_id: str, role: str | None, bran
             )
         updates["role"] = role
 
-    if branch is not None:
-        updates["branch"] = branch
+    if branches is not None:
+        updates["branches"] = branches
 
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
@@ -121,7 +121,7 @@ def update_team_member(team_id: str, member_user_id: str, role: str | None, bran
         id=updated["id"],
         user_id=member_user_id,
         role=TeamRole(updated["role"]),
-        branch=updated.get("branch"),
+        branches=updated.get("branches"),
         joined_at=updated["created_at"],
         profile=MemberProfile(
             id=member_user_id,
