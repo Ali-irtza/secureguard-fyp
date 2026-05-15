@@ -256,23 +256,83 @@ export interface FileContentResponse {
   encoding: string;
 }
 
-/** GET /teams/:id/branches/:branch/files — fetch file tree for a branch */
+// ---------------------------------------------------------------------------
+// Branch Files Cache — module-level, survives SPA navigation
+// ---------------------------------------------------------------------------
+
+const BRANCH_FILES_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const FILE_CONTENT_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+// Key: "teamId::branch"
+const _branchFilesCache = new Map<string, CacheEntry<BranchFilesResponse>>();
+// Key: "teamId::branch::path"
+const _fileContentCache = new Map<string, CacheEntry<FileContentResponse>>();
+
+/** Return cached branch files if available (even if stale) — for instant display */
+export function getCachedBranchFiles(
+  teamId: string,
+  branch: string
+): BranchFilesResponse | null {
+  const entry = _branchFilesCache.get(`${teamId}::${branch}`);
+  return entry?.data ?? null;
+}
+
+/** Return cached file content if available — for instant display */
+export function getCachedFileContent(
+  teamId: string,
+  branch: string,
+  filePath: string
+): FileContentResponse | null {
+  const key = `${teamId}::${branch}::${filePath}`;
+  const entry = _fileContentCache.get(key);
+  return entry?.data ?? null;
+}
+
+/** Check if branch files cache is still fresh (within TTL) */
+export function isBranchFilesCacheFresh(
+  teamId: string,
+  branch: string
+): boolean {
+  const entry = _branchFilesCache.get(`${teamId}::${branch}`);
+  if (!entry) return false;
+  return Date.now() - entry.timestamp < BRANCH_FILES_TTL_MS;
+}
+
+/** GET /teams/:id/branches/:branch/files — fetch file tree, updates cache */
 export async function fetchBranchFiles(
   teamId: string,
   branch: string
 ): Promise<BranchFilesResponse> {
-  return apiFetch<BranchFilesResponse>(
+  const res = await apiFetch<BranchFilesResponse>(
     `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files`
   );
+  _branchFilesCache.set(`${teamId}::${branch}`, {
+    data: res,
+    timestamp: Date.now(),
+  });
+  return res;
 }
 
-/** GET /teams/:id/branches/:branch/files/content?path=... — fetch single file content */
+/** GET /teams/:id/branches/:branch/files/content — fetch single file, updates cache */
 export async function fetchFileContent(
   teamId: string,
   branch: string,
   filePath: string
 ): Promise<FileContentResponse> {
-  return apiFetch<FileContentResponse>(
+  const key = `${teamId}::${branch}::${filePath}`;
+  // Return from cache if fresh
+  const cached = _fileContentCache.get(key);
+  if (cached && Date.now() - cached.timestamp < FILE_CONTENT_TTL_MS) {
+    return cached.data;
+  }
+  const res = await apiFetch<FileContentResponse>(
     `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files/content?path=${encodeURIComponent(filePath)}`
   );
+  _fileContentCache.set(key, { data: res, timestamp: Date.now() });
+  return res;
 }
