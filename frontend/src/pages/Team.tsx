@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -78,6 +79,9 @@ const Team = () => {
   const [repoPicker, setRepoPicker]             = useState(false);
   const [githubRepos, setGithubRepos]           = useState<{ full_name: string; private: boolean; url: string }[]>([]);
   const [reposLoading, setReposLoading]         = useState(false);
+
+  // ── UI state ───────────────────────────────────────────────────────────────
+  const [openBranchPopups, setOpenBranchPopups] = useState<Set<string>>(new Set());
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const selectedTeam    = teams.find(t => t.id === selectedTeamId);
@@ -300,6 +304,38 @@ const Team = () => {
       toast.success("Role updated");
     } catch (err: any) {
       toast.error(err.message ?? "Failed to update role");
+    }
+  };
+
+  const toggleBranchPopup = (memberId: string) => {
+    setOpenBranchPopups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(memberId)) {
+        newSet.delete(memberId);
+      } else {
+        newSet.add(memberId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleUpdateMemberBranches = async (memberUserId: string, branches: string[]) => {
+    if (!selectedTeam) return;
+    try {
+      const updated = await updateMember(selectedTeam.id, memberUserId, { branches });
+      setTeams(prev => prev.map(t =>
+        t.id === selectedTeam.id
+          ? { ...t, members: t.members.map(m => m.user_id === memberUserId ? updated : m) }
+          : t
+      ));
+      setOpenBranchPopups(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(memberUserId);
+        return newSet;
+      });
+      toast.success("Branches updated");
+    } catch (err: any) {
+      toast.error(err.message ?? "Failed to update branches");
     }
   };
 
@@ -568,34 +604,56 @@ const Team = () => {
                             <span className="text-xs">No branch</span>
                           </div>
                         ) : isAdmin && !isSelf && selectedTeam.github_branches.length > 0 ? (
-                          // Admin can assign a real branch from the synced list
-                          <Select
-                            value={member.branch ?? ""}
-                            onValueChange={val =>
-                              updateMember(selectedTeam.id, member.user_id, { branch: val })
-                                .then(updated =>
-                                  setTeams(prev => prev.map(t =>
-                                    t.id === selectedTeam.id
-                                      ? { ...t, members: t.members.map(m => m.user_id === member.user_id ? updated : m) }
-                                      : t
-                                  ))
-                                )
-                                .catch(err => toast.error(err.message ?? "Failed to assign branch"))
-                            }
-                          >
-                            <SelectTrigger className="w-44 h-8 bg-background/50 border-border/50 text-xs">
-                              <SelectValue placeholder="Assign branch…" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {selectedTeam.github_branches.map(branch => (
-                                <SelectItem key={branch} value={branch}>{branch}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          // Admin can assign multiple branches via a dropdown with checkboxes
+                          <div className="relative inline-block w-full">
+                            <button
+                              className="px-3 py-1.5 rounded-lg bg-background/50 border border-border/50 text-xs text-foreground hover:bg-background/80 transition-colors flex items-center gap-2 w-44"
+                              onClick={() => toggleBranchPopup(member.user_id)}
+                            >
+                              {member.branches?.length ?? 0} branch{(member.branches?.length ?? 0) !== 1 ? "es" : ""}
+                            </button>
+                            {openBranchPopups.has(member.user_id) && (
+                              <div
+                                className="absolute top-full right-0 mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg p-2 w-56"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                                  {selectedTeam.github_branches.map(branch => (
+                                    <label
+                                      key={branch}
+                                      className="flex items-center gap-2.5 p-1.5 rounded-md hover:bg-muted/50 cursor-pointer"
+                                    >
+                                      <Checkbox
+                                        checked={(member.branches ?? []).includes(branch)}
+                                        onCheckedChange={(checked) => {
+                                          const newBranches = checked
+                                            ? [...(member.branches ?? []), branch]
+                                            : (member.branches ?? []).filter(b => b !== branch);
+                                          handleUpdateMemberBranches(member.user_id, newBranches);
+                                        }}
+                                      />
+                                      <span className="text-xs text-foreground">{branch}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                                {(!member.branches || member.branches.length === 0) && (
+                                  <div className="text-xs text-muted-foreground italic p-2">No branches assigned</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         ) : isAdmin && !isSelf && !selectedTeam.github_repo ? (
                           <span className="text-xs text-muted-foreground italic">Connect repo first</span>
+                        ) : member.branches && member.branches.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {member.branches.map(branch => (
+                              <Badge key={branch} variant="outline" className="text-xs">
+                                {branch}
+                              </Badge>
+                            ))}
+                          </div>
                         ) : (
-                          <span className="text-sm text-foreground">{member.branch ?? "—"}</span>
+                          <span className="text-sm text-muted-foreground">—</span>
                         )}
                       </TableCell>
 
@@ -712,8 +770,8 @@ const Team = () => {
           <BranchFileExplorer
             team={selectedTeam}
             currentUserRole={currentUserRole}
-            currentUserBranch={
-              selectedTeam.members.find(m => m.user_id === user?.id)?.branch ?? null
+            currentUserBranches={
+              selectedTeam.members.find(m => m.user_id === user?.id)?.branches ?? null
             }
           />
         )}
