@@ -140,7 +140,7 @@ async def update_member(
         team_id, 
         member_user_id, 
         body.role.value if body.role else None, 
-        body.branch, 
+        body.branches, 
         current_user.id, 
         supabase
     )
