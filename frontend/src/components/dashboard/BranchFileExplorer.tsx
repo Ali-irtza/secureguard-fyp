@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   FolderOpen, FolderClosed, FileText, FileCode2, FileJson, FileImage,
   ChevronRight, ChevronDown, Loader2, GitBranch, X, ArrowLeft,
@@ -14,6 +14,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   fetchBranchFiles,
   fetchFileContent,
+  getCachedBranchFiles,
+  getCachedFileContent,
+  isBranchFilesCacheFresh,
   type BranchFileItem,
   type Team,
   type TeamRole,
@@ -216,10 +219,6 @@ export default function BranchFileExplorer({
   const [fileSize, setFileSize] = useState<number>(0);
   const [expandedFile, setExpandedFile] = useState(false);
 
-  // ── Content cache ── avoids re-fetching the same file on every click
-  // Key: "branch::path", Value: { content, size }
-  const contentCache = useRef<Map<string, { content: string; size: number }>>(new Map());
-
   // Auto-select branch for developers
   useEffect(() => {
     if (isDeveloper && currentUserBranch) {
@@ -227,24 +226,42 @@ export default function BranchFileExplorer({
     }
   }, [isDeveloper, currentUserBranch]);
 
-  // Fetch file tree when branch changes
+  // Fetch file tree when branch changes — stale-while-revalidate
   useEffect(() => {
     if (!selectedBranch || !team.github_repo) return;
 
     let cancelled = false;
-    setLoadingFiles(true);
-    setFiles([]);
+
+    // 1) Instant: show cached data if available
+    const cached = getCachedBranchFiles(team.id, selectedBranch);
+    if (cached) {
+      setFiles(cached.files);
+      // Only show spinner if cache is stale (background refresh still runs)
+      if (!isBranchFilesCacheFresh(team.id, selectedBranch)) {
+        setLoadingFiles(true);
+      }
+    } else {
+      // No cache — show spinner
+      setLoadingFiles(true);
+      setFiles([]);
+    }
+
+    // Reset file selection on branch change
     setSelectedFile(null);
     setFileContent(null);
-    // Clear cache when branch changes
-    contentCache.current.clear();
 
+    // 2) Background: always fetch fresh data from API
     fetchBranchFiles(team.id, selectedBranch)
       .then(res => {
-        if (!cancelled) setFiles(res.files);
+        if (!cancelled) {
+          setFiles(res.files);
+        }
       })
       .catch(err => {
-        if (!cancelled) toast.error(err.message ?? "Failed to load files");
+        // Only toast if there was no cached data to fall back on
+        if (!cancelled && !cached) {
+          toast.error(err.message ?? "Failed to load files");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingFiles(false);
@@ -253,16 +270,14 @@ export default function BranchFileExplorer({
     return () => { cancelled = true; };
   }, [selectedBranch, team.id, team.github_repo]);
 
-  // Fetch file content when file is selected — with cache
+  // Fetch file content when file is selected — module-level cache in teams-api.ts
   const handleFileClick = useCallback((path: string) => {
-    if (path === selectedFile) return; // already selected
+    if (path === selectedFile) return;
     setSelectedFile(path);
 
-    const cacheKey = `${selectedBranch}::${path}`;
-    const cached = contentCache.current.get(cacheKey);
-
+    // Check module-level cache (survives navigation)
+    const cached = getCachedFileContent(team.id, selectedBranch, path);
     if (cached) {
-      // Serve from cache — instant, no loading spinner
       setFileContent(cached.content);
       setFileSize(cached.size);
       return;
@@ -273,8 +288,6 @@ export default function BranchFileExplorer({
 
     fetchFileContent(team.id, selectedBranch, path)
       .then(res => {
-        // Store in cache
-        contentCache.current.set(cacheKey, { content: res.content, size: res.size });
         setFileContent(res.content);
         setFileSize(res.size);
       })
