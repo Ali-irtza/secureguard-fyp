@@ -124,6 +124,58 @@ async def connect_github_repo(team_id: str, repo_url: str, pat: str, user_id: st
     members = fetch_members_for_team(team_id, supabase)
     return build_team_response(team_result.data[0], members, user_id)
 
+async def sync_branches(team_id: str, user_id: str, supabase: Client) -> TeamResponse:
+    """
+    Re-fetches the branch list for the team's connected repository using the
+    stored GitHub App installation token. No PAT required — runs silently
+    in the background without any browser redirect or modal.
+    """
+    require_admin(team_id, user_id, supabase)
+
+    repo_full_name, installation_id = _get_repo_full_name(team_id, supabase)
+    token = await _get_installation_token(installation_id)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    branches: list[str] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while True:
+            resp = await client.get(
+                f"{GITHUB_API}/repos/{repo_full_name}/branches",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"GitHub API error while fetching branches: {resp.status_code}",
+                )
+            batch = resp.json()
+            if not batch:
+                break
+            branches.extend(b["name"] for b in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+    team_result = (
+        supabase.table("teams")
+        .update({"github_branches": branches})
+        .eq("id", team_id)
+        .execute()
+    )
+    if not team_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    members = fetch_members_for_team(team_id, supabase)
+    return build_team_response(team_result.data[0], members, user_id)
+
+
 async def refresh_branches(team_id: str, repo_url: str, pat: str, user_id: str, supabase: Client) -> TeamResponse:
     return await connect_github_repo(team_id, repo_url, pat, user_id, supabase)
 

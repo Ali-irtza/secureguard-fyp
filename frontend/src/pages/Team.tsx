@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Users, Crown, Pencil, Trash2, Lock, Github,
   Info, Eye, EyeOff, UserPlus, ExternalLink,
-  RefreshCw, Plus, Loader2,
+  RefreshCw, Plus, Loader2, GitBranch, Check, ChevronsUpDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -27,9 +28,114 @@ import {
   listTeams, createTeam, updateTeam, deleteTeam,
   connectGithub, refreshGithubBranches,
   getGithubAuthorizeUrl, listGithubRepos, selectGithubRepo,
+  syncBranches,
   inviteMember, updateMember, removeMember,
-  type Team, type TeamRole,
+  type Team, type TeamRole, type TeamMember,
 } from "@/lib/teams-api";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import { parsePgTextArray } from "@/types/realtime";
+import type { TeamMemberRecord } from "@/types/realtime";
+
+// ---------------------------------------------------------------------------
+// BranchAssignDropdown — matches the role Select dropdown in style
+// Batches selections locally; only calls onSave when the popover closes.
+// ---------------------------------------------------------------------------
+
+interface BranchAssignDropdownProps {
+  branches: string[];
+  assigned: string[];
+  onSave: (branches: string[]) => void;
+}
+
+function BranchAssignDropdown({ branches, assigned, onSave }: BranchAssignDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [local, setLocal] = useState<string[]>(assigned);
+
+  // Sync local state when the server-confirmed assigned list changes.
+  // Compare by value (not reference) so that a new `[]` from `?? []` at the
+  // call site doesn't reset an in-progress selection on every parent re-render.
+  const assignedKey = assigned.slice().sort().join("\0");
+  const prevAssignedKey = useRef(assignedKey);
+  useEffect(() => {
+    if (assignedKey !== prevAssignedKey.current) {
+      prevAssignedKey.current = assignedKey;
+      setLocal(assigned);
+    }
+  }, [assignedKey, assigned]);
+
+  const toggle = (branch: string) => {
+    setLocal(prev =>
+      prev.includes(branch) ? prev.filter(b => b !== branch) : [...prev, branch]
+    );
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    // Save when closing if anything changed
+    if (!next) {
+      const changed =
+        local.length !== assigned.length ||
+        local.some(b => !assigned.includes(b));
+      if (changed) onSave(local);
+    }
+  };
+
+  const label = local.length === 0
+    ? "No branches"
+    : local.length === 1
+    ? local[0]
+    : `${local.length} branches`;
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-44 h-8 justify-between bg-background/50 border-border/50 text-xs font-normal hover:bg-accent hover:text-accent-foreground hover:translate-y-0 hover:shadow-none active:scale-100"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-50 ml-1" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-2" align="start">
+        <p className="text-xs font-medium text-muted-foreground px-1.5 pb-1.5 border-b border-border/50 mb-1.5">
+          Assign branches
+        </p>
+        <div className="space-y-0.5 max-h-52 overflow-y-auto">
+          {branches.map(branch => {
+            const checked = local.includes(branch);
+            return (
+              <button
+                key={branch}
+                onClick={() => toggle(branch)}
+                className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-md hover:bg-muted/50 transition-colors text-left"
+              >
+                <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                  checked ? "bg-primary border-primary" : "border-border/70 bg-background"
+                }`}>
+                  {checked && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                </div>
+                <GitBranch className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="text-xs text-foreground truncate">{branch}</span>
+              </button>
+            );
+          })}
+        </div>
+        {local.length > 0 && (
+          <div className="mt-1.5 pt-1.5 border-t border-border/50">
+            <button
+              onClick={() => setLocal([])}
+              className="w-full text-xs text-muted-foreground hover:text-destructive transition-colors text-left px-1.5 py-1"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +167,7 @@ const Team = () => {
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [loading, setLoading]           = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [refreshing, setRefreshing]     = useState(false);
 
   // ── Modal state ───────────────────────────────────────────────────────────
   const [createTeamOpen, setCreateTeamOpen]     = useState(false);
@@ -81,12 +188,59 @@ const Team = () => {
   const [reposLoading, setReposLoading]         = useState(false);
 
   // ── UI state ───────────────────────────────────────────────────────────────
-  const [openBranchPopups, setOpenBranchPopups] = useState<Set<string>>(new Set());
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const selectedTeam    = teams.find(t => t.id === selectedTeamId);
   const currentUserRole = selectedTeam?.current_user_role ?? "viewer";
   const isAdmin         = currentUserRole === "admin";
+
+  // ── Realtime: live team_members sync ─────────────────────────────────────
+  // CDC events carry raw DB columns (id, user_id, role, branches, team_id).
+  // For UPDATE: merge role + branches into the existing TeamMember (preserves
+  //   the profile sub-object which CDC doesn't carry).
+  // For DELETE: remove the member by matching on the CDC row's id field.
+  // For INSERT: a new member was added by another admin — re-fetch the team
+  //   so we get the full profile data alongside the new row.
+  useRealtimeSync<TeamMemberRecord>({
+    table: "team_members",
+    filter: selectedTeamId ? `team_id=eq.${selectedTeamId}` : undefined,
+    enabled: !!selectedTeamId,
+
+    onInsert: () => {
+      // Re-fetch to get the full member object including profile join
+      fetchTeams();
+    },
+
+    onUpdate: (event) => {
+      const { user_id, role, branches } = event.new;
+      // branches arrives from the CDC WebSocket as a raw Postgres braced
+      // string (e.g. "{main,development}") — parse it into a JS array first.
+      const parsedBranches = parsePgTextArray(branches as string[] | string | null);
+      setTeams(prev => prev.map(team =>
+        team.id !== selectedTeamId ? team : {
+          ...team,
+          members: team.members.map((m): TeamMember =>
+            m.user_id === user_id
+              ? { ...m, role: role as TeamRole, branches: parsedBranches }
+              : m
+          ),
+        }
+      ));
+    },
+
+    onDelete: (event) => {
+      // event.old contains the deleted row — match by the junction row id
+      const deletedId = event.old.id;
+      if (!deletedId) return;
+      setTeams(prev => prev.map(team =>
+        team.id !== selectedTeamId ? team : {
+          ...team,
+          members: team.members.filter(m => m.id !== deletedId),
+          member_count: Math.max(0, team.member_count - 1),
+        }
+      ));
+    },
+  });
 
   // ── Load teams on mount ───────────────────────────────────────────────────
   const fetchTeams = useCallback(async () => {
@@ -160,9 +314,16 @@ const Team = () => {
 
   const handleRefreshBranches = async () => {
     if (!selectedTeam || !selectedTeam.github_repo) return;
-    // Need PAT again — open the connect modal pre-filled with the existing URL
-    setRepoUrl(selectedTeam.github_repo);
-    setConnectGithubOpen(true);
+    setRefreshing(true);
+    try {
+      const updated = await syncBranches(selectedTeam.id);
+      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+      toast.success(`Successfully synced ${updated.github_branches.length} branches from GitHub`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to sync branches from GitHub");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // ── GitHub OAuth handlers ─────────────────────────────────────────────────
@@ -294,62 +455,91 @@ const Team = () => {
 
   const handleUpdateMemberRole = async (memberUserId: string, role: TeamRole) => {
     if (!selectedTeam) return;
+
+    // Snapshot for rollback
+    const snapshot = teams;
+
+    // Optimistic update — apply role change immediately
+    setTeams(prev => prev.map(t =>
+      t.id !== selectedTeam.id ? t : {
+        ...t,
+        members: t.members.map(m =>
+          m.user_id === memberUserId ? { ...m, role } : m
+        ),
+      }
+    ));
+
     try {
       const updated = await updateMember(selectedTeam.id, memberUserId, { role });
+      // Reconcile with server response to pick up any server-side fields
       setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...t, members: t.members.map(m => m.user_id === memberUserId ? updated : m) }
-          : t
+        t.id !== selectedTeam.id ? t : {
+          ...t,
+          members: t.members.map(m => m.user_id === memberUserId ? updated : m),
+        }
       ));
       toast.success("Role updated");
     } catch (err: any) {
+      // Rollback to snapshot
+      setTeams(snapshot);
       toast.error(err.message ?? "Failed to update role");
     }
   };
 
-  const toggleBranchPopup = (memberId: string) => {
-    setOpenBranchPopups(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(memberId)) {
-        newSet.delete(memberId);
-      } else {
-        newSet.add(memberId);
-      }
-      return newSet;
-    });
-  };
-
   const handleUpdateMemberBranches = async (memberUserId: string, branches: string[]) => {
     if (!selectedTeam) return;
+
+    // Snapshot for rollback
+    const snapshot = teams;
+
+    // Optimistic update — apply branch change immediately
+    setTeams(prev => prev.map(t =>
+      t.id !== selectedTeam.id ? t : {
+        ...t,
+        members: t.members.map(m =>
+          m.user_id === memberUserId ? { ...m, branches } : m
+        ),
+      }
+    ));
+
     try {
       const updated = await updateMember(selectedTeam.id, memberUserId, { branches });
+      // Reconcile with server response
       setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...t, members: t.members.map(m => m.user_id === memberUserId ? updated : m) }
-          : t
+        t.id !== selectedTeam.id ? t : {
+          ...t,
+          members: t.members.map(m => m.user_id === memberUserId ? updated : m),
+        }
       ));
-      setOpenBranchPopups(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(memberUserId);
-        return newSet;
-      });
       toast.success("Branches updated");
     } catch (err: any) {
+      // Rollback to snapshot
+      setTeams(snapshot);
       toast.error(err.message ?? "Failed to update branches");
     }
   };
 
   const handleRemoveMember = async (memberUserId: string, memberName: string) => {
     if (!selectedTeam) return;
+
+    // Snapshot for rollback
+    const snapshot = teams;
+
+    // Optimistic update — remove member immediately
+    setTeams(prev => prev.map(t =>
+      t.id !== selectedTeam.id ? t : {
+        ...t,
+        members: t.members.filter(m => m.user_id !== memberUserId),
+        member_count: Math.max(0, t.member_count - 1),
+      }
+    ));
+
     try {
       await removeMember(selectedTeam.id, memberUserId);
-      setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...t, members: t.members.filter(m => m.user_id !== memberUserId), member_count: t.member_count - 1 }
-          : t
-      ));
       toast.success(`${memberName} removed from team`);
     } catch (err: any) {
+      // Rollback to snapshot
+      setTeams(snapshot);
       toast.error(err.message ?? "Failed to remove member");
     }
   };
@@ -578,7 +768,7 @@ const Team = () => {
                             value={member.role}
                             onValueChange={val => handleUpdateMemberRole(member.user_id, val as TeamRole)}
                           >
-                            <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs">
+                            <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs hover:bg-accent hover:text-accent-foreground">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -604,44 +794,11 @@ const Team = () => {
                             <span className="text-xs">No branch</span>
                           </div>
                         ) : isAdmin && !isSelf && selectedTeam.github_branches.length > 0 ? (
-                          // Admin can assign multiple branches via a dropdown with checkboxes
-                          <div className="relative inline-block w-full">
-                            <button
-                              className="px-3 py-1.5 rounded-lg bg-background/50 border border-border/50 text-xs text-foreground hover:bg-background/80 transition-colors flex items-center gap-2 w-44"
-                              onClick={() => toggleBranchPopup(member.user_id)}
-                            >
-                              {member.branches?.length ?? 0} branch{(member.branches?.length ?? 0) !== 1 ? "es" : ""}
-                            </button>
-                            {openBranchPopups.has(member.user_id) && (
-                              <div
-                                className="absolute top-full right-0 mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg p-2 w-56"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                                  {selectedTeam.github_branches.map(branch => (
-                                    <label
-                                      key={branch}
-                                      className="flex items-center gap-2.5 p-1.5 rounded-md hover:bg-muted/50 cursor-pointer"
-                                    >
-                                      <Checkbox
-                                        checked={(member.branches ?? []).includes(branch)}
-                                        onCheckedChange={(checked) => {
-                                          const newBranches = checked
-                                            ? [...(member.branches ?? []), branch]
-                                            : (member.branches ?? []).filter(b => b !== branch);
-                                          handleUpdateMemberBranches(member.user_id, newBranches);
-                                        }}
-                                      />
-                                      <span className="text-xs text-foreground">{branch}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                                {(!member.branches || member.branches.length === 0) && (
-                                  <div className="text-xs text-muted-foreground italic p-2">No branches assigned</div>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                          <BranchAssignDropdown
+                            branches={selectedTeam.github_branches}
+                            assigned={member.branches ?? []}
+                            onSave={(newBranches) => handleUpdateMemberBranches(member.user_id, newBranches)}
+                          />
                         ) : isAdmin && !isSelf && !selectedTeam.github_repo ? (
                           <span className="text-xs text-muted-foreground italic">Connect repo first</span>
                         ) : member.branches && member.branches.length > 0 ? (
@@ -729,8 +886,11 @@ const Team = () => {
                 </div>
                 {isAdmin && (
                   <div className="flex items-center gap-3">
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleGithubOAuth} disabled={actionLoading}>
-                      <RefreshCw className="h-4 w-4" />
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing}>
+                      {refreshing
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <RefreshCw className="h-4 w-4" />
+                      }
                       Refresh Branches
                     </Button>
                     <Button

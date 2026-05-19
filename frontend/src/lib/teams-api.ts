@@ -154,6 +154,14 @@ export async function connectGithub(
   });
 }
 
+/** POST /teams/:id/github/sync-branches — re-sync branches using the stored installation token, no PAT needed */
+export async function syncBranches(teamId: string): Promise<Team> {
+  invalidateTeamsCache();
+  return apiFetch<Team>(`/teams/${teamId}/github/sync-branches`, {
+    method: "POST",
+  });
+}
+
 /** POST /teams/:id/github/refresh — re-fetch branches with a fresh PAT */
 export async function refreshGithubBranches(
   teamId: string,

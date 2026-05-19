@@ -78,6 +78,18 @@ async def refresh_github_branches(
 ):
     return await github_service.refresh_branches(team_id, body.repo_url, body.pat, current_user.id, supabase)
 
+@router.post("/{team_id}/github/sync-branches", response_model=TeamResponse)
+async def sync_github_branches(
+    team_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Re-syncs branches for the connected repository using the stored GitHub App
+    installation token. No PAT or request body required.
+    """
+    return await github_service.sync_branches(team_id, current_user.id, supabase)
+
 @router.get("/github/callback")
 async def github_callback(
     installation_id: int | None = None,

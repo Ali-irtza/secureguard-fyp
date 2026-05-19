@@ -54,7 +54,7 @@ def build_team_response(team: dict, members: list, current_user_id: str) -> Team
             id=m["id"],
             user_id=m["user_id"],
             role=TeamRole(m["role"]),
-            branch=m.get("branch"),
+            branches=m.get("branches"),
             joined_at=m["created_at"],
             profile=MemberProfile(
                 id=m["user_id"],

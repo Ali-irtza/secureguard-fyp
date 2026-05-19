@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import MetricsRow from "@/components/dashboard/MetricsRow";
 import EmptyState from "@/components/dashboard/EmptyState";
@@ -8,6 +9,9 @@ import CriticalAlerts from "@/components/dashboard/CriticalAlerts";
 import TeamViewToggle from "@/components/dashboard/TeamViewToggle";
 import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
 import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import type { ScanRecord, AlertRecord, SubscriptionStatus } from "@/types/realtime";
+import { applyOptimisticInsert, applyOptimisticUpdate, applyOptimisticDelete } from "@/types/realtime";
 
 // Mock data for demonstration
 const mockScans: Scan[] = [
@@ -52,6 +56,10 @@ const Dashboard = () => {
   const [showEmpty] = useState(false);
   const [viewMode, setViewMode] = useState<"personal" | "team">("personal");
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [realtimeScans, setRealtimeScans] = useState<ScanRecord[]>([]);
+  const prevScansRef = useRef<ScanRecord[]>([]);
+  const [realtimeAlerts, setRealtimeAlerts] = useState<AlertRecord[]>([]);
+  const prevAlertsRef = useRef<AlertRecord[]>([]);
 
   // Default team selection: first admin team, or first team
   useEffect(() => {
@@ -65,6 +73,44 @@ const Dashboard = () => {
   const userRole = selectedTeam?.currentUserRole;
   const isTeamView = viewMode === "team" && !!selectedTeam;
 
+  // Real-time subscription for scans — scans.user_id links to auth user
+  // team scoping is done via: scans → projects → team_id
+  const { status: scansStatus, connectionCount: scansConnectionCount } = useRealtimeSync<ScanRecord>({
+    table: "scans",
+    enabled: true,
+    onInsert: (event) => {
+      setRealtimeScans((prev) => applyOptimisticInsert(prev, event.new));
+    },
+    onUpdate: (event) => {
+      setRealtimeScans((prev) => applyOptimisticUpdate(prev, event.new));
+    },
+  });
+
+  // Real-time subscription for alerts — alerts.user_id links to auth user
+  const { status: alertsStatus, connectionCount: alertsConnectionCount } = useRealtimeSync<AlertRecord>({
+    table: "alerts",
+    enabled: true,
+    onInsert: (event) => {
+      setRealtimeAlerts((prev) => applyOptimisticInsert(prev, event.new));
+    },
+    onUpdate: (event) => {
+      setRealtimeAlerts((prev) => applyOptimisticUpdate(prev, event.new));
+    },
+    onDelete: (event) => {
+      setRealtimeAlerts((prev) => applyOptimisticDelete(prev, event.old.id ?? ""));
+    },
+  });
+
+  // Map ScanRecord → Scan (component prop shape)
+  // scans has: file_name, file_path, branch, status, started_at, created_at
+  const mapScanRecordToScan = (record: ScanRecord): Scan => ({
+    id: record.id,
+    projectName: record.file_name ?? record.file_path ?? record.branch ?? record.project_id,
+    date: new Date(record.started_at ?? record.created_at),
+    status: record.status === "pending" ? "in_progress" : record.status,
+    vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 },
+  });
+
   // Determine metrics
   const personalMetrics = {
     totalScans: 247,
@@ -75,13 +121,83 @@ const Dashboard = () => {
 
   const metrics = isTeamView && selectedTeam ? selectedTeam.metrics : personalMetrics;
 
-  // Determine scans based on role
+  // Determine scans based on role, preferring realtime data when available
   const getScans = (): Scan[] => {
+    // Use realtime data if we have any from the subscription
+    if (realtimeScans.length > 0) {
+      const mapped = realtimeScans.map(mapScanRecordToScan);
+      if (!isTeamView || !selectedTeam) return mapped;
+      if (userRole === "developer") {
+        return realtimeScans
+          .filter((s) => s.team_id === selectedTeamId)
+          .map(mapScanRecordToScan);
+      }
+      return mapped;
+    }
+    // Fall back to mock/team data while realtime hasn't loaded yet
     if (!isTeamView || !selectedTeam) return mockScans;
     if (userRole === "developer") {
       return selectedTeam.scans.filter((s) => s.memberId === CURRENT_USER_ID);
     }
     return selectedTeam.scans;
+  };
+
+  // ---------------------------------------------------------------------------
+  // Optimistic mutation handlers — Scans
+  // ---------------------------------------------------------------------------
+
+  /** Snapshot current scans state, then apply an optimistic INSERT. */
+  const handleOptimisticScanInsert = (record: ScanRecord) => {
+    prevScansRef.current = realtimeScans;
+    setRealtimeScans((prev) => applyOptimisticInsert(prev, record));
+  };
+
+  /** Snapshot current scans state, then apply an optimistic UPDATE. */
+  const handleOptimisticScanUpdate = (record: ScanRecord) => {
+    prevScansRef.current = realtimeScans;
+    setRealtimeScans((prev) => applyOptimisticUpdate(prev, record));
+  };
+
+  /** Restore scans to the pre-mutation snapshot and show an error toast. */
+  const handleRollbackScans = (errorMessage?: string) => {
+    setRealtimeScans(prevScansRef.current);
+    toast.error(errorMessage ?? "Scan update failed. Changes have been reverted.");
+  };
+
+  // ---------------------------------------------------------------------------
+  // Optimistic mutation handlers — Alerts
+  // ---------------------------------------------------------------------------
+
+  /** Snapshot current alerts state, then apply an optimistic INSERT. */
+  const handleOptimisticAlertInsert = (record: AlertRecord) => {
+    prevAlertsRef.current = realtimeAlerts;
+    setRealtimeAlerts((prev) => applyOptimisticInsert(prev, record));
+  };
+
+  /** Snapshot current alerts state, then apply an optimistic DELETE. */
+  const handleOptimisticAlertDelete = (id: string) => {
+    prevAlertsRef.current = realtimeAlerts;
+    setRealtimeAlerts((prev) => applyOptimisticDelete(prev, id));
+  };
+
+  /** Restore alerts to the pre-mutation snapshot and show an error toast. */
+  const handleRollbackAlerts = (errorMessage?: string) => {
+    setRealtimeAlerts(prevAlertsRef.current);
+    toast.error(errorMessage ?? "Alert update failed. Changes have been reverted.");
+  };
+
+  // Expose mutation handlers via a plain object — child components can receive
+  // these as props when they need to trigger mutations with optimistic updates.
+  const scanMutationHandlers = {
+    onOptimisticInsert: handleOptimisticScanInsert,
+    onOptimisticUpdate: handleOptimisticScanUpdate,
+    onRollback: handleRollbackScans,
+  };
+
+  const alertMutationHandlers = {
+    onOptimisticInsert: handleOptimisticAlertInsert,
+    onOptimisticDelete: handleOptimisticAlertDelete,
+    onRollback: handleRollbackAlerts,
   };
 
   return (
@@ -140,6 +256,8 @@ const Dashboard = () => {
                 isTeamView={isTeamView}
                 teamAlerts={isTeamView && selectedTeam ? selectedTeam.alerts : undefined}
                 userRole={isTeamView ? userRole : undefined}
+                realtimeAlerts={realtimeAlerts.length > 0 ? realtimeAlerts : undefined}
+                connectionStatus={{ status: alertsStatus, connectionCount: alertsConnectionCount }}
               />
             </div>
           </div>
