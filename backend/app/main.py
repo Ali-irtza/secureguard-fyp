@@ -44,6 +44,7 @@ from app.routers import auth, teams, scans, projects, project_files
 app.include_router(auth.router,          prefix="/auth",     tags=["Auth"])
 app.include_router(teams.router,         prefix="/teams",    tags=["Teams"])
 app.include_router(scans.router,         prefix="/teams",    tags=["Scans"])
+app.include_router(scans.router,         prefix="",          tags=["Scans"])
 app.include_router(projects.router,      prefix="/projects", tags=["Projects"])
 app.include_router(project_files.router, prefix="/projects", tags=["Project Files"])
 # app.include_router(reports.router,  prefix="/reports",  tags=["Reports"])

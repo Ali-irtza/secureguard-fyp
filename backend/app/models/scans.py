@@ -16,12 +16,42 @@ class ScanRequest(BaseModel):
     branch: str = Field(..., description="The name of the branch to scan.")
     selected_files: List[str] = Field(..., description="List of file paths selected by the user to scan.")
 
+class UploadScanRequest(BaseModel):
+    """Request model for POST /scan/upload — direct source code submission."""
+    filename: str = Field(..., description="Original filename e.g. main.c")
+    source_code: str = Field(..., description="Full source code content as string")
+
+class VulnerabilityDetail(BaseModel):
+    """A single vulnerability found in a file."""
+    cwe_id: str
+    cwe_name: str
+    severity: str
+    line_number: int = 0
+    absolute_line: int = 0
+    description: str
+    fix_suggestion: str
+    function_name: str = ""
+    file_path: str = ""
+
+
+class FileSummary(BaseModel):
+    """Per-file scan summary."""
+    file_path: str
+    chunks_scanned: int
+    vulnerabilities_found: int
+    risk_level: str
+
+
 class ScanResponse(BaseModel):
     """
     Response model for POST /teams/{team_id}/scans
-    Currently returns a dummy result summarizing what was analyzed.
+    Returns full AI vulnerability scan results.
     """
     status: str
-    message: str
+    total_vulnerabilities: int
+    overall_risk_level: str
+    overall_risk_score: int
     files_analyzed: int
-    total_lines_analyzed: int
+    total_chunks_scanned: int
+    files_summary: List[FileSummary]
+    vulnerabilities: List[VulnerabilityDetail]

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from supabase import Client
 
 from app.dependencies import get_supabase, get_current_user
-from app.models.scans import BranchFilesResponse, ScanRequest, ScanResponse
+from app.models.scans import BranchFilesResponse, ScanRequest, ScanResponse, UploadScanRequest
 from app.services.scans import scanner_service
 
 router = APIRouter()
@@ -40,6 +40,19 @@ async def start_scan(
     )
     
     # 2. Pass the in-memory files to the scanner model
-    result = scanner_service.dummy_vulnerability_scanner(files_dict)
+    result = await scanner_service.run_vulnerability_scanner(files_dict)
     
+    return ScanResponse(**result)
+
+@router.post("/scan/upload", response_model=ScanResponse)
+async def scan_uploaded_file(
+    body: UploadScanRequest,
+    current_user=Depends(get_current_user),
+):
+    """
+    Scans a single file's source code submitted directly from the frontend.
+    Used for the Upload tab in NewScan — no GitHub connection needed.
+    """
+    files_dict = {body.filename: body.source_code}
+    result = await scanner_service.run_vulnerability_scanner(files_dict)
     return ScanResponse(**result)

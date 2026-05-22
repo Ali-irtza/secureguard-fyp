@@ -9,6 +9,7 @@ from typing import List, Dict
 
 from app.services.teams.github_service import _get_installation_token, _parse_github_owner_repo
 from app.services.teams.team_service import require_member
+from app.services.scans.ai_scanner import scan_file
 
 GITHUB_API = "https://api.github.com"
 C_CPP_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx')
@@ -160,18 +161,71 @@ async def fetch_selected_code_hybrid(team_id: str, branch_name: str, selected_fi
 
     return files_content
 
-def dummy_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
+async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
     """
-    Placeholder for the ML vulnerability scanner.
-    Analyzes the dictionary of code files.
+    AI-powered vulnerability scanner using FreeLLMAPI.
+    Scans each C/C++ file for the 26 target CWEs.
+    Drop-in replacement for dummy_vulnerability_scanner.
+    When the real ML model is ready, replace scan_file() with the new model call.
     """
-    total_lines = 0
-    for path, content in files_dict.items():
-        total_lines += len(content.splitlines())
+    all_vulnerabilities = []
+    files_scanned = []
+    total_chunks = 0
+
+    for file_path, source_code in files_dict.items():
+        if not source_code.strip():
+            continue
+
+        try:
+            result = await scan_file(source_code)
+
+            # Tag each vulnerability with which file it came from
+            for vuln in result["vulnerabilities"]:
+                vuln["file_path"] = file_path
+
+            all_vulnerabilities.extend(result["vulnerabilities"])
+            total_chunks += result["chunks_scanned"]
+            files_scanned.append({
+                "file_path": file_path,
+                "chunks_scanned": result["chunks_scanned"],
+                "vulnerabilities_found": len(result["vulnerabilities"]),
+                "risk_level": result["risk_level"],
+            })
+
+        except Exception as exc:
+            print(f"[scanner_service] Failed to scan {file_path}: {exc}")
+            files_scanned.append({
+                "file_path": file_path,
+                "chunks_scanned": 0,
+                "vulnerabilities_found": 0,
+                "risk_level": "Unknown",
+            })
+
+    # Calculate overall risk score across all files
+    severity_points = {"Critical": 10, "High": 7, "Medium": 4}
+    total_score = sum(
+        severity_points.get(v.get("severity", ""), 0)
+        for v in all_vulnerabilities
+    )
+
+    if total_score == 0:
+        overall_risk = "Safe"
+    elif total_score < 10:
+        overall_risk = "Low Risk"
+    elif total_score < 30:
+        overall_risk = "Medium Risk"
+    elif total_score < 60:
+        overall_risk = "High Risk"
+    else:
+        overall_risk = "Critical Risk"
 
     return {
         "status": "success",
-        "message": "Files successfully scanned by dummy model (In-Memory). Ready for ML integration.",
-        "files_analyzed": len(files_dict),
-        "total_lines_analyzed": total_lines
+        "total_vulnerabilities": len(all_vulnerabilities),
+        "overall_risk_level": overall_risk,
+        "overall_risk_score": total_score,
+        "files_analyzed": len(files_scanned),
+        "total_chunks_scanned": total_chunks,
+        "files_summary": files_scanned,
+        "vulnerabilities": all_vulnerabilities,
     }

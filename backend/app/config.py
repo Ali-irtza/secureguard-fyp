@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     github_private_key_path: str = "github-app.pem"
     github_callback_url:    str = "http://localhost:8000/teams/github/callback"
 
+    # FreeLLMAPI
+    freellmapi_url: str = "http://localhost:3001/v1"
+    freellmapi_key: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         """
