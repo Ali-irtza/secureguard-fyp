@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import { triggerScan, getBranchFiles, ScanResult } from "@/lib/scans-api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -194,6 +195,11 @@ const NewScan = () => {
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
 
+  // New scan result state
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [branchFiles, setBranchFiles] = useState<string[]>([]);
+  const [scanError, setScanError] = useState<string>("");
+
   // Panel visibility state
   const [showPanel, setShowPanel] = useState(true);
 
@@ -254,134 +260,172 @@ const NewScan = () => {
     scanAbortRef.current = false;
     setIsScanning(true);
     setScanComplete(false);
+    setScanResult(null);
+    setScanError("");
     setCurrentPhase(0);
     setCurrentLine(0);
     setLogs([]);
-    
+
     const firstFile = uploadedFiles[0];
-    const detectedLang = firstFile 
-      ? detectLanguage(firstFile.name) 
+    const detectedLang = firstFile
+      ? detectLanguage(firstFile.name)
       : language === "auto" ? "c" : language;
-    
-    const code = fileContent || MOCK_CODE[detectedLang as keyof typeof MOCK_CODE] || MOCK_CODE.c;
-    const lines = code.split("\n");
-    
-    const initialLines: CodeLine[] = lines.map((content, index) => ({
-      lineNumber: index + 1,
-      content,
-      status: "pending" as const,
-    }));
-    setCodeLines(initialLines);
-    setStats({
-      linesScanned: 0,
-      totalLines: lines.length,
-      vulnerabilitiesFound: 0,
-      elapsedTime: 0,
-    });
 
-    const vulns = VULNERABILITY_PATTERNS.filter(v => v.lang === detectedLang);
+    // ── UPLOAD MODE ──────────────────────────────────────────────────────────
+    if (activeTab === "upload") {
+      const code = fileContent || MOCK_CODE[detectedLang as keyof typeof MOCK_CODE] || MOCK_CODE.c;
+      const lines = code.split("\n");
 
-    addLog("Initializing SecureGuard AI Scanner v2.1.0...", "info");
-    await new Promise(r => setTimeout(r, 800));
-    addLog("Loading vulnerability database (15,234 patterns)...", "info");
-    await new Promise(r => setTimeout(r, 600));
-    addLog("AI engine ready", "success");
-    setCurrentPhase(1);
-
-    addLog(`Parsing ${detectedLang.toUpperCase()} source code...`, "info");
-    await new Promise(r => setTimeout(r, 500));
-    addLog(`Found ${lines.length} lines of code`, "info");
-    await new Promise(r => setTimeout(r, 400));
-    addLog("Building Abstract Syntax Tree...", "info");
-    await new Promise(r => setTimeout(r, 600));
-    addLog("Syntax tree constructed successfully", "success");
-    setCurrentPhase(2);
-
-    addLog("Starting vulnerability scan...", "info");
-    let vulnCount = 0;
-    const startTime = Date.now();
-    
-    for (let i = 0; i < lines.length; i++) {
-      if (scanAbortRef.current) break;
-      
-      const lineNum = i + 1;
-      setCurrentLine(lineNum);
-      
-      const vuln = vulns.find(v => v.line === lineNum);
-      
-      setCodeLines(prev => prev.map((line, idx) => {
-        if (idx === i) {
-          return { ...line, status: "scanning" };
-        }
-        if (idx < i) {
-          const prevVuln = vulns.find(v => v.line === idx + 1);
-          return {
-            ...line,
-            status: prevVuln ? "vulnerable" : "safe",
-            vulnerability: prevVuln?.message,
-          };
-        }
-        return line;
+      const initialLines: CodeLine[] = lines.map((content, index) => ({
+        lineNumber: index + 1,
+        content,
+        status: "pending" as const,
       }));
-      
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      setStats(prev => ({
-        ...prev,
-        linesScanned: lineNum,
-        elapsedTime: elapsed,
-        vulnerabilitiesFound: vulnCount,
-      }));
+      setCodeLines(initialLines);
+      setStats({ linesScanned: 0, totalLines: lines.length, vulnerabilitiesFound: 0, elapsedTime: 0 });
 
-      if (vuln) {
-        vulnCount++;
-        addLog(`Line ${lineNum}: Potential ${vuln.message} detected`, "warning");
-        await new Promise(r => setTimeout(r, 300));
-      } else if (lineNum % 5 === 0) {
-        addLog(`Scanning line ${lineNum}...`, "info");
-      }
-      
-      await new Promise(r => setTimeout(r, 100));
-    }
-    
-    if (scanAbortRef.current) return;
+      addLog("Initializing SecureGuard AI Scanner...", "info");
+      setCurrentPhase(1);
+      addLog("Parsing source code and building AST...", "info");
+      await new Promise(r => setTimeout(r, 600));
+      setCurrentPhase(2);
+      addLog("Sending code to AI vulnerability engine...", "info");
 
-    setCodeLines(prev => prev.map((line, idx) => {
-      if (idx === lines.length - 1) {
-        const lastVuln = vulns.find(v => v.line === lines.length);
-        return {
-          ...line,
-          status: lastVuln ? "vulnerable" : "safe",
-          vulnerability: lastVuln?.message,
+      const startTime = Date.now();
+      const timerInterval = setInterval(() => {
+        setStats(prev => ({ ...prev, elapsedTime: Math.floor((Date.now() - startTime) / 1000) }));
+      }, 1000);
+
+      // Animate lines while waiting for real API response
+      let animIndex = 0;
+      const lineAnimInterval = setInterval(() => {
+        if (animIndex < lines.length) {
+          setCurrentLine(animIndex + 1);
+          setCodeLines(prev => prev.map((line, idx) => {
+            if (idx === animIndex) return { ...line, status: "scanning" };
+            if (idx < animIndex) return { ...line, status: "safe" };
+            return line;
+          }));
+          setStats(prev => ({ ...prev, linesScanned: animIndex + 1 }));
+          animIndex++;
+        }
+      }, 80);
+
+      try {
+        // Call real backend with uploaded file content
+        // We use a dummy teamId for upload mode — backend scans inline
+        const fakeFilesDict: Record<string, string> = {
+          [firstFile?.name || "uploaded_file.c"]: code,
         };
+
+        // Directly call the ai_scanner via a simple fetch to backend
+        const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
+        const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
+        const response = await fetch(`${API_BASE}/scan/upload`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session?.access_token}`,
+          },
+          body: JSON.stringify({ filename: firstFile?.name || "file.c", source_code: code }),
+        });
+
+        clearInterval(lineAnimInterval);
+        clearInterval(timerInterval);
+
+        if (!response.ok) throw new Error(`Scan failed: ${response.status}`);
+        const result: ScanResult = await response.json();
+
+        // Mark vulnerable lines on the code viewer
+        setCodeLines(prev => prev.map((line) => {
+          const vuln = result.vulnerabilities.find(v => v.absolute_line === line.lineNumber);
+          return { ...line, status: vuln ? "vulnerable" : "safe", vulnerability: vuln?.cwe_name };
+        }));
+
+        setStats(prev => ({
+          ...prev,
+          linesScanned: lines.length,
+          vulnerabilitiesFound: result.total_vulnerabilities,
+          elapsedTime: Math.floor((Date.now() - startTime) / 1000),
+        }));
+
+        setScanResult(result);
+        setCurrentPhase(3);
+        addLog("Deep analysis complete", "success");
+        setCurrentPhase(4);
+        addLog("Generating report...", "info");
+        await new Promise(r => setTimeout(r, 500));
+        setCurrentPhase(5);
+        addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
+        addLog("Scan complete!", "success");
+
+      } catch (err: any) {
+        clearInterval(lineAnimInterval);
+        clearInterval(timerInterval);
+        setScanError(err.message || "Scan failed");
+        addLog(`Error: ${err.message}`, "warning");
       }
-      return line;
-    }));
 
-    setCurrentPhase(3);
-    addLog("Running deep AI analysis...", "info");
-    await new Promise(r => setTimeout(r, 1000));
-    addLog("Analyzing data flow patterns...", "info");
-    await new Promise(r => setTimeout(r, 800));
-    addLog("Checking for complex vulnerability chains...", "info");
-    await new Promise(r => setTimeout(r, 600));
-    addLog("Deep analysis complete", "success");
+      setIsScanning(false);
+      setScanComplete(true);
+      return;
+    }
 
-    setCurrentPhase(4);
-    addLog("Generating security report...", "info");
-    await new Promise(r => setTimeout(r, 800));
-    addLog(`Found ${vulnCount} potential vulnerabilities`, vulnCount > 0 ? "warning" : "success");
-    await new Promise(r => setTimeout(r, 400));
-    addLog("Report generated successfully", "success");
+    // ── GITHUB MODE ──────────────────────────────────────────────────────────
+    if (activeTab === "github" && isTeamMode && selectedTeamId) {
+      const startTime = Date.now();
+      const timerInterval = setInterval(() => {
+        setStats(prev => ({ ...prev, elapsedTime: Math.floor((Date.now() - startTime) / 1000) }));
+      }, 1000);
 
-    setCurrentPhase(5);
-    setStats(prev => ({
-      ...prev,
-      vulnerabilitiesFound: vulnCount,
-      elapsedTime: Math.floor((Date.now() - startTime) / 1000),
-    }));
-    setIsScanning(false);
-    setScanComplete(true);
-    addLog("Scan complete!", "success");
+      setCodeLines([]);
+      setStats({ linesScanned: 0, totalLines: 0, vulnerabilitiesFound: 0, elapsedTime: 0 });
+
+      try {
+        addLog("Initializing SecureGuard AI Scanner...", "info");
+        setCurrentPhase(1);
+
+        addLog(`Fetching C/C++ files from branch: ${branch}...`, "info");
+        const files = await getBranchFiles(selectedTeamId, branch);
+        setBranchFiles(files);
+        addLog(`Found ${files.length} C/C++ files`, "success");
+
+        setCurrentPhase(2);
+        addLog("Sending files to AI vulnerability engine...", "info");
+        addLog("This may take a moment depending on file count...", "info");
+
+        const result = await triggerScan(selectedTeamId, branch, files);
+
+        clearInterval(timerInterval);
+
+        setStats({
+          linesScanned: result.total_chunks_scanned,
+          totalLines: result.total_chunks_scanned,
+          vulnerabilitiesFound: result.total_vulnerabilities,
+          elapsedTime: Math.floor((Date.now() - startTime) / 1000),
+        });
+
+        setScanResult(result);
+        setCurrentPhase(3);
+        addLog("Deep analysis complete", "success");
+        setCurrentPhase(4);
+        addLog("Generating report...", "info");
+        await new Promise(r => setTimeout(r, 500));
+        setCurrentPhase(5);
+        addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
+        addLog("Scan complete!", "success");
+
+      } catch (err: any) {
+        clearInterval(timerInterval);
+        setScanError(err.message || "Scan failed");
+        addLog(`Error: ${err.message}`, "warning");
+      }
+
+      setIsScanning(false);
+      setScanComplete(true);
+      return;
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -451,6 +495,9 @@ const NewScan = () => {
     setFileContent("");
     setRepoUrl("");
     setProjectName("");
+    setScanResult(null);
+    setBranchFiles([]);
+    setScanError("");
     setStats({
       linesScanned: 0,
       totalLines: 0,
@@ -695,7 +742,16 @@ const NewScan = () => {
               )}
               {scanComplete && !showPanel && (
                 <>
-                  <Button size="sm" className="h-8">
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    onClick={() => {
+                      if (scanResult) {
+                        console.log("Scan Results:", JSON.stringify(scanResult, null, 2));
+                        alert(`Scan Complete!\n\nRisk Level: ${scanResult.overall_risk_level}\nVulnerabilities: ${scanResult.total_vulnerabilities}\nFiles Scanned: ${scanResult.files_analyzed}`);
+                      }
+                    }}
+                  >
                     View Report
                   </Button>
                   <Button variant="outline" size="sm" className="h-8" onClick={handleReset}>
@@ -736,7 +792,16 @@ const NewScan = () => {
               <div className="p-3 border-t border-border/50 bg-card/80 backdrop-blur-sm">
                 {scanComplete ? (
                   <div className="flex gap-2">
-                    <Button size="sm" className="flex-1 shadow-lg shadow-primary/25">
+                    <Button
+                      size="sm"
+                      className="flex-1 shadow-lg shadow-primary/25"
+                      onClick={() => {
+                        if (scanResult) {
+                          console.log("Scan Results:", JSON.stringify(scanResult, null, 2));
+                          alert(`Scan Complete!\n\nRisk Level: ${scanResult.overall_risk_level}\nVulnerabilities: ${scanResult.total_vulnerabilities}\nFiles Scanned: ${scanResult.files_analyzed}`);
+                        }
+                      }}
+                    >
                       View Report
                     </Button>
                     <Button variant="outline" size="sm" className="flex-1" onClick={handleReset}>
