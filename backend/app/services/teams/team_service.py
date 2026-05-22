@@ -80,7 +80,10 @@ def build_team_response(team: dict, members: list, current_user_id: str) -> Team
     )
 
 def fetch_members_for_team(team_id: str, supabase: Client) -> list:
-    """Fetches members and enriches with profile data."""
+    """
+    Fetches members for a single team and enriches with profile data.
+    Used by create/update/get operations that work on one team at a time.
+    """
     members_result = (
         supabase.table("team_members")
         .select("*")
@@ -105,8 +108,63 @@ def fetch_members_for_team(team_id: str, supabase: Client) -> list:
 
     return members
 
+def fetch_members_for_teams(team_ids: list[str], supabase: Client) -> dict[str, list]:
+    """
+    Fetches members for multiple teams in exactly 2 DB round trips:
+      1. All team_members rows for all team_ids at once
+      2. All profiles for all unique user_ids at once
+
+    Returns a dict keyed by team_id → list of enriched member dicts.
+    This replaces the previous N×2 sequential queries in list_user_teams.
+    """
+    if not team_ids:
+        return {}
+
+    members_result = (
+        supabase.table("team_members")
+        .select("*")
+        .in_("team_id", team_ids)
+        .execute()
+    )
+    all_members = members_result.data or []
+
+    if not all_members:
+        return {tid: [] for tid in team_ids}
+
+    # Batch-fetch all profiles in one query
+    user_ids = list({m["user_id"] for m in all_members})
+    profiles_result = (
+        supabase.table("profiles")
+        .select("id, full_name, avatar_url")
+        .in_("id", user_ids)
+        .execute()
+    )
+    profiles_map = {p["id"]: p for p in (profiles_result.data or [])}
+
+    # Attach profile to each member row
+    for m in all_members:
+        m["profiles"] = profiles_map.get(m["user_id"], {})
+
+    # Group by team_id
+    by_team: dict[str, list] = {tid: [] for tid in team_ids}
+    for m in all_members:
+        tid = m["team_id"]
+        if tid in by_team:
+            by_team[tid].append(m)
+
+    return by_team
+
 def list_user_teams(user_id: str, supabase: Client) -> TeamListResponse:
-    """Returns all teams the user belongs to."""
+    """
+    Returns all teams the user belongs to.
+
+    Query plan (was N×2+2 sequential calls, now always 3 total):
+      1. team_members  → get team_ids for this user
+      2. teams         → fetch all those teams in one query
+      3. team_members  → fetch ALL members for ALL teams in one query
+         + profiles    → fetch ALL profiles for ALL members in one query
+         (steps 3+4 handled by fetch_members_for_teams)
+    """
     memberships = (
         supabase.table("team_members")
         .select("team_id")
@@ -126,10 +184,13 @@ def list_user_teams(user_id: str, supabase: Client) -> TeamListResponse:
     )
     teams = teams_result.data or []
 
-    team_responses = []
-    for team in teams:
-        members = fetch_members_for_team(team["id"], supabase)
-        team_responses.append(build_team_response(team, members, user_id))
+    # Single batched fetch for all members + profiles across all teams
+    members_by_team = fetch_members_for_teams(team_ids, supabase)
+
+    team_responses = [
+        build_team_response(team, members_by_team.get(team["id"], []), user_id)
+        for team in teams
+    ]
 
     return TeamListResponse(teams=team_responses)
 
