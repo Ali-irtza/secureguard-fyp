@@ -4,6 +4,7 @@ import {
   Info, Eye, EyeOff, UserPlus, ExternalLink,
   RefreshCw, Plus, Loader2, GitBranch, Check, ChevronsUpDown,
 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import BranchFileExplorer from "@/components/dashboard/BranchFileExplorer";
@@ -545,18 +546,12 @@ const Team = () => {
   };
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      </DashboardLayout>
-    );
-  }
+  // No full-page loading gate — the layout renders immediately.
+  // Each section shows its own inline skeleton while data is in flight,
+  // matching the progressive pattern used on the Projects page.
 
   // ── Empty state ───────────────────────────────────────────────────────────
-  if (teams.length === 0) {
+  if (!loading && teams.length === 0) {
     return (
       <DashboardLayout>
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6">
@@ -613,7 +608,12 @@ const Team = () => {
 
         {/* Team switcher + Create button */}
         <div className="flex items-center gap-3 flex-wrap">
-          {teams.length > 1 ? (
+          {loading ? (
+            <>
+              <Skeleton className="h-10 w-[300px] rounded-md" />
+              <Skeleton className="h-10 w-36 rounded-md" />
+            </>
+          ) : teams.length > 1 ? (
             <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
               <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
                 <SelectValue placeholder="Select a team" />
@@ -635,18 +635,31 @@ const Team = () => {
           ) : (
             <h1 className="text-2xl lg:text-3xl font-bold">{selectedTeam?.name}</h1>
           )}
-          <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
-            <Plus className="h-4 w-4" />
-            Create Team
-          </Button>
+          {!loading && (
+            <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+              <Plus className="h-4 w-4" />
+              Create Team
+            </Button>
+          )}
         </div>
 
-        {teams.length === 1 && (
+        {!loading && teams.length === 1 && (
           <p className="text-muted-foreground -mt-4">Team · {selectedTeam?.member_count} members</p>
         )}
 
         {/* Header with team name edit + action buttons */}
-        {selectedTeam && (
+        {loading ? (
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="space-y-2">
+              <Skeleton className="h-8 w-48 rounded-md" />
+              <Skeleton className="h-4 w-32 rounded-md" />
+            </div>
+            <div className="flex items-center gap-3 ml-auto">
+              <Skeleton className="h-10 w-44 rounded-md" />
+              <Skeleton className="h-10 w-36 rounded-md" />
+            </div>
+          </div>
+        ) : selectedTeam && (
           <div className="flex items-center justify-between flex-wrap gap-4">
             {teams.length > 1 && (
               <div>
@@ -700,7 +713,7 @@ const Team = () => {
         )}
 
         {/* Non-admin info banner */}
-        {!isAdmin && (
+        {!loading && !isAdmin && (
           <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-border/30">
             <Info className="h-4 w-4 text-muted-foreground shrink-0" />
             <p className="text-sm text-muted-foreground">Only the team Admin can manage members and roles.</p>
@@ -712,26 +725,53 @@ const Team = () => {
           <CardHeader>
             <div className="flex items-center gap-3">
               <CardTitle>Members</CardTitle>
-              <Badge variant="outline" className="bg-muted/50 border-border/50">
-                {selectedTeam?.member_count ?? 0} members
-              </Badge>
+              {!loading && (
+                <Badge variant="outline" className="bg-muted/50 border-border/50">
+                  {selectedTeam?.member_count ?? 0} members
+                </Badge>
+              )}
             </div>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border/50">
-                  <TableHead>Member</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Assigned Branches</TableHead>
-                  {isAdmin && <TableHead className="w-16">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {selectedTeam?.members.map(member => {
-                  const isSelf = member.user_id === user?.id;
-                  const displayName = member.profile.full_name ?? member.profile.email ?? "Unknown";
-                  const initials = getInitials(member.profile.full_name, member.profile.email);
+            {loading ? (
+              <div className="space-y-3">
+                {/* Table header */}
+                <div className="grid grid-cols-4 gap-4 pb-3 border-b border-border/50">
+                  {["Member", "Role", "Assigned Branches", "Actions"].map(col => (
+                    <Skeleton key={col} className="h-4 w-24 rounded-md" />
+                  ))}
+                </div>
+                {/* Table rows */}
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="grid grid-cols-4 gap-4 items-center py-2">
+                    <div className="flex items-center gap-3">
+                      <Skeleton className="h-9 w-9 rounded-full shrink-0" />
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-28 rounded-md" />
+                        <Skeleton className="h-3 w-36 rounded-md" />
+                      </div>
+                    </div>
+                    <Skeleton className="h-6 w-20 rounded-full" />
+                    <Skeleton className="h-8 w-44 rounded-md" />
+                    <Skeleton className="h-8 w-8 rounded-md" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border/50">
+                    <TableHead>Member</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Assigned Branches</TableHead>
+                    {isAdmin && <TableHead className="w-16">Actions</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedTeam?.members.map(member => {
+                    const isSelf = member.user_id === user?.id;
+                    const displayName = member.profile.full_name ?? member.profile.email ?? "Unknown";
+                    const initials = getInitials(member.profile.full_name, member.profile.email);
 
                   return (
                     <TableRow
@@ -850,6 +890,7 @@ const Team = () => {
                 })}
               </TableBody>
             </Table>
+            )}
           </CardContent>
         </Card>
 
@@ -859,7 +900,21 @@ const Team = () => {
             <CardTitle>GitHub Repository</CardTitle>
           </CardHeader>
           <CardContent>
-            {selectedTeam?.github_repo ? (
+            {loading ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-5 w-5 rounded-full" />
+                  <Skeleton className="h-4 w-64 rounded-md" />
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                </div>
+                <Skeleton className="h-4 w-32 rounded-md" />
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Skeleton key={i} className="h-5 w-16 rounded-full" />
+                  ))}
+                </div>
+              </div>
+            ) : selectedTeam?.github_repo ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-3 flex-wrap">
                   <Github className="h-5 w-5 text-foreground" />
