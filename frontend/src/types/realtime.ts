@@ -167,11 +167,15 @@ export type AlertRecord = Record<string, unknown> & {
 /**
  * A row in the `projects` table.
  */
-export interface ProjectRecord {
+export type ProjectRecord = Record<string, unknown> & {
   id: string;
   name: string;
   /** project_language enum */
   language: string | null;
+  /** health_score letter grade: "A" | "B" | "C" | "D" | "F" */
+  health_score: string | null;
+  /** project_type: "personal" | "team" */
+  type: string | null;
   owner_id: string;
   team_id: string;
   created_at: string;
@@ -179,7 +183,7 @@ export interface ProjectRecord {
   user_id: string;
   project_name: string | null;
   scan_type: string | null;
-}
+};
 
 /**
  * A row in the `team_members` table.
