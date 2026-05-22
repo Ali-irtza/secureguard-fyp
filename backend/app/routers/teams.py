@@ -166,16 +166,7 @@ async def remove_member(
 ):
     member_service.remove_team_member(team_id, member_user_id, current_user.id, supabase)
 
-@router.get("/{team_id}/branches/{branch}/files", response_model=BranchFilesResponse)
-async def get_branch_files(
-    team_id: str,
-    branch: str,
-    current_user=Depends(get_current_user),
-    supabase: Client = Depends(get_supabase),
-):
-    return await github_service.fetch_branch_files(team_id, branch, current_user.id, supabase)
-
-@router.get("/{team_id}/branches/{branch}/files/content", response_model=FileContentResponse)
+@router.get("/{team_id}/branches/{branch:path}/files/content", response_model=FileContentResponse)
 async def get_file_content(
     team_id: str,
     branch: str,
@@ -184,3 +175,12 @@ async def get_file_content(
     supabase: Client = Depends(get_supabase),
 ):
     return await github_service.fetch_file_content(team_id, branch, path, current_user.id, supabase)
+
+@router.get("/{team_id}/branches/{branch:path}/files", response_model=BranchFilesResponse)
+async def get_branch_files(
+    team_id: str,
+    branch: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    return await github_service.fetch_branch_files(team_id, branch, current_user.id, supabase)
