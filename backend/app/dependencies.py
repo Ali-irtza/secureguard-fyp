@@ -4,19 +4,28 @@ from supabase import create_client, Client
 from app.config import settings
 
 # ---------------------------------------------------------------------------
-# Supabase Client
+# Supabase Client — module-level singleton
 # ---------------------------------------------------------------------------
-# We create ONE client instance for the whole app.
-# service_role key is used here because the backend needs to bypass
-# Row Level Security (RLS) to manage data on behalf of users.
+# Creating a new client per request was causing a fresh TCP + TLS handshake
+# on every API call, adding ~1-2 seconds of overhead each time.
+# A single shared instance reuses the underlying HTTP connection pool.
+# service_role key bypasses RLS so the backend can manage data for any user.
 # NEVER expose the service_role key to the frontend.
 # ---------------------------------------------------------------------------
+_supabase_client: Client | None = None
+
 def get_supabase() -> Client:
     """
-    Returns a Supabase client instance.
-    Used as a FastAPI dependency — injected into routes that need DB access.
+    Returns the shared Supabase client singleton.
+    Initialised once on first call; reused for every subsequent request.
     """
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key,
+        )
+    return _supabase_client
 
 
 # ---------------------------------------------------------------------------

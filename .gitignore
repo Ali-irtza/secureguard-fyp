@@ -48,5 +48,15 @@ backend/.env.*
 !backend/.env.example
 backend/*.pem
 
+# Root-level venv (accidentally created outside backend/)
+venv/
+.venv/
+
+# Root-level package-lock (not part of project)
+package-lock.json
+
+# Kiro IDE files
+.kiro/
+
 # Private dev log (local only)
 backend/DEVLOG.md

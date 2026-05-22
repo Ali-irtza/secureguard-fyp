@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from supabase import Client
 from app.dependencies import get_supabase, get_current_user
 from app.models.auth import MeResponse, ProfileUpdateRequest, ProfileResponse
+from app.services.auth.profile_service import get_user_profile, upsert_user_profile
 
 router = APIRouter()
 
@@ -22,20 +23,12 @@ async def get_me(
     Returns the authenticated user's profile.
     Merges auth.users data (email) with profiles table data (name, avatar).
     """
-    user_id = current_user.id
-
-    # Fetch profile row from our profiles table
-    result = supabase.table("profiles").select("*").eq("id", user_id).single().execute()
-
-    profile = result.data or {}
-
-    return MeResponse(
-        id=user_id,
-        email=current_user.email,
-        full_name=profile.get("full_name"),
-        avatar_url=profile.get("avatar_url"),
-        created_at=profile.get("created_at"),
+    profile_data = get_user_profile(
+        user_id=current_user.id, 
+        email=current_user.email, 
+        supabase=supabase
     )
+    return MeResponse(**profile_data)
 
 
 # ---------------------------------------------------------------------------
@@ -55,25 +48,10 @@ async def upsert_profile(
     Upserts the authenticated user's profile.
     Only updates fields that are provided (non-None).
     """
-    user_id = current_user.id
-
-    # Build update payload — only include fields the client actually sent
-    payload: dict = {"id": user_id}
-    if body.full_name is not None:
-        payload["full_name"] = body.full_name
-    if body.avatar_url is not None:
-        payload["avatar_url"] = body.avatar_url
-
-    result = (
-        supabase.table("profiles")
-        .upsert(payload, on_conflict="id")
-        .execute()
+    profile_data = upsert_user_profile(
+        user_id=current_user.id,
+        full_name=body.full_name,
+        avatar_url=body.avatar_url,
+        supabase=supabase
     )
-
-    if not result.data:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update profile",
-        )
-
-    return ProfileResponse(**result.data[0])
+    return ProfileResponse(**profile_data)

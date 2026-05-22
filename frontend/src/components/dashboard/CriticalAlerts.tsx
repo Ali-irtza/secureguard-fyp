@@ -1,6 +1,8 @@
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, ChevronRight } from "lucide-react";
 import type { TeamAlert } from "@/lib/team-data";
+import type { AlertRecord, SubscriptionStatus } from "@/types/realtime";
+import ConnectionStatus from "@/components/dashboard/ConnectionStatus";
 
 interface Alert {
   id: string;
@@ -21,11 +23,34 @@ interface CriticalAlertsProps {
   teamAlerts?: TeamAlert[];
   isTeamView?: boolean;
   userRole?: "admin" | "developer" | "viewer";
+  realtimeAlerts?: AlertRecord[];
+  connectionStatus?: { status: SubscriptionStatus; connectionCount: number };
 }
 
-const CriticalAlerts = ({ teamAlerts, isTeamView, userRole }: CriticalAlertsProps) => {
+function formatTimeAgo(isoString: string): string {
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  const diffMins = Math.floor(diffMs / 60_000);
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+}
+
+const CriticalAlerts = ({ teamAlerts, isTeamView, userRole, realtimeAlerts, connectionStatus }: CriticalAlertsProps) => {
   const navigate = useNavigate();
-  const alerts = isTeamView && teamAlerts ? teamAlerts : defaultAlerts;
+
+  // Priority: realtimeAlerts > teamAlerts > defaultAlerts
+  // AlertRecord has: id, vulnerability_id, user_id, status, created_at, updated_at
+  const alerts = realtimeAlerts
+    ? realtimeAlerts.map((a) => ({
+        id: a.id,
+        title: `Vulnerability Alert`,
+        project: a.vulnerability_id,
+        timeAgo: formatTimeAgo(a.created_at),
+      }))
+    : isTeamView && teamAlerts
+    ? teamAlerts
+    : defaultAlerts;
 
   return (
     <div className="glass-card overflow-hidden animate-fade-in">
@@ -34,9 +59,17 @@ const CriticalAlerts = ({ teamAlerts, isTeamView, userRole }: CriticalAlertsProp
           <AlertTriangle className="h-5 w-5 text-destructive" />
           Critical Alerts
         </h3>
-        <span className="text-xs px-2 py-1 rounded-full bg-destructive/20 text-destructive font-medium">
-          {alerts.length} Active
-        </span>
+        <div className="flex items-center gap-2">
+          {connectionStatus && (
+            <ConnectionStatus
+              status={connectionStatus.status}
+              connectionCount={connectionStatus.connectionCount}
+            />
+          )}
+          <span className="text-xs px-2 py-1 rounded-full bg-destructive/20 text-destructive font-medium">
+            {alerts.length} Active
+          </span>
+        </div>
       </div>
       <div className="max-h-[280px] overflow-y-auto">
         {alerts.map((alert) => {

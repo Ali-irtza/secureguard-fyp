@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Users, Crown, Pencil, Trash2, Lock, Github,
   Info, Eye, EyeOff, UserPlus, ExternalLink,
-  RefreshCw, Plus, Loader2,
+  RefreshCw, Plus, Loader2, GitBranch, Check, ChevronsUpDown,
 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import BranchFileExplorer from "@/components/dashboard/BranchFileExplorer";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,9 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -25,9 +29,114 @@ import {
   listTeams, createTeam, updateTeam, deleteTeam,
   connectGithub, refreshGithubBranches,
   getGithubAuthorizeUrl, listGithubRepos, selectGithubRepo,
+  syncBranches,
   inviteMember, updateMember, removeMember,
-  type Team, type TeamRole,
+  type Team, type TeamRole, type TeamMember,
 } from "@/lib/teams-api";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import { parsePgTextArray } from "@/types/realtime";
+import type { TeamMemberRecord } from "@/types/realtime";
+
+// ---------------------------------------------------------------------------
+// BranchAssignDropdown — matches the role Select dropdown in style
+// Batches selections locally; only calls onSave when the popover closes.
+// ---------------------------------------------------------------------------
+
+interface BranchAssignDropdownProps {
+  branches: string[];
+  assigned: string[];
+  onSave: (branches: string[]) => void;
+}
+
+function BranchAssignDropdown({ branches, assigned, onSave }: BranchAssignDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [local, setLocal] = useState<string[]>(assigned);
+
+  // Sync local state when the server-confirmed assigned list changes.
+  // Compare by value (not reference) so that a new `[]` from `?? []` at the
+  // call site doesn't reset an in-progress selection on every parent re-render.
+  const assignedKey = assigned.slice().sort().join("\0");
+  const prevAssignedKey = useRef(assignedKey);
+  useEffect(() => {
+    if (assignedKey !== prevAssignedKey.current) {
+      prevAssignedKey.current = assignedKey;
+      setLocal(assigned);
+    }
+  }, [assignedKey, assigned]);
+
+  const toggle = (branch: string) => {
+    setLocal(prev =>
+      prev.includes(branch) ? prev.filter(b => b !== branch) : [...prev, branch]
+    );
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    // Save when closing if anything changed
+    if (!next) {
+      const changed =
+        local.length !== assigned.length ||
+        local.some(b => !assigned.includes(b));
+      if (changed) onSave(local);
+    }
+  };
+
+  const label = local.length === 0
+    ? "No branches"
+    : local.length === 1
+    ? local[0]
+    : `${local.length} branches`;
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-44 h-8 justify-between bg-background/50 border-border/50 text-xs font-normal hover:bg-accent hover:text-accent-foreground hover:translate-y-0 hover:shadow-none active:scale-100"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-50 ml-1" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-2" align="start">
+        <p className="text-xs font-medium text-muted-foreground px-1.5 pb-1.5 border-b border-border/50 mb-1.5">
+          Assign branches
+        </p>
+        <div className="space-y-0.5 max-h-52 overflow-y-auto">
+          {branches.map(branch => {
+            const checked = local.includes(branch);
+            return (
+              <button
+                key={branch}
+                onClick={() => toggle(branch)}
+                className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-md hover:bg-muted/50 transition-colors text-left"
+              >
+                <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                  checked ? "bg-primary border-primary" : "border-border/70 bg-background"
+                }`}>
+                  {checked && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                </div>
+                <GitBranch className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="text-xs text-foreground truncate">{branch}</span>
+              </button>
+            );
+          })}
+        </div>
+        {local.length > 0 && (
+          <div className="mt-1.5 pt-1.5 border-t border-border/50">
+            <button
+              onClick={() => setLocal([])}
+              className="w-full text-xs text-muted-foreground hover:text-destructive transition-colors text-left px-1.5 py-1"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +168,7 @@ const Team = () => {
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [loading, setLoading]           = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [refreshing, setRefreshing]     = useState(false);
 
   // ── Modal state ───────────────────────────────────────────────────────────
   const [createTeamOpen, setCreateTeamOpen]     = useState(false);
@@ -78,10 +188,60 @@ const Team = () => {
   const [githubRepos, setGithubRepos]           = useState<{ full_name: string; private: boolean; url: string }[]>([]);
   const [reposLoading, setReposLoading]         = useState(false);
 
+  // ── UI state ───────────────────────────────────────────────────────────────
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const selectedTeam    = teams.find(t => t.id === selectedTeamId);
   const currentUserRole = selectedTeam?.current_user_role ?? "viewer";
   const isAdmin         = currentUserRole === "admin";
+
+  // ── Realtime: live team_members sync ─────────────────────────────────────
+  // CDC events carry raw DB columns (id, user_id, role, branches, team_id).
+  // For UPDATE: merge role + branches into the existing TeamMember (preserves
+  //   the profile sub-object which CDC doesn't carry).
+  // For DELETE: remove the member by matching on the CDC row's id field.
+  // For INSERT: a new member was added by another admin — re-fetch the team
+  //   so we get the full profile data alongside the new row.
+  useRealtimeSync<TeamMemberRecord>({
+    table: "team_members",
+    filter: selectedTeamId ? `team_id=eq.${selectedTeamId}` : undefined,
+    enabled: !!selectedTeamId,
+
+    onInsert: () => {
+      // Re-fetch to get the full member object including profile join
+      fetchTeams();
+    },
+
+    onUpdate: (event) => {
+      const { user_id, role, branches } = event.new;
+      // branches arrives from the CDC WebSocket as a raw Postgres braced
+      // string (e.g. "{main,development}") — parse it into a JS array first.
+      const parsedBranches = parsePgTextArray(branches as string[] | string | null);
+      setTeams(prev => prev.map(team =>
+        team.id !== selectedTeamId ? team : {
+          ...team,
+          members: team.members.map((m): TeamMember =>
+            m.user_id === user_id
+              ? { ...m, role: role as TeamRole, branches: parsedBranches }
+              : m
+          ),
+        }
+      ));
+    },
+
+    onDelete: (event) => {
+      // event.old contains the deleted row — match by the junction row id
+      const deletedId = event.old.id;
+      if (!deletedId) return;
+      setTeams(prev => prev.map(team =>
+        team.id !== selectedTeamId ? team : {
+          ...team,
+          members: team.members.filter(m => m.id !== deletedId),
+          member_count: Math.max(0, team.member_count - 1),
+        }
+      ));
+    },
+  });
 
   // ── Load teams on mount ───────────────────────────────────────────────────
   const fetchTeams = useCallback(async () => {
@@ -155,9 +315,16 @@ const Team = () => {
 
   const handleRefreshBranches = async () => {
     if (!selectedTeam || !selectedTeam.github_repo) return;
-    // Need PAT again — open the connect modal pre-filled with the existing URL
-    setRepoUrl(selectedTeam.github_repo);
-    setConnectGithubOpen(true);
+    setRefreshing(true);
+    try {
+      const updated = await syncBranches(selectedTeam.id);
+      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+      toast.success(`Successfully synced ${updated.github_branches.length} branches from GitHub`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to sync branches from GitHub");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // ── GitHub OAuth handlers ─────────────────────────────────────────────────
@@ -178,10 +345,26 @@ const Team = () => {
   const handleOAuthCallback = useCallback(async (teamId: string) => {
     // Called when user returns from GitHub OAuth — load their repos
     setReposLoading(true);
-    setRepoPicker(true);
     try {
       const repos = await listGithubRepos(teamId);
-      setGithubRepos(repos);
+      
+      if (repos.length === 1) {
+        // Auto-connect if exactly one repository is selected
+        setActionLoading(true);
+        try {
+          const updated = await selectGithubRepo(teamId, repos[0].full_name, repos[0].url);
+          setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+          toast.success(`Connected ${repos[0].full_name} — ${updated.github_branches.length} branches synced`);
+        } catch (err: any) {
+          toast.error(err.message ?? "Failed to connect repository");
+        } finally {
+          setActionLoading(false);
+        }
+      } else {
+        // Multiple repos selected, show the picker modal
+        setGithubRepos(repos);
+        setRepoPicker(true);
+      }
     } catch (err: any) {
       toast.error(err.message ?? "Failed to load repositories");
       setRepoPicker(false);
@@ -273,47 +456,102 @@ const Team = () => {
 
   const handleUpdateMemberRole = async (memberUserId: string, role: TeamRole) => {
     if (!selectedTeam) return;
+
+    // Snapshot for rollback
+    const snapshot = teams;
+
+    // Optimistic update — apply role change immediately
+    setTeams(prev => prev.map(t =>
+      t.id !== selectedTeam.id ? t : {
+        ...t,
+        members: t.members.map(m =>
+          m.user_id === memberUserId ? { ...m, role } : m
+        ),
+      }
+    ));
+
     try {
       const updated = await updateMember(selectedTeam.id, memberUserId, { role });
+      // Reconcile with server response to pick up any server-side fields
       setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...t, members: t.members.map(m => m.user_id === memberUserId ? updated : m) }
-          : t
+        t.id !== selectedTeam.id ? t : {
+          ...t,
+          members: t.members.map(m => m.user_id === memberUserId ? updated : m),
+        }
       ));
       toast.success("Role updated");
     } catch (err: any) {
+      // Rollback to snapshot
+      setTeams(snapshot);
       toast.error(err.message ?? "Failed to update role");
+    }
+  };
+
+  const handleUpdateMemberBranches = async (memberUserId: string, branches: string[]) => {
+    if (!selectedTeam) return;
+
+    // Snapshot for rollback
+    const snapshot = teams;
+
+    // Optimistic update — apply branch change immediately
+    setTeams(prev => prev.map(t =>
+      t.id !== selectedTeam.id ? t : {
+        ...t,
+        members: t.members.map(m =>
+          m.user_id === memberUserId ? { ...m, branches } : m
+        ),
+      }
+    ));
+
+    try {
+      const updated = await updateMember(selectedTeam.id, memberUserId, { branches });
+      // Reconcile with server response
+      setTeams(prev => prev.map(t =>
+        t.id !== selectedTeam.id ? t : {
+          ...t,
+          members: t.members.map(m => m.user_id === memberUserId ? updated : m),
+        }
+      ));
+      toast.success("Branches updated");
+    } catch (err: any) {
+      // Rollback to snapshot
+      setTeams(snapshot);
+      toast.error(err.message ?? "Failed to update branches");
     }
   };
 
   const handleRemoveMember = async (memberUserId: string, memberName: string) => {
     if (!selectedTeam) return;
+
+    // Snapshot for rollback
+    const snapshot = teams;
+
+    // Optimistic update — remove member immediately
+    setTeams(prev => prev.map(t =>
+      t.id !== selectedTeam.id ? t : {
+        ...t,
+        members: t.members.filter(m => m.user_id !== memberUserId),
+        member_count: Math.max(0, t.member_count - 1),
+      }
+    ));
+
     try {
       await removeMember(selectedTeam.id, memberUserId);
-      setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...t, members: t.members.filter(m => m.user_id !== memberUserId), member_count: t.member_count - 1 }
-          : t
-      ));
       toast.success(`${memberName} removed from team`);
     } catch (err: any) {
+      // Rollback to snapshot
+      setTeams(snapshot);
       toast.error(err.message ?? "Failed to remove member");
     }
   };
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      </DashboardLayout>
-    );
-  }
+  // No full-page loading gate — the layout renders immediately.
+  // Each section shows its own inline skeleton while data is in flight,
+  // matching the progressive pattern used on the Projects page.
 
   // ── Empty state ───────────────────────────────────────────────────────────
-  if (teams.length === 0) {
+  if (!loading && teams.length === 0) {
     return (
       <DashboardLayout>
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6">
@@ -370,7 +608,12 @@ const Team = () => {
 
         {/* Team switcher + Create button */}
         <div className="flex items-center gap-3 flex-wrap">
-          {teams.length > 1 ? (
+          {loading ? (
+            <>
+              <Skeleton className="h-10 w-[300px] rounded-md" />
+              <Skeleton className="h-10 w-36 rounded-md" />
+            </>
+          ) : teams.length > 1 ? (
             <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
               <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
                 <SelectValue placeholder="Select a team" />
@@ -392,18 +635,31 @@ const Team = () => {
           ) : (
             <h1 className="text-2xl lg:text-3xl font-bold">{selectedTeam?.name}</h1>
           )}
-          <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
-            <Plus className="h-4 w-4" />
-            Create Team
-          </Button>
+          {!loading && (
+            <Button onClick={() => setCreateTeamOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
+              <Plus className="h-4 w-4" />
+              Create Team
+            </Button>
+          )}
         </div>
 
-        {teams.length === 1 && (
+        {!loading && teams.length === 1 && (
           <p className="text-muted-foreground -mt-4">Team · {selectedTeam?.member_count} members</p>
         )}
 
         {/* Header with team name edit + action buttons */}
-        {selectedTeam && (
+        {loading ? (
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="space-y-2">
+              <Skeleton className="h-8 w-48 rounded-md" />
+              <Skeleton className="h-4 w-32 rounded-md" />
+            </div>
+            <div className="flex items-center gap-3 ml-auto">
+              <Skeleton className="h-10 w-44 rounded-md" />
+              <Skeleton className="h-10 w-36 rounded-md" />
+            </div>
+          </div>
+        ) : selectedTeam && (
           <div className="flex items-center justify-between flex-wrap gap-4">
             {teams.length > 1 && (
               <div>
@@ -457,7 +713,7 @@ const Team = () => {
         )}
 
         {/* Non-admin info banner */}
-        {!isAdmin && (
+        {!loading && !isAdmin && (
           <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-border/30">
             <Info className="h-4 w-4 text-muted-foreground shrink-0" />
             <p className="text-sm text-muted-foreground">Only the team Admin can manage members and roles.</p>
@@ -469,26 +725,53 @@ const Team = () => {
           <CardHeader>
             <div className="flex items-center gap-3">
               <CardTitle>Members</CardTitle>
-              <Badge variant="outline" className="bg-muted/50 border-border/50">
-                {selectedTeam?.member_count ?? 0} members
-              </Badge>
+              {!loading && (
+                <Badge variant="outline" className="bg-muted/50 border-border/50">
+                  {selectedTeam?.member_count ?? 0} members
+                </Badge>
+              )}
             </div>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border/50">
-                  <TableHead>Member</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Assigned Branch</TableHead>
-                  {isAdmin && <TableHead className="w-16">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {selectedTeam?.members.map(member => {
-                  const isSelf = member.user_id === user?.id;
-                  const displayName = member.profile.full_name ?? member.profile.email ?? "Unknown";
-                  const initials = getInitials(member.profile.full_name, member.profile.email);
+            {loading ? (
+              <div className="space-y-3">
+                {/* Table header */}
+                <div className="grid grid-cols-4 gap-4 pb-3 border-b border-border/50">
+                  {["Member", "Role", "Assigned Branches", "Actions"].map(col => (
+                    <Skeleton key={col} className="h-4 w-24 rounded-md" />
+                  ))}
+                </div>
+                {/* Table rows */}
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="grid grid-cols-4 gap-4 items-center py-2">
+                    <div className="flex items-center gap-3">
+                      <Skeleton className="h-9 w-9 rounded-full shrink-0" />
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-28 rounded-md" />
+                        <Skeleton className="h-3 w-36 rounded-md" />
+                      </div>
+                    </div>
+                    <Skeleton className="h-6 w-20 rounded-full" />
+                    <Skeleton className="h-8 w-44 rounded-md" />
+                    <Skeleton className="h-8 w-8 rounded-md" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border/50">
+                    <TableHead>Member</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Assigned Branches</TableHead>
+                    {isAdmin && <TableHead className="w-16">Actions</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedTeam?.members.map(member => {
+                    const isSelf = member.user_id === user?.id;
+                    const displayName = member.profile.full_name ?? member.profile.email ?? "Unknown";
+                    const initials = getInitials(member.profile.full_name, member.profile.email);
 
                   return (
                     <TableRow
@@ -525,7 +808,7 @@ const Team = () => {
                             value={member.role}
                             onValueChange={val => handleUpdateMemberRole(member.user_id, val as TeamRole)}
                           >
-                            <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs">
+                            <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs hover:bg-accent hover:text-accent-foreground">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -551,34 +834,23 @@ const Team = () => {
                             <span className="text-xs">No branch</span>
                           </div>
                         ) : isAdmin && !isSelf && selectedTeam.github_branches.length > 0 ? (
-                          // Admin can assign a real branch from the synced list
-                          <Select
-                            value={member.branch ?? ""}
-                            onValueChange={val =>
-                              updateMember(selectedTeam.id, member.user_id, { branch: val })
-                                .then(updated =>
-                                  setTeams(prev => prev.map(t =>
-                                    t.id === selectedTeam.id
-                                      ? { ...t, members: t.members.map(m => m.user_id === member.user_id ? updated : m) }
-                                      : t
-                                  ))
-                                )
-                                .catch(err => toast.error(err.message ?? "Failed to assign branch"))
-                            }
-                          >
-                            <SelectTrigger className="w-44 h-8 bg-background/50 border-border/50 text-xs">
-                              <SelectValue placeholder="Assign branch…" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {selectedTeam.github_branches.map(branch => (
-                                <SelectItem key={branch} value={branch}>{branch}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <BranchAssignDropdown
+                            branches={selectedTeam.github_branches}
+                            assigned={member.branches ?? []}
+                            onSave={(newBranches) => handleUpdateMemberBranches(member.user_id, newBranches)}
+                          />
                         ) : isAdmin && !isSelf && !selectedTeam.github_repo ? (
                           <span className="text-xs text-muted-foreground italic">Connect repo first</span>
+                        ) : member.branches && member.branches.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {member.branches.map(branch => (
+                              <Badge key={branch} variant="outline" className="text-xs">
+                                {branch}
+                              </Badge>
+                            ))}
+                          </div>
                         ) : (
-                          <span className="text-sm text-foreground">{member.branch ?? "—"}</span>
+                          <span className="text-sm text-muted-foreground">—</span>
                         )}
                       </TableCell>
 
@@ -618,6 +890,7 @@ const Team = () => {
                 })}
               </TableBody>
             </Table>
+            )}
           </CardContent>
         </Card>
 
@@ -627,7 +900,21 @@ const Team = () => {
             <CardTitle>GitHub Repository</CardTitle>
           </CardHeader>
           <CardContent>
-            {selectedTeam?.github_repo ? (
+            {loading ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-5 w-5 rounded-full" />
+                  <Skeleton className="h-4 w-64 rounded-md" />
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                </div>
+                <Skeleton className="h-4 w-32 rounded-md" />
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Skeleton key={i} className="h-5 w-16 rounded-full" />
+                  ))}
+                </div>
+              </div>
+            ) : selectedTeam?.github_repo ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-3 flex-wrap">
                   <Github className="h-5 w-5 text-foreground" />
@@ -642,13 +929,23 @@ const Team = () => {
                   </a>
                   <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
                 </div>
-                <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                  <span>{selectedTeam.github_branches.length} branches synced</span>
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm text-muted-foreground">{selectedTeam.github_branches.length} branches synced</span>
+                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-2">
+                    {selectedTeam.github_branches.map(branch => (
+                      <Badge key={branch} variant="secondary" className="text-[10px] font-normal bg-muted/50 hover:bg-muted/80">
+                        {branch}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
                 {isAdmin && (
                   <div className="flex items-center gap-3">
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleGithubOAuth} disabled={actionLoading}>
-                      <RefreshCw className="h-4 w-4" />
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing}>
+                      {refreshing
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <RefreshCw className="h-4 w-4" />
+                      }
                       Refresh Branches
                     </Button>
                     <Button
@@ -682,6 +979,17 @@ const Team = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* Branch File Explorer */}
+        {selectedTeam && selectedTeam.github_repo && (
+          <BranchFileExplorer
+            team={selectedTeam}
+            currentUserRole={currentUserRole}
+            currentUserBranches={
+              selectedTeam.members.find(m => m.user_id === user?.id)?.branches ?? null
+            }
+          />
+        )}
 
       </div>
 

@@ -17,7 +17,7 @@ export interface TeamMember {
   id: string;           // team_members row id
   user_id: string;
   role: TeamRole;
-  branch: string | null;
+  branches: string[] | null;
   profile: MemberProfile;
   joined_at: string;
 }
@@ -46,7 +46,7 @@ export interface Team {
 
 const API_BASE = import.meta.env.VITE_API_URL as string ?? "http://localhost:8000";
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -78,17 +78,66 @@ async function apiFetch<T>(
 }
 
 // ---------------------------------------------------------------------------
+// Teams Cache — avoids re-fetching on every page navigation
+// ---------------------------------------------------------------------------
+// Simple in-memory cache with TTL. Mutations auto-invalidate it.
+// Survives SPA navigation but clears on full page refresh (which is fine).
+//
+// Realtime invalidation: subscribes to Supabase CDC on the `teams` and
+// `team_members` tables. Any INSERT/UPDATE/DELETE busts the cache so the
+// next call to listTeams() fetches fresh data from the API.
+// ---------------------------------------------------------------------------
+
+const TEAMS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+let _teamsCache: { data: Team[]; timestamp: number } | null = null;
+
+/** Clear the teams cache — called after any mutation */
+export function invalidateTeamsCache(): void {
+  _teamsCache = null;
+}
+
+// Subscribe to realtime changes on teams + team_members so the cache is
+// automatically busted whenever data changes (even from another session/tab).
+// We set this up once at module load time; the subscription is long-lived.
+(function setupTeamsCacheInvalidation() {
+  // Guard: only run in browser environments (not SSR / test runners)
+  if (typeof window === "undefined") return;
+
+  supabase
+    .channel("teams-cache-invalidation")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "teams" },
+      () => { invalidateTeamsCache(); }
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "team_members" },
+      () => { invalidateTeamsCache(); }
+    )
+    .subscribe();
+})();
+
+// ---------------------------------------------------------------------------
 // Teams API
 // ---------------------------------------------------------------------------
 
-/** GET /teams — all teams the current user belongs to */
+/** GET /teams — all teams the current user belongs to (cached) */
 export async function listTeams(): Promise<Team[]> {
+  // Return cached data if fresh
+  if (_teamsCache && Date.now() - _teamsCache.timestamp < TEAMS_CACHE_TTL_MS) {
+    return _teamsCache.data;
+  }
+
   const data = await apiFetch<{ teams: Team[] }>("/teams");
+  _teamsCache = { data: data.teams, timestamp: Date.now() };
   return data.teams;
 }
 
 /** POST /teams — create a new team */
 export async function createTeam(name: string): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>("/teams", {
     method: "POST",
     body: JSON.stringify({ name }),
@@ -105,6 +154,7 @@ export async function updateTeam(
   teamId: string,
   updates: { name?: string; github_repo?: string }
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}`, {
     method: "PATCH",
     body: JSON.stringify(updates),
@@ -113,6 +163,7 @@ export async function updateTeam(
 
 /** DELETE /teams/:id */
 export async function deleteTeam(teamId: string): Promise<void> {
+  invalidateTeamsCache();
   return apiFetch<void>(`/teams/${teamId}`, { method: "DELETE" });
 }
 
@@ -122,9 +173,18 @@ export async function connectGithub(
   repoUrl: string,
   pat: string
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}/github`, {
     method: "POST",
     body: JSON.stringify({ repo_url: repoUrl, pat }),
+  });
+}
+
+/** POST /teams/:id/github/sync-branches — re-sync branches using the stored installation token, no PAT needed */
+export async function syncBranches(teamId: string): Promise<Team> {
+  invalidateTeamsCache();
+  return apiFetch<Team>(`/teams/${teamId}/github/sync-branches`, {
+    method: "POST",
   });
 }
 
@@ -134,6 +194,7 @@ export async function refreshGithubBranches(
   repoUrl: string,
   pat: string
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}/github/refresh`, {
     method: "POST",
     body: JSON.stringify({ repo_url: repoUrl, pat }),
@@ -162,6 +223,7 @@ export async function selectGithubRepo(
   repoFullName: string,
   repoUrl: string
 ): Promise<Team> {
+  invalidateTeamsCache();
   return apiFetch<Team>(`/teams/${teamId}/github/select-repo`, {
     method: "POST",
     body: JSON.stringify({ repo_full_name: repoFullName, repo_url: repoUrl }),
@@ -174,18 +236,20 @@ export async function inviteMember(
   email: string,
   role: "developer" | "viewer"
 ): Promise<TeamMember> {
+  invalidateTeamsCache();
   return apiFetch<TeamMember>(`/teams/${teamId}/members`, {
     method: "POST",
     body: JSON.stringify({ email, role }),
   });
 }
 
-/** PATCH /teams/:id/members/:userId — update role and/or branch */
+/** PATCH /teams/:id/members/:userId — update role and/or branches */
 export async function updateMember(
   teamId: string,
   userId: string,
-  updates: { role?: TeamRole; branch?: string }
+  updates: { role?: TeamRole; branches?: string[] }
 ): Promise<TeamMember> {
+  invalidateTeamsCache();
   return apiFetch<TeamMember>(`/teams/${teamId}/members/${userId}`, {
     method: "PATCH",
     body: JSON.stringify(updates),
@@ -197,7 +261,112 @@ export async function removeMember(
   teamId: string,
   userId: string
 ): Promise<void> {
+  invalidateTeamsCache();
   return apiFetch<void>(`/teams/${teamId}/members/${userId}`, {
     method: "DELETE",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Branch File Browsing
+// ---------------------------------------------------------------------------
+
+export interface BranchFileItem {
+  path: string;
+  type: "file" | "directory";
+  size: number | null;
+}
+
+export interface BranchFilesResponse {
+  branch: string;
+  files: BranchFileItem[];
+}
+
+export interface FileContentResponse {
+  branch: string;
+  path: string;
+  content: string;
+  size: number;
+  encoding: string;
+}
+
+// ---------------------------------------------------------------------------
+// Branch Files Cache — module-level, survives SPA navigation
+// ---------------------------------------------------------------------------
+
+const BRANCH_FILES_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const FILE_CONTENT_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+// Key: "teamId::branch"
+const _branchFilesCache = new Map<string, CacheEntry<BranchFilesResponse>>();
+// Key: "teamId::branch::path"
+const _fileContentCache = new Map<string, CacheEntry<FileContentResponse>>();
+
+/** Return cached branch files if available (even if stale) — for instant display */
+export function getCachedBranchFiles(
+  teamId: string,
+  branch: string
+): BranchFilesResponse | null {
+  const entry = _branchFilesCache.get(`${teamId}::${branch}`);
+  return entry?.data ?? null;
+}
+
+/** Return cached file content if available — for instant display */
+export function getCachedFileContent(
+  teamId: string,
+  branch: string,
+  filePath: string
+): FileContentResponse | null {
+  const key = `${teamId}::${branch}::${filePath}`;
+  const entry = _fileContentCache.get(key);
+  return entry?.data ?? null;
+}
+
+/** Check if branch files cache is still fresh (within TTL) */
+export function isBranchFilesCacheFresh(
+  teamId: string,
+  branch: string
+): boolean {
+  const entry = _branchFilesCache.get(`${teamId}::${branch}`);
+  if (!entry) return false;
+  return Date.now() - entry.timestamp < BRANCH_FILES_TTL_MS;
+}
+
+/** GET /teams/:id/branches/:branch/files — fetch file tree, updates cache */
+export async function fetchBranchFiles(
+  teamId: string,
+  branch: string
+): Promise<BranchFilesResponse> {
+  const res = await apiFetch<BranchFilesResponse>(
+    `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files`
+  );
+  _branchFilesCache.set(`${teamId}::${branch}`, {
+    data: res,
+    timestamp: Date.now(),
+  });
+  return res;
+}
+
+/** GET /teams/:id/branches/:branch/files/content — fetch single file, updates cache */
+export async function fetchFileContent(
+  teamId: string,
+  branch: string,
+  filePath: string
+): Promise<FileContentResponse> {
+  const key = `${teamId}::${branch}::${filePath}`;
+  // Return from cache if fresh
+  const cached = _fileContentCache.get(key);
+  if (cached && Date.now() - cached.timestamp < FILE_CONTENT_TTL_MS) {
+    return cached.data;
+  }
+  const res = await apiFetch<FileContentResponse>(
+    `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files/content?path=${encodeURIComponent(filePath)}`
+  );
+  _fileContentCache.set(key, { data: res, timestamp: Date.now() });
+  return res;
 }
