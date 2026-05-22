@@ -46,7 +46,7 @@ export interface Team {
 
 const API_BASE = import.meta.env.VITE_API_URL as string ?? "http://localhost:8000";
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -82,9 +82,13 @@ async function apiFetch<T>(
 // ---------------------------------------------------------------------------
 // Simple in-memory cache with TTL. Mutations auto-invalidate it.
 // Survives SPA navigation but clears on full page refresh (which is fine).
+//
+// Realtime invalidation: subscribes to Supabase CDC on the `teams` and
+// `team_members` tables. Any INSERT/UPDATE/DELETE busts the cache so the
+// next call to listTeams() fetches fresh data from the API.
 // ---------------------------------------------------------------------------
 
-const TEAMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const TEAMS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 let _teamsCache: { data: Team[]; timestamp: number } | null = null;
 
@@ -92,6 +96,28 @@ let _teamsCache: { data: Team[]; timestamp: number } | null = null;
 export function invalidateTeamsCache(): void {
   _teamsCache = null;
 }
+
+// Subscribe to realtime changes on teams + team_members so the cache is
+// automatically busted whenever data changes (even from another session/tab).
+// We set this up once at module load time; the subscription is long-lived.
+(function setupTeamsCacheInvalidation() {
+  // Guard: only run in browser environments (not SSR / test runners)
+  if (typeof window === "undefined") return;
+
+  supabase
+    .channel("teams-cache-invalidation")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "teams" },
+      () => { invalidateTeamsCache(); }
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "team_members" },
+      () => { invalidateTeamsCache(); }
+    )
+    .subscribe();
+})();
 
 // ---------------------------------------------------------------------------
 // Teams API
