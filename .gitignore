@@ -60,3 +60,5 @@ package-lock.json
 
 # Private dev log (local only)
 backend/DEVLOG.md
+
+REVIEW.md

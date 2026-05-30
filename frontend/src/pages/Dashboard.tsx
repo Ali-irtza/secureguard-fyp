@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { getScanHistory, ScanHistoryItem } from "@/lib/scans-api";
+import { useQuery } from "@tanstack/react-query";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import MetricsRow from "@/components/dashboard/MetricsRow";
 import EmptyState from "@/components/dashboard/EmptyState";
@@ -12,45 +14,6 @@ import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import type { ScanRecord, AlertRecord, SubscriptionStatus } from "@/types/realtime";
 import { applyOptimisticInsert, applyOptimisticUpdate, applyOptimisticDelete } from "@/types/realtime";
-
-// Mock data for demonstration
-const mockScans: Scan[] = [
-  {
-    id: "1",
-    projectName: "frontend-app",
-    date: new Date(Date.now() - 1000 * 60 * 30),
-    status: "completed",
-    vulnerabilities: { critical: 2, high: 5, medium: 12, low: 23 },
-  },
-  {
-    id: "2",
-    projectName: "api-gateway",
-    date: new Date(Date.now() - 1000 * 60 * 60 * 2),
-    status: "in_progress",
-    vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 },
-  },
-  {
-    id: "3",
-    projectName: "auth-service",
-    date: new Date(Date.now() - 1000 * 60 * 60 * 5),
-    status: "completed",
-    vulnerabilities: { critical: 1, high: 3, medium: 8, low: 15 },
-  },
-  {
-    id: "4",
-    projectName: "payment-module",
-    date: new Date(Date.now() - 1000 * 60 * 60 * 24),
-    status: "failed",
-    vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 },
-  },
-  {
-    id: "5",
-    projectName: "admin-panel",
-    date: new Date(Date.now() - 1000 * 60 * 60 * 48),
-    status: "completed",
-    vulnerabilities: { critical: 0, high: 2, medium: 6, low: 11 },
-  },
-];
 
 const Dashboard = () => {
   const [showEmpty] = useState(false);
@@ -68,6 +31,30 @@ const Dashboard = () => {
       setSelectedTeamId((adminTeam || mockTeams[0]).id);
     }
   }, []);
+
+  // Fetch real scan history from the API
+  const { data: rawScans = [] } = useQuery({
+    queryKey: ["scan-history"],
+    queryFn: getScanHistory,
+  });
+
+  // Top 5 most recent scans mapped to the Scan shape RecentScansTable expects
+  const recentScans: Scan[] = rawScans
+    .slice()
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 5)
+    .map((s) => ({
+      id: s.id,
+      projectName: s.project_name ?? "Unknown Project",
+      date: new Date(s.created_at),
+      status: (s.status === "pending" ? "in_progress" : s.status) as Scan["status"],
+      vulnerabilities: { critical: 0, high: 0, medium: 0, low: s.total_vulns ?? 0 },
+    }));
+
+  // Stat card values derived from real data
+  const totalScans = rawScans.length;
+  const criticalScans = rawScans.filter((s) => s.risk_level === "critical").length;
+  const completedScans = rawScans.filter((s) => s.status === "completed").length;
 
   const selectedTeam = mockTeams.find((t) => t.id === selectedTeamId);
   const userRole = selectedTeam?.currentUserRole;
@@ -113,10 +100,10 @@ const Dashboard = () => {
 
   // Determine metrics
   const personalMetrics = {
-    totalScans: 247,
-    criticalVulns: 12,
-    healthScore: 87,
-    pendingScans: 3,
+    totalScans,
+    criticalVulns: criticalScans,
+    healthScore: totalScans > 0 ? Math.round((completedScans / totalScans) * 100) : 100,
+    pendingScans: rawScans.filter((s) => s.status === "in_progress" || s.status === "pending").length,
   };
 
   const metrics = isTeamView && selectedTeam ? selectedTeam.metrics : personalMetrics;
@@ -134,8 +121,8 @@ const Dashboard = () => {
       }
       return mapped;
     }
-    // Fall back to mock/team data while realtime hasn't loaded yet
-    if (!isTeamView || !selectedTeam) return mockScans;
+    // Fall back to real recent scans while realtime hasn't loaded yet
+    if (!isTeamView || !selectedTeam) return recentScans;
     if (userRole === "developer") {
       return selectedTeam.scans.filter((s) => s.memberId === CURRENT_USER_ID);
     }

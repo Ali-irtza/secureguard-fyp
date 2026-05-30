@@ -38,6 +38,29 @@ export interface BranchFilesResponse {
   files: string[];
 }
 
+export interface ScanHistoryItem {
+  id: string;
+  project_id: string | null;
+  project_name: string | null;
+  scan_type: string | null;
+  file_name: string | null;
+  branch: string | null;
+  status: string;
+  risk_level: string | null;
+  risk_score: number | null;
+  total_vulns: number | null;
+  files_scanned: number | null;
+  duration_secs: number | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface ScanDetailResult extends ScanHistoryItem {
+  vulnerabilities: VulnerabilityDetail[];
+}
+
 // ---------------------------------------------------------------------------
 // Scans API
 // ---------------------------------------------------------------------------
@@ -64,10 +87,32 @@ export async function getBranchFiles(
 export async function triggerScan(
   teamId: string,
   branch: string,
-  selectedFiles: string[]
+  selectedFiles: string[],
+  extra?: { project_id?: string; project_name?: string }
 ): Promise<ScanResult> {
   return apiFetch<ScanResult>(`/teams/${teamId}/scans`, {
     method: "POST",
-    body: JSON.stringify({ branch, selected_files: selectedFiles }),
+    body: JSON.stringify({
+      branch,
+      selected_files: selectedFiles,
+      project_id: extra?.project_id ?? "",
+      project_name: extra?.project_name ?? "",
+    }),
   });
+}
+
+/**
+ * GET /scans/history
+ * Returns all past scans for the current authenticated user.
+ */
+export async function getScanHistory(): Promise<ScanHistoryItem[]> {
+  return apiFetch<ScanHistoryItem[]>("/scans/history");
+}
+
+/**
+ * GET /scans/:scanId
+ * Returns a single scan with its full vulnerability list.
+ */
+export async function getScanDetail(scanId: string): Promise<ScanDetailResult> {
+  return apiFetch<ScanDetailResult>(`/scans/${scanId}`);
 }

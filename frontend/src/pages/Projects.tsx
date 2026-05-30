@@ -350,8 +350,11 @@ const Projects = () => {
   // A team project can only be created if the user is an admin of the selected team.
   const adminTeamIds = new Set(userTeams.filter((t) => t.current_user_role === "admin").map((t) => t.id));
 
+  const trimmedName = newProjectName.trim();
+  const isValidName = trimmedName !== "" && /^[a-zA-Z]/.test(trimmedName);
+
   const canCreateProject =
-    newProjectName.trim() !== "" &&
+    isValidName &&
     newProjectLanguage !== "" &&
     (
       newProjectType === "personal" ||
@@ -801,6 +804,9 @@ const CreateProjectModal = ({
               onChange={(e) => onProjectNameChange(e.target.value)}
               className="bg-card/50 border-border/50 focus:border-primary/50"
             />
+            {projectName.trim() !== "" && !/^[a-zA-Z]/.test(projectName.trim()) && (
+              <p className="text-xs text-destructive">Project name must start with a letter.</p>
+            )}
           </div>
 
           {/* Language */}

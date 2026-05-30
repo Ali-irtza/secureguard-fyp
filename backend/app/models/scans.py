@@ -15,11 +15,15 @@ class ScanRequest(BaseModel):
     """
     branch: str = Field(..., description="The name of the branch to scan.")
     selected_files: List[str] = Field(..., description="List of file paths selected by the user to scan.")
+    project_id: str = Field(..., description="Project ID this scan belongs to")
+    project_name: str = Field(default="", description="Display name for the project")
 
 class UploadScanRequest(BaseModel):
     """Request model for POST /scan/upload — direct source code submission."""
     filename: str = Field(..., description="Original filename e.g. main.c")
     source_code: str = Field(..., description="Full source code content as string")
+    project_id: str = Field(..., description="Project ID this scan belongs to")
+    project_name: str = Field(default="", description="Display name for the project")
 
 class VulnerabilityDetail(BaseModel):
     """A single vulnerability found in a file."""
@@ -55,3 +59,4 @@ class ScanResponse(BaseModel):
     total_chunks_scanned: int
     files_summary: List[FileSummary]
     vulnerabilities: List[VulnerabilityDetail]
+    scan_id: str | None = None

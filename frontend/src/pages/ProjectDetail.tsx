@@ -420,20 +420,42 @@ const ProjectDetail = () => {
   const validateAndEnqueue = (rawFiles: FileList | File[]) => {
     if (!project?.language) return;
     const newItems: UploadItem[] = [];
-    const rejected: string[]    = [];
+    const rejectedType: string[]    = [];
+    const rejectedSize: string[]    = [];
+    const rejectedDup: string[]     = [];
 
     Array.from(rawFiles).forEach((f) => {
-      if (!isFileAllowed(f.name, project.language)) {
-        rejected.push(f.name);
+      if (f.size > 10 * 1024 * 1024) {
+        rejectedSize.push(f.name);
+      } else if (files.some(existing => existing.name === f.name) || uploadQueue.some(u => u.file.name === f.name)) {
+        rejectedDup.push(f.name);
+      } else if (!isFileAllowed(f.name, project.language)) {
+        rejectedType.push(f.name);
       } else {
         newItems.push({ id: `${f.name}-${Date.now()}-${Math.random()}`, file: f, status: "pending", progress: 0 });
       }
     });
 
-    if (rejected.length > 0) {
+    if (rejectedSize.length > 0) {
+      toast({
+        title: "File too large",
+        description: `${rejectedSize.join(", ")} exceed the 10 MB limit.`,
+        variant: "destructive",
+      });
+    }
+
+    if (rejectedDup.length > 0) {
+      toast({
+        title: "Duplicate file",
+        description: `${rejectedDup.join(", ")} already exist in the project or upload queue.`,
+        variant: "destructive",
+      });
+    }
+
+    if (rejectedType.length > 0) {
       toast({
         title: "File type not allowed",
-        description: `${rejected.join(", ")} — only ${getAcceptString(project.language)} files accepted.`,
+        description: `${rejectedType.join(", ")} — only ${getAcceptString(project.language)} files accepted.`,
         variant: "destructive",
       });
     }
