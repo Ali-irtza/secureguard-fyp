@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
-import { triggerScan, getBranchFiles, ScanResult } from "@/lib/scans-api";
+import { triggerScan, getBranchFiles, triggerUploadedFileScan, ScanResult, VulnerabilityDetail } from "@/lib/scans-api";
 import { listProjects, createProject, Project } from "@/lib/projects-api";
 import { getTeam, listTeams } from "@/lib/teams-api";
 import type { Team as ApiTeam } from "@/lib/teams-api";
@@ -17,7 +18,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -27,21 +27,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import {
   Upload,
   Github,
-  Settings2,
-  ChevronDown,
   Play,
-  Sparkles,
-  KeyRound,
   Shield,
   ArrowLeft,
   StopCircle,
@@ -57,6 +48,7 @@ import {
   Search,
   Check,
   ChevronsUpDown,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
@@ -64,116 +56,6 @@ import { ScanningProgress } from "@/components/scan/ScanningProgress";
 import { ScanLogTerminal, LogEntry } from "@/components/scan/ScanLogTerminal";
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
 import { toast } from "sonner";
-
-// Mock code samples for different languages
-const MOCK_CODE = {
-  c: `#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-void vulnerable_function(char *input) {
-    char buffer[64];
-    // Buffer overflow vulnerability
-    strcpy(buffer, input);
-    printf("Input: %s\\n", buffer);
-}
-
-int check_password(char *password) {
-    // Hardcoded password
-    if (strcmp(password, "secret123") == 0) {
-        return 1;
-    }
-    return 0;
-}
-
-void format_string_vuln(char *user_input) {
-    // Format string vulnerability
-    printf(user_input);
-}
-
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printf("Usage: %s <input>\\n", argv[0]);
-        return 1;
-    }
-    
-    vulnerable_function(argv[1]);
-    
-    char password[100];
-    printf("Enter password: ");
-    gets(password); // Dangerous function
-    
-    if (check_password(password)) {
-        printf("Access granted\\n");
-    }
-    
-    return 0;
-}`,
-  cpp: `#include <iostream>
-#include <cstring>
-#include <fstream>
-
-using namespace std;
-
-class UserAuth {
-private:
-    char username[50];
-    char password[50];
-    
-public:
-    void setCredentials(const char* user, const char* pass) {
-        // Buffer overflow potential
-        strcpy(username, user);
-        strcpy(password, pass);
-    }
-    
-    bool authenticate(const char* pass) {
-        // Timing attack vulnerability
-        return strcmp(password, pass) == 0;
-    }
-};
-
-void readFile(const char* filename) {
-    // Path traversal vulnerability
-    ifstream file(filename);
-    string line;
-    while (getline(file, line)) {
-        cout << line << endl;
-    }
-}
-
-int* createArray(int size) {
-    // Memory leak - no delete
-    int* arr = new int[size];
-    return arr;
-}
-
-int main() {
-    UserAuth auth;
-    auth.setCredentials("admin", "admin123");
-    
-    char input[256];
-    cout << "Enter filename: ";
-    cin >> input;
-    
-    // No input validation
-    readFile(input);
-    
-    return 0;
-}`
-};
-
-// Vulnerability patterns for simulation
-const VULNERABILITY_PATTERNS = [
-  { line: 7, message: "Buffer Overflow", lang: "c" },
-  { line: 12, message: "Hardcoded Password", lang: "c" },
-  { line: 18, message: "Format String Vuln", lang: "c" },
-  { line: 29, message: "Dangerous Function", lang: "c" },
-  { line: 14, message: "Buffer Overflow", lang: "cpp" },
-  { line: 19, message: "Timing Attack", lang: "cpp" },
-  { line: 25, message: "Path Traversal", lang: "cpp" },
-  { line: 32, message: "Memory Leak", lang: "cpp" },
-];
 
 interface CodeLine {
   lineNumber: number;
@@ -183,8 +65,9 @@ interface CodeLine {
 }
 
 const NewScan = () => {
+  const [searchParams] = useSearchParams();
+  const autoStartRef = useRef(false);
   const [activeTab, setActiveTab] = useState("upload");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -192,9 +75,6 @@ const NewScan = () => {
   const [fileContent, setFileContent] = useState<string>("");
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("main");
-  const [language, setLanguage] = useState("auto");
-  const [deepAnalysis, setDeepAnalysis] = useState(true);
-  const [checkSecrets, setCheckSecrets] = useState(true);
   
   // New state for team-aware scanning
   const [projectName, setProjectName] = useState("");
@@ -268,6 +148,26 @@ const NewScan = () => {
     }
   }, [selectedProjectId, fetchProjectFiles]);
 
+  useEffect(() => {
+    const rescanProjectId = searchParams.get("projectId");
+    if (!rescanProjectId || projects.length === 0 || selectedProjectId) return;
+    const project = projects.find((item) => item.id === rescanProjectId);
+    if (!project) return;
+    setScanMode(project.type === "team" ? "team" : "personal");
+    setSelectedProjectId(project.id);
+    setSelectedProjectName(project.name);
+    setProjectName(project.name);
+    if (project.team_id) setSelectedTeamId(project.team_id);
+    setActiveTab("upload");
+  }, [projects, searchParams, selectedProjectId]);
+
+  useEffect(() => {
+    if (searchParams.get("autoStart") !== "1" || autoStartRef.current || isScanning) return;
+    if (!selectedProjectId || selectedProjectId === "__new__" || projectFilesLoading || selectedFileIds.size === 0) return;
+    autoStartRef.current = true;
+    handleStartScan();
+  }, [searchParams, selectedProjectId, projectFilesLoading, selectedFileIds.size, isScanning]);
+
   // Selected team in team mode (real API team)
   const selectedApiTeam: ApiTeam | null = allTeams.find((t) => t.id === selectedTeamId) ?? null;
   const userTeamRole = selectedApiTeam?.current_user_role ?? null;
@@ -293,8 +193,10 @@ const NewScan = () => {
 
   // New scan result state
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [selectedVulnerability, setSelectedVulnerability] = useState<VulnerabilityDetail | null>(null);
   const [branchFiles, setBranchFiles] = useState<string[]>([]);
   const [scanError, setScanError] = useState<string>("");
+  const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
 
   // Panel visibility state
   const [showPanel, setShowPanel] = useState(true);
@@ -314,7 +216,11 @@ const NewScan = () => {
     uploadedFiles.length === 0
       ? null
       : (() => {
-          const ext = uploadedFiles[0].name.split(".").pop()?.toLowerCase() ?? "";
+          const firstSource = uploadedFiles.find((file) => {
+            const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+            return ext !== "zip";
+          });
+          const ext = firstSource?.name.split(".").pop()?.toLowerCase() ?? "";
           if (ext === "c" || ext === "h") return "C";
           if (["cpp", "cc", "cxx", "hpp", "hxx"].includes(ext)) return "C++";
           return null;
@@ -326,12 +232,13 @@ const NewScan = () => {
       ? ".c,.h"
       : detectedProjectLanguage === "C++"
       ? ".cpp,.cxx,.cc,.hpp,.hxx,.h"
-      : ".c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.h";
+      : ".c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.h,.zip";
 
   /** Returns true if a file is compatible with the already-detected language */
   const isCompatibleFile = (file: File): boolean => {
     if (!detectedProjectLanguage) return true; // no constraint yet
     const ext = "." + (file.name.split(".").pop()?.toLowerCase() ?? "");
+    if (ext === ".zip") return true;
     if (detectedProjectLanguage === "C") return [".c", ".h"].includes(ext);
     if (detectedProjectLanguage === "C++")
       return [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".h"].includes(ext);
@@ -372,6 +279,7 @@ const NewScan = () => {
     setCurrentPhase(0);
     setCurrentLine(0);
     setLogs([]);
+    setThinkingSteps(["Preparing source files", "Building semantic chunks", "Waiting for chunk analysis"]);
 
     // Resolve project id/name — create new project if needed
     let resolvedProjectId = selectedProjectId;
@@ -450,21 +358,20 @@ const NewScan = () => {
 
       // Newly uploaded files
       for (const file of uploadedFiles) {
+        if (file.name.toLowerCase().endsWith(".zip")) continue;
         const text = await file.text();
         filesToScan.push({ name: file.name, content: text });
       }
 
-      // Fallback to mock code if nothing collected
-      if (filesToScan.length === 0) {
-        filesToScan.push({
-          name: firstFile?.name || "uploaded_file.c",
-          content: MOCK_CODE[scanLang as keyof typeof MOCK_CODE] || MOCK_CODE.c,
-        });
+      if (filesToScan.length === 0 && uploadedFiles.length === 0) {
+        setScanError("Select at least one C/C++ file or ZIP archive to scan.");
+        setIsScanning(false);
+        return;
       }
 
       // Use the first file for the code viewer animation
       const primaryFile = filesToScan[0];
-      const code = primaryFile.content;
+      const code = primaryFile?.content ?? "// ZIP archive selected. Source files will be unpacked and scanned on the backend.";
       const lines = code.split("\n");
 
       const initialLines: CodeLine[] = lines.map((content, index) => ({
@@ -475,12 +382,12 @@ const NewScan = () => {
       setCodeLines(initialLines);
       setStats({ linesScanned: 0, totalLines: lines.length, vulnerabilitiesFound: 0, elapsedTime: 0 });
 
-      addLog("Initializing SecureGuard AI Scanner...", "info");
+      addLog("Preparing source package...", "info");
       setCurrentPhase(1);
-      addLog("Parsing source code and building AST...", "info");
+      addLog("Collecting static evidence...", "info");
       await new Promise(r => setTimeout(r, 600));
       setCurrentPhase(2);
-      addLog(`Sending ${filesToScan.length} file${filesToScan.length > 1 ? "s" : ""} to AI vulnerability engine...`, "info");
+      addLog(`Reviewing ${filesToScan.length} file${filesToScan.length > 1 ? "s" : ""} for vulnerabilities...`, "info");
 
       const startTime = Date.now();
       const timerInterval = setInterval(() => {
@@ -503,49 +410,33 @@ const NewScan = () => {
       }, 80);
 
       try {
-        const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
-        const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
-        // Scan all files sequentially; accumulate results
         let combinedResult: ScanResult | null = null;
 
-        for (const fileTuple of filesToScan) {
-          if (scanAbortRef.current) break;
-
-          const response = await fetch(`${API_BASE}/scan/upload`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${session?.access_token}`,
-            },
-            body: JSON.stringify({
-              filename: fileTuple.name,
-              source_code: fileTuple.content,
-              project_id: resolvedProjectId ?? "",
-              project_name: resolvedProjectName ?? "",
-            }),
+        if (uploadedFiles.length > 0) {
+          combinedResult = await triggerUploadedFileScan(uploadedFiles, {
+            project_id: resolvedProjectId ?? "",
+            project_name: resolvedProjectName ?? "",
           });
-
-          if (!response.ok) throw new Error(`Scan failed: ${response.status}`);
-          const result: ScanResult = await response.json();
-
-          if (!combinedResult) {
-            combinedResult = result;
-          } else {
-            // Merge results
-            combinedResult = {
-              ...combinedResult,
-              total_vulnerabilities: combinedResult.total_vulnerabilities + result.total_vulnerabilities,
-              files_analyzed: combinedResult.files_analyzed + result.files_analyzed,
-              total_chunks_scanned: combinedResult.total_chunks_scanned + result.total_chunks_scanned,
-              files_summary: [...combinedResult.files_summary, ...result.files_summary],
-              vulnerabilities: [...combinedResult.vulnerabilities, ...result.vulnerabilities],
-              overall_risk_level:
-                ["Critical", "High", "Medium", "Low"].indexOf(result.overall_risk_level) <
-                ["Critical", "High", "Medium", "Low"].indexOf(combinedResult.overall_risk_level)
-                  ? result.overall_risk_level
-                  : combinedResult.overall_risk_level,
-            };
+        } else {
+          const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
+          const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+          for (const fileTuple of filesToScan) {
+            if (scanAbortRef.current) break;
+            const response = await fetch(`${API_BASE}/scan/upload`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${session?.access_token}`,
+              },
+              body: JSON.stringify({
+                filename: fileTuple.name,
+                source_code: fileTuple.content,
+                project_id: resolvedProjectId ?? "",
+                project_name: resolvedProjectName ?? "",
+              }),
+            });
+            if (!response.ok) throw new Error(`Scan failed: ${response.status}`);
+            combinedResult = await response.json();
           }
         }
 
@@ -568,10 +459,19 @@ const NewScan = () => {
         }));
 
         setScanResult(combinedResult);
+        setThinkingSteps([
+          ...(combinedResult.chunk_outputs ?? []).map(
+            (chunk) =>
+              `Chunk ${chunk.chunk_index}: ${chunk.chunk_name} lines ${chunk.start_line}-${chunk.end_line} reviewed with ${chunk.vulnerabilities.length} issue${chunk.vulnerabilities.length === 1 ? "" : "s"}.`
+          ),
+          "Corrected code prepared",
+          "Report assembled",
+        ]);
+        setSelectedVulnerability(combinedResult.vulnerabilities[0] ?? null);
         setCurrentPhase(3);
-        addLog("Deep analysis complete", "success");
+        addLog("Secure fix draft prepared", "success");
         setCurrentPhase(4);
-        addLog("Generating report...", "info");
+        addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
         addLog(`Found ${combinedResult.total_vulnerabilities} vulnerabilities — Risk: ${combinedResult.overall_risk_level}`, combinedResult.total_vulnerabilities > 0 ? "warning" : "success");
@@ -606,7 +506,7 @@ const NewScan = () => {
       setStats({ linesScanned: 0, totalLines: 0, vulnerabilitiesFound: 0, elapsedTime: 0 });
 
       try {
-        addLog("Initializing SecureGuard AI Scanner...", "info");
+        addLog("Preparing source package...", "info");
         setCurrentPhase(1);
 
         addLog(`Fetching C/C++ files from branch: ${branch}...`, "info");
@@ -615,7 +515,7 @@ const NewScan = () => {
         addLog(`Found ${files.length} C/C++ files`, "success");
 
         setCurrentPhase(2);
-        addLog("Sending files to AI vulnerability engine...", "info");
+        addLog("Reviewing files for vulnerabilities...", "info");
         addLog("This may take a moment depending on file count...", "info");
 
         const result = await triggerScan(effectiveTeamId, branch, files, {
@@ -633,10 +533,18 @@ const NewScan = () => {
         });
 
         setScanResult(result);
+        setThinkingSteps([
+          ...(result.chunk_outputs ?? []).map(
+            (chunk) =>
+              `Chunk ${chunk.chunk_index}: ${chunk.chunk_name} lines ${chunk.start_line}-${chunk.end_line} reviewed with ${chunk.vulnerabilities.length} issue${chunk.vulnerabilities.length === 1 ? "" : "s"}.`
+          ),
+          "Corrected code prepared",
+          "Report assembled",
+        ]);
         setCurrentPhase(3);
-        addLog("Deep analysis complete", "success");
+        addLog("Secure fix draft prepared", "success");
         setCurrentPhase(4);
-        addLog("Generating report...", "info");
+        addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
@@ -765,6 +673,7 @@ const NewScan = () => {
     setScanResult(null);
     setBranchFiles([]);
     setScanError("");
+    setThinkingSteps([]);
     setProjectFiles([]);
     setSelectedFileIds(new Set());
     setSaveToProject({});
@@ -1046,12 +955,7 @@ const NewScan = () => {
                   <Button
                     size="sm"
                     className="h-8"
-                    onClick={() => {
-                      if (scanResult) {
-                        console.log("Scan Results:", JSON.stringify(scanResult, null, 2));
-                        alert(`Scan Complete!\n\nRisk Level: ${scanResult.overall_risk_level}\nVulnerabilities: ${scanResult.total_vulnerabilities}\nFiles Scanned: ${scanResult.files_analyzed}`);
-                      }
-                    }}
+                    onClick={() => setShowPanel(false)}
                   >
                     View Report
                   </Button>
@@ -1096,12 +1000,7 @@ const NewScan = () => {
                     <Button
                       size="sm"
                       className="flex-1 shadow-lg shadow-primary/25"
-                      onClick={() => {
-                        if (scanResult) {
-                          console.log("Scan Results:", JSON.stringify(scanResult, null, 2));
-                          alert(`Scan Complete!\n\nRisk Level: ${scanResult.overall_risk_level}\nVulnerabilities: ${scanResult.total_vulnerabilities}\nFiles Scanned: ${scanResult.files_analyzed}`);
-                        }
-                      }}
+                      onClick={() => setShowPanel(false)}
                     >
                       View Report
                     </Button>
@@ -1123,22 +1022,241 @@ const NewScan = () => {
               </div>
             </div>
 
-            {/* Right Panel - Code Viewer (Constrained Width, Centered) */}
+            {/* Right Panel - Code Viewer / Report */}
             <div 
               className={cn(
                 "flex-1 min-w-0 flex flex-col bg-muted/20 overflow-hidden transition-all duration-300",
                 !showPanel && "ml-0"
               )}
             >
-              <div className="flex-1 p-4 lg:p-6 overflow-hidden flex justify-center">
-                <div className="w-full max-w-4xl h-full">
-                  <CodeViewer
-                    lines={codeLines}
-                    currentLine={currentLine}
-                    language={firstFile ? scanLang : "c"}
-                  />
+              {scanComplete && scanError ? (
+                <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+                  <div className="mx-auto max-w-3xl">
+                    <Card className="bg-card/80 border-destructive/40 p-6">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
+                        <div className="space-y-2">
+                          <h2 className="text-lg font-semibold text-foreground">Analysis could not complete</h2>
+                          <p className="text-sm text-muted-foreground">
+                            The security model did not return a valid report, so no analyzer-only findings were shown.
+                          </p>
+                          <pre className="mt-3 rounded-md bg-background/80 border border-border/50 p-3 text-xs text-destructive overflow-x-auto">
+                            {scanError}
+                          </pre>
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
                 </div>
-              </div>
+              ) : scanComplete && scanResult ? (
+                <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+                  <div className="mx-auto max-w-6xl space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <Card className="p-4 bg-card/70 border-border/50">
+                        <p className="text-xs text-muted-foreground">Risk</p>
+                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.overall_risk_level}</p>
+                      </Card>
+                      <Card className="p-4 bg-card/70 border-border/50">
+                        <p className="text-xs text-muted-foreground">Vulnerabilities</p>
+                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.total_vulnerabilities}</p>
+                      </Card>
+                      <Card className="p-4 bg-card/70 border-border/50">
+                        <p className="text-xs text-muted-foreground">Files</p>
+                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.files_analyzed}</p>
+                      </Card>
+                      <Card className="p-4 bg-card/70 border-border/50">
+                        <p className="text-xs text-muted-foreground">Score</p>
+                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.overall_risk_score}</p>
+                      </Card>
+                    </div>
+
+                    {(scanResult.chunk_outputs?.length ?? 0) > 0 && (
+                      <Card className="bg-card/70 border-border/50 overflow-hidden">
+                        <div className="p-4 border-b border-border/50">
+                          <h2 className="text-lg font-semibold text-foreground">Chunk Output</h2>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            The file was reviewed in semantic chunks, one chunk at a time.
+                          </p>
+                        </div>
+                        <div className="divide-y divide-border/40">
+                          {scanResult.chunk_outputs!.map((chunk) => (
+                            <section key={`${chunk.file_path}-${chunk.chunk_index}`} className="p-4">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline">Chunk {chunk.chunk_index}</Badge>
+                                <span className="font-medium text-foreground">{chunk.chunk_name}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  lines {chunk.start_line}-{chunk.end_line}
+                                </span>
+                              </div>
+                              {chunk.summary && (
+                                <p className="text-sm text-muted-foreground mt-2">{chunk.summary}</p>
+                              )}
+                              <p className="text-sm text-foreground mt-2">
+                                {chunk.vulnerabilities.length} issue{chunk.vulnerabilities.length === 1 ? "" : "s"} found in this chunk.
+                              </p>
+                            </section>
+                          ))}
+                        </div>
+                      </Card>
+                    )}
+
+                    <div className="grid grid-cols-1 gap-5">
+                      <Card className="bg-card/70 border-border/50 overflow-hidden">
+                        <div className="p-4 border-b border-border/50">
+                          <h2 className="text-lg font-semibold text-foreground">Vulnerability Report</h2>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            Each issue shows the exact line, affected code, problem, and fix.
+                          </p>
+                        </div>
+                        <div className="divide-y divide-border/40">
+                          {scanResult.vulnerabilities.length === 0 ? (
+                            <div className="p-6 text-sm text-muted-foreground">No vulnerabilities were reported by the model.</div>
+                          ) : (
+                            scanResult.vulnerabilities.map((vulnerability, index) => (
+                              <button
+                                key={`${vulnerability.file_path}-${vulnerability.cwe_id}-${index}`}
+                                className={cn(
+                                  "w-full text-left p-5 hover:bg-muted/30 transition-colors",
+                                  selectedVulnerability === vulnerability && "bg-primary/10"
+                                )}
+                                onClick={() => setSelectedVulnerability(vulnerability)}
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-sm font-semibold text-foreground">Issue {index + 1}</span>
+                                  <Badge variant="outline" className={cn(
+                                    vulnerability.severity === "Critical" && "bg-red-500/15 text-red-300 border-red-500/30",
+                                    vulnerability.severity === "High" && "bg-orange-500/15 text-orange-300 border-orange-500/30",
+                                    vulnerability.severity === "Medium" && "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
+                                    vulnerability.severity === "Low" && "bg-blue-500/15 text-blue-300 border-blue-500/30"
+                                  )}>
+                                    {vulnerability.severity}
+                                  </Badge>
+                                  <span className="font-semibold text-foreground">{vulnerability.cwe_id}</span>
+                                  <span className="text-sm text-muted-foreground">{vulnerability.cwe_name}</span>
+                                </div>
+                                <div className="mt-4 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                  <div>
+                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Line</p>
+                                    <p className="mt-1 text-sm font-medium text-foreground">
+                                      {vulnerability.file_path}
+                                      {vulnerability.line_number ? `, line ${vulnerability.line_number}` : ""}
+                                    </p>
+                                    {vulnerability.location && (
+                                      <p className="mt-1 text-xs text-muted-foreground">{vulnerability.location}</p>
+                                    )}
+                                  </div>
+
+                                  <div className="space-y-4">
+                                    <div>
+                                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code at this line</p>
+                                      <pre className="mt-2 rounded-md bg-background/80 border border-border/50 p-3 text-xs overflow-x-auto">
+                                        {vulnerability.affected_code || "No exact source line returned."}
+                                      </pre>
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">What is vulnerable here</p>
+                                      <p className="mt-1 text-sm text-foreground">{vulnerability.description}</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recommended fix</p>
+                                      <p className="mt-1 text-sm text-foreground">{vulnerability.fix_suggestion}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </Card>
+
+                      <Card className="hidden">
+                        <h3 className="font-semibold text-foreground">Finding Details</h3>
+                        {selectedVulnerability ? (
+                          <>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Location</p>
+                              <p className="text-sm text-foreground mt-1">
+                                {selectedVulnerability.file_path}
+                                {selectedVulnerability.location ? ` — ${selectedVulnerability.location}` : ""}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Affected Code</p>
+                              <pre className="mt-1 rounded-md bg-background/80 border border-border/50 p-3 text-xs overflow-x-auto">
+                                {selectedVulnerability.affected_code || "No exact source line returned."}
+                              </pre>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Remediation</p>
+                              <p className="text-sm text-foreground mt-1">{selectedVulnerability.fix_suggestion}</p>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Select a vulnerability from the report.</p>
+                        )}
+                      </Card>
+                    </div>
+
+                    <Card className="bg-card/70 border-border/50 overflow-hidden">
+                      <div className="p-4 border-b border-border/50">
+                        <h2 className="text-lg font-semibold text-foreground">Corrected Code</h2>
+                        <p className="text-sm text-muted-foreground mt-1">Model-generated secure version.</p>
+                      </div>
+                      <div className="divide-y divide-border/40 bg-background/70">
+                        {(scanResult.files?.length ? scanResult.files : [{ filename: "corrected-code", language: "", corrected_code: scanResult.corrected_code }]).map((file, index) => (
+                          <section key={`${file.filename}-${index}`}>
+                            <div className="flex items-center justify-between px-4 py-2 bg-background/80">
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                                {file.filename}
+                              </span>
+                              {file.language && (
+                                <Badge variant="outline" className="text-[10px]">
+                                  {file.language}
+                                </Badge>
+                              )}
+                            </div>
+                            <pre className="p-4 text-sm leading-relaxed overflow-x-auto max-h-[520px]">
+                              {file.corrected_code && file.corrected_code !== "None"
+                                ? file.corrected_code
+                                : "No corrected code was returned."}
+                            </pre>
+                          </section>
+                        ))}
+                      </div>
+                    </Card>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 p-4 lg:p-6 overflow-hidden">
+                  <div className="grid h-full gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                    <CodeViewer
+                      lines={codeLines}
+                      currentLine={currentLine}
+                      language={firstFile ? scanLang : "c"}
+                    />
+                    <Card className="bg-card/70 border-border/60 overflow-hidden h-full">
+                      <div className="p-4 border-b border-border/50">
+                        <h2 className="text-base font-semibold text-foreground">Thinking</h2>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Processing semantic chunks one at a time.
+                        </p>
+                      </div>
+                      <div className="p-4 space-y-3 overflow-y-auto max-h-full">
+                        {thinkingSteps.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">Waiting for analysis to start.</p>
+                        ) : (
+                          thinkingSteps.map((step, index) => (
+                            <div key={`${step}-${index}`} className="rounded-md border border-border/50 bg-background/60 p-3">
+                              <p className="text-xs text-muted-foreground">Step {index + 1}</p>
+                              <p className="text-sm text-foreground mt-1">{step}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </Card>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1603,91 +1721,6 @@ const NewScan = () => {
             </Card>
           </TabsContent>
         </Tabs>
-
-        {/* Advanced Configuration */}
-        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
-          <Card className="border-border/50 bg-card/50 backdrop-blur-sm overflow-hidden">
-            <CollapsibleTrigger asChild>
-              <CardHeader className="cursor-pointer hover:bg-muted/30 transition-colors">
-                <CardTitle className="flex items-center justify-between text-base">
-                  <div className="flex items-center gap-2">
-                    <Settings2 className="h-5 w-5 text-muted-foreground" />
-                    Advanced Configuration
-                  </div>
-                  <ChevronDown className={cn(
-                    "h-5 w-5 text-muted-foreground transition-transform duration-200",
-                    settingsOpen && "rotate-180"
-                  )} />
-                </CardTitle>
-              </CardHeader>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <CardContent className="pt-0 space-y-6">
-                {/* Language Selection */}
-                <div className="space-y-2">
-                  <Label htmlFor="language" className="text-sm font-medium">
-                    Language
-                  </Label>
-                  <Select value={language} onValueChange={setLanguage}>
-                    <SelectTrigger id="language">
-                      <SelectValue placeholder="Select language" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">Auto-detect</SelectItem>
-                      <SelectItem value="c">C</SelectItem>
-                      <SelectItem value="cpp">C++</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Toggles */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/50">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-primary/10">
-                        <Sparkles className="h-4 w-4 text-primary" />
-                      </div>
-                      <div>
-                        <Label htmlFor="deep-analysis" className="text-sm font-medium cursor-pointer">
-                          Deep AI Analysis
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          Use advanced AI to detect complex vulnerabilities
-                        </p>
-                      </div>
-                    </div>
-                    <Switch
-                      id="deep-analysis"
-                      checked={deepAnalysis}
-                      onCheckedChange={setDeepAnalysis}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-4 rounded-lg bg-muted/30 border border-border/50">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-warning/10">
-                        <KeyRound className="h-4 w-4 text-warning" />
-                      </div>
-                      <div>
-                        <Label htmlFor="check-secrets" className="text-sm font-medium cursor-pointer">
-                          Check for Secrets/Keys
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          Scan for exposed API keys, passwords, and tokens
-                        </p>
-                      </div>
-                    </div>
-                    <Switch
-                      id="check-secrets"
-                      checked={checkSecrets}
-                      onCheckedChange={setCheckSecrets}
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </CollapsibleContent>
-          </Card>
-        </Collapsible>
 
         {/* Start Analysis Button */}
         <Button 

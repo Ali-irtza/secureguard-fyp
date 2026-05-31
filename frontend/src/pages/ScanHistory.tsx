@@ -70,6 +70,7 @@ interface ScanRecord {
   branch?: string;
   scanType: string;
   fileName: string;
+  projectId: string | null;
   riskLevel: string;
   riskScore: number;
   filesScanned: number;
@@ -87,13 +88,16 @@ const ScanHistory = () => {
     queryFn: getScanHistory,
   });
 
-  const scans: ScanRecord[] = rawScans.map((s) => ({
+  const scans: ScanRecord[] = rawScans
+  .filter((s) => Boolean(s.project_name || s.file_name || s.branch))
+  .map((s) => ({
     id: s.id,
-    projectName: s.project_name ?? "Unknown Project",
+    projectId: s.project_id,
+    projectName: s.project_name || s.file_name || "Project",
     scanType: s.scan_type ?? "upload",
     fileName: s.file_name ?? s.branch ?? "—",
     branch: s.branch ?? "—",
-    status: s.status,
+    status: s.status === "completed" ? "completed" : "failed",
     riskLevel: s.risk_level ?? "unknown",
     riskScore: s.risk_score ?? 0,
     vulnerabilities: s.total_vulns ?? 0,
@@ -160,7 +164,11 @@ const ScanHistory = () => {
 
   const handleRerunScan = (e: React.MouseEvent, scan: ScanRecord) => {
     e.stopPropagation();
-    toast.success(`Re-running scan for ${scan.projectName}`);
+    if (!scan.projectId) {
+      toast.error("This scan is not linked to a project.");
+      return;
+    }
+    navigate(`/new-scan?projectId=${encodeURIComponent(scan.projectId)}&autoStart=1`);
   };
 
   const handleViewReport = (e: React.MouseEvent, scan: ScanRecord) => {
@@ -353,11 +361,10 @@ const ScanHistory = () => {
             Failed
           </Badge>
         );
-      case "in_progress":
+      default:
         return (
-          <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20">
-            <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
-            In Progress
+          <Badge className="bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20">
+            Failed
           </Badge>
         );
     }
@@ -475,7 +482,6 @@ const ScanHistory = () => {
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="completed">Completed</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -537,6 +543,7 @@ const ScanHistory = () => {
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-lg">All Scans</CardTitle>
+              <CardDescription>Reports are saved for 5 days only.</CardDescription>
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -711,7 +718,6 @@ const ScanHistory = () => {
                               variant="ghost"
                               size="sm"
                               onClick={(e) => handleRerunScan(e, scan)}
-                              disabled={scan.status === "in_progress"}
                               className="text-muted-foreground hover:text-foreground"
                             >
                               <RefreshCw className="h-4 w-4 mr-1.5" />

@@ -25,29 +25,31 @@ const getLanguageKeywords = (language: string): string[] => {
 
 const highlightSyntax = (content: string, language: string): React.ReactNode => {
   const keywords = getLanguageKeywords(language);
-  
-  // Simple syntax highlighting
-  let result = content;
-  
-  // Highlight strings
-  result = result.replace(/(["'`])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="text-amber-400">$&</span>');
-  
-  // Highlight comments (C/C++ style only)
-  result = result.replace(/(\/\/.*)$/gm, '<span class="text-muted-foreground italic">$1</span>');
-  
-  // Highlight keywords
-  keywords.forEach(keyword => {
-    const regex = new RegExp(`\\b(${keyword})\\b`, 'g');
-    result = result.replace(regex, '<span class="text-purple-400 font-medium">$1</span>');
-  });
-  
-  // Highlight numbers
-  result = result.replace(/\b(\d+\.?\d*)\b/g, '<span class="text-cyan-400">$1</span>');
-  
-  // Highlight function calls
-  result = result.replace(/(\w+)\s*\(/g, '<span class="text-blue-400">$1</span>(');
-  
-  return <span dangerouslySetInnerHTML={{ __html: result }} />;
+  const tokens = content.match(/\/\/.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+\.?\d*\b|\b[A-Za-z_]\w*\b|\s+|./g) ?? [content];
+
+  return (
+    <>
+      {tokens.map((token, index) => {
+        const nextToken = tokens[index + 1] ?? "";
+        if (token.startsWith("//")) {
+          return <span key={index} className="text-muted-foreground italic">{token}</span>;
+        }
+        if (/^(['"]).*\1$/.test(token)) {
+          return <span key={index} className="text-amber-400">{token}</span>;
+        }
+        if (/^\d/.test(token)) {
+          return <span key={index} className="text-cyan-400">{token}</span>;
+        }
+        if (keywords.includes(token)) {
+          return <span key={index} className="text-purple-400 font-medium">{token}</span>;
+        }
+        if (/^[A-Za-z_]\w*$/.test(token) && nextToken.trimStart().startsWith("(")) {
+          return <span key={index} className="text-blue-400">{token}</span>;
+        }
+        return <span key={index}>{token}</span>;
+      })}
+    </>
+  );
 };
 
 export const CodeViewer = ({ lines, currentLine, language }: CodeViewerProps) => {

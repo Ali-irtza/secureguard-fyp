@@ -1,4 +1,4 @@
-import { Shield, ShieldAlert, Activity, Clock } from "lucide-react";
+import { Shield, ShieldAlert, Activity } from "lucide-react";
 import RadialProgress from "./RadialProgress";
 
 interface MetricCardProps {
@@ -51,13 +51,12 @@ interface MetricsRowProps {
   totalScans: number;
   criticalVulns: number;
   healthScore: number;
-  pendingScans: number;
   isTeamView?: boolean;
 }
 
-const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTeamView }: MetricsRowProps) => {
+const MetricsRow = ({ totalScans, criticalVulns, healthScore, isTeamView }: MetricsRowProps) => {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <div className="animate-slide-up stagger-1">
         <MetricCard
           title="Total Scans"
@@ -86,15 +85,6 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, pendingScans, isTe
         >
           <RadialProgress value={healthScore} />
         </MetricCard>
-      </div>
-      <div className="animate-slide-up stagger-4">
-        <MetricCard
-          title="Pending Scans"
-          value={pendingScans}
-          icon={<Clock className="h-6 w-6" />}
-          variant="warning"
-          teamLabel={isTeamView}
-        />
       </div>
     </div>
   );

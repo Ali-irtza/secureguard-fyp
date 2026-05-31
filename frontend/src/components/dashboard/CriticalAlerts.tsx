@@ -11,19 +11,12 @@ interface Alert {
   timeAgo: string;
 }
 
-const defaultAlerts: Alert[] = [
-  { id: "1", title: "SQL Injection", project: "auth-service", timeAgo: "2 hours ago" },
-  { id: "2", title: "XSS Vulnerability", project: "frontend-app", timeAgo: "4 hours ago" },
-  { id: "3", title: "Hardcoded Secrets", project: "api-gateway", timeAgo: "6 hours ago" },
-  { id: "4", title: "Path Traversal", project: "file-service", timeAgo: "1 day ago" },
-  { id: "5", title: "CSRF Token Missing", project: "admin-panel", timeAgo: "2 days ago" },
-];
-
 interface CriticalAlertsProps {
   teamAlerts?: TeamAlert[];
   isTeamView?: boolean;
   userRole?: "admin" | "developer" | "viewer";
   realtimeAlerts?: AlertRecord[];
+  scanAlerts?: Alert[];
   connectionStatus?: { status: SubscriptionStatus; connectionCount: number };
 }
 
@@ -36,12 +29,14 @@ function formatTimeAgo(isoString: string): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-const CriticalAlerts = ({ teamAlerts, isTeamView, userRole, realtimeAlerts, connectionStatus }: CriticalAlertsProps) => {
+const CriticalAlerts = ({ teamAlerts, isTeamView, userRole, realtimeAlerts, scanAlerts, connectionStatus }: CriticalAlertsProps) => {
   const navigate = useNavigate();
 
-  // Priority: realtimeAlerts > teamAlerts > defaultAlerts
+  // Priority: scanAlerts > realtimeAlerts > teamAlerts
   // AlertRecord has: id, vulnerability_id, user_id, status, created_at, updated_at
-  const alerts = realtimeAlerts
+  const alerts = scanAlerts && scanAlerts.length > 0
+    ? scanAlerts
+    : realtimeAlerts
     ? realtimeAlerts.map((a) => ({
         id: a.id,
         title: `Vulnerability Alert`,
@@ -50,7 +45,7 @@ const CriticalAlerts = ({ teamAlerts, isTeamView, userRole, realtimeAlerts, conn
       }))
     : isTeamView && teamAlerts
     ? teamAlerts
-    : defaultAlerts;
+    : [];
 
   return (
     <div className="glass-card overflow-hidden animate-fade-in">
@@ -72,7 +67,9 @@ const CriticalAlerts = ({ teamAlerts, isTeamView, userRole, realtimeAlerts, conn
         </div>
       </div>
       <div className="max-h-[280px] overflow-y-auto">
-        {alerts.map((alert) => {
+        {alerts.length === 0 ? (
+          <div className="p-4 text-sm text-muted-foreground">No critical issues found in completed scans.</div>
+        ) : alerts.map((alert) => {
           const isTeamAlert = isTeamView && "memberName" in alert;
           const teamAlert = isTeamAlert ? (alert as TeamAlert) : null;
 

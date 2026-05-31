@@ -1,5 +1,7 @@
 import os
 import base64
+import io
+import zipfile
 from fastapi import HTTPException, UploadFile, status
 from supabase import Client
 from typing import List
@@ -101,7 +103,7 @@ def _validate_extension(filename: str, language: str | None) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Project has no language set. Cannot determine allowed file types.",
         )
-    allowed = ALLOWED_EXTENSIONS.get(language, [])
+    allowed = [*ALLOWED_EXTENSIONS.get(language, []), ".zip"]
     ext = os.path.splitext(filename)[1].lower()
     if ext not in allowed:
         raise HTTPException(
@@ -318,8 +320,6 @@ async def upload_project_file(
             detail="Filename cannot be empty",
         )
 
-    _validate_extension(filename, project.get("language"))
-
     content = await file.read()
     if len(content) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
@@ -332,13 +332,55 @@ async def upload_project_file(
             detail="Cannot upload an empty file",
         )
 
+    _validate_extension(filename, project.get("language"))
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".zip":
+        rows: list[dict] = []
+        allowed = ALLOWED_EXTENSIONS.get(project.get("language") or "", [])
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                for entry in archive.infolist():
+                    if entry.is_dir():
+                        continue
+                    inner_name = os.path.basename(entry.filename.replace("\\", "/"))
+                    if not inner_name:
+                        continue
+                    inner_ext = os.path.splitext(inner_name)[1].lower()
+                    if inner_ext not in allowed:
+                        continue
+                    inner_content = archive.read(entry)
+                    if not inner_content or len(inner_content) > MAX_FILE_SIZE_BYTES:
+                        continue
+                    path = _storage_path(project_id, inner_name)
+                    _upload_bytes(path, inner_content, "text/plain", supabase)
+                    rows.append(
+                        _upsert_db_record(
+                            project_id=project_id,
+                            user_id=user_id,
+                            filename=inner_name,
+                            storage_path=path,
+                            size=len(inner_content),
+                            content_type="text/plain",
+                            source=FILE_SOURCE_LOCAL,
+                            supabase=supabase,
+                        )
+                    )
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid ZIP archive",
+            )
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="ZIP archive did not contain any files allowed by this project's language.",
+            )
+        return _db_row_to_response(rows[0], supabase)
+
     content_type = file.content_type or "application/octet-stream"
     path = _storage_path(project_id, filename)
-
-    # 1. Write to storage
     _upload_bytes(path, content, content_type, supabase)
-
-    # 2. Persist metadata to DB
     row = _upsert_db_record(
         project_id=project_id,
         user_id=user_id,
@@ -349,7 +391,6 @@ async def upload_project_file(
         source=FILE_SOURCE_LOCAL,
         supabase=supabase,
     )
-
     return _db_row_to_response(row, supabase)
 
 

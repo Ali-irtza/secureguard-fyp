@@ -25,6 +25,15 @@ class UploadScanRequest(BaseModel):
     project_id: str = Field(..., description="Project ID this scan belongs to")
     project_name: str = Field(default="", description="Display name for the project")
 
+
+class ScanFileResult(BaseModel):
+    filename: str
+    language: str
+    corrected_code: str = "None"
+    static_findings: str = ""
+    corrected_code_is_clean: bool = False
+    chunk_outputs: list[dict] = []
+
 class VulnerabilityDetail(BaseModel):
     """A single vulnerability found in a file."""
     cwe_id: str
@@ -36,6 +45,8 @@ class VulnerabilityDetail(BaseModel):
     fix_suggestion: str
     function_name: str = ""
     file_path: str = ""
+    location: str = ""
+    affected_code: str = ""
 
 
 class FileSummary(BaseModel):
@@ -59,4 +70,7 @@ class ScanResponse(BaseModel):
     total_chunks_scanned: int
     files_summary: List[FileSummary]
     vulnerabilities: List[VulnerabilityDetail]
+    corrected_code: str = "None"
+    files: List[ScanFileResult] = []
+    chunk_outputs: list[dict] = []
     scan_id: str | None = None

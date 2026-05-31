@@ -1,0 +1,47 @@
+{
+  "language": "C",
+  "is_vulnerable": true,
+  "vulnerabilities": [
+    {
+      "cwe_id": "CWE-119",
+      "cwe_name": "Improper Restriction of Operations within the Bounds of a Memory Buffer",
+      "explanation": "The function 'save_note' reads an unbounded note and allocates a backup buffer based on its length without verifying the size."
+    },
+    {
+      "cwe_id": "CWE-120",
+      "cwe_name": "Buffer Overflow",
+      "explanation": "The function 'save_note' copies the full note into a fixed-size backup buffer and then prints the note directly without bounds checks."
+    },
+    {
+      "cwe_id": "CWE-476",
+      "cwe_name": "NULL Pointer Dereference",
+      "explanation": "The function 'save_note' frees the same allocation for backup twice, causing a double free."
+    },
+    {
+      "cwe_id": "CWE-126",
+      "cwe_name": "Buffer Access Using Size of Source Buffer",
+      "explanation": "The code uses strlen() or a source-sized expression to drive a destination write instead of using a destination-sized expression."
+    },
+    {
+      "cwe_id": "CWE-134",
+      "cwe_name": "Use of Externally-Controlled Format String",
+      "explanation": "The code passes externally controlled text directly as the format argument to printf or a similar function."
+    },
+    {
+      "cwe_id": "CWE-20",
+      "cwe_name": "Improper Input Validation",
+      "explanation": "The code accepts unvalidated text and uses it in a destination buffer without validating that it will fit."
+    },
+    {
+      "cwe_id": "CWE-415",
+      "cwe_name": "Double Free",
+      "explanation": "The code frees the same allocation through more than one cleanup path."
+    },
+    {
+      "cwe_id": "CWE-477",
+      "cwe_name": "Use of Unsafe Function",
+      "explanation": "The code uses gets(), sprintf(), or another unsafe C standard function instead of a safer alternative."
+    }
+  ],
+  "corrected_code": "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nvoid save_note(const char *note) {\n    char title[32];\n    char *backup;\n    size_t note_len;\n    \n    if (note == NULL || strnlen(note, sizeof(note)) >= sizeof(note)) {\n        printf(\"Invalid note\\n\");\n        return;\n    }\n    \n    note_len = strnlen(note, sizeof(note));\n    if (note_len >= sizeof(title)) {\n        printf(\"Title too long\\n\");\n        return;\n    }\n    snprintf(title, sizeof(title), \"%s\", note);\n    \n    backup = malloc(note_len + 1);\n    if (backup == NULL) {\n        printf(\"Memory allocation failed\\n\");\n        return;\n    }\n    memcpy(backup, note, note_len + 1);\n    printf(\"Note saved: %s\\n\", backup);\n    free(backup);\n}\n\nint main() {\n    save_note(\"example\");\n    return 0;\n}"
+}

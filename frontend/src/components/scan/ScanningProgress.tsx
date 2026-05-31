@@ -38,31 +38,31 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
   const phases: ScanPhase[] = [
     {
       id: "init",
-      label: "Initializing AI Engine",
+      label: "Source Intake",
       icon: <Cpu className="h-4 w-4" />,
       status: currentPhase > 0 ? "completed" : currentPhase === 0 ? "active" : "pending",
     },
     {
       id: "parse",
-      label: "Parsing Source Code",
+      label: "Static Evidence",
       icon: <FileSearch className="h-4 w-4" />,
       status: currentPhase > 1 ? "completed" : currentPhase === 1 ? "active" : "pending",
     },
     {
       id: "scan",
-      label: "Scanning for Vulnerabilities",
+      label: "Vulnerability Review",
       icon: <Bug className="h-4 w-4" />,
       status: currentPhase > 2 ? "completed" : currentPhase === 2 ? "active" : "pending",
     },
     {
       id: "analyze",
-      label: "Deep Analysis",
+      label: "Secure Fix Draft",
       icon: <Shield className="h-4 w-4" />,
       status: currentPhase > 3 ? "completed" : currentPhase === 3 ? "active" : "pending",
     },
     {
       id: "report",
-      label: "Generating Report",
+      label: "Report Assembly",
       icon: <FileText className="h-4 w-4" />,
       status: currentPhase > 4 ? "completed" : currentPhase === 4 ? "active" : "pending",
     },

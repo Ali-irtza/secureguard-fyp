@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     freellmapi_url: str = "http://localhost:3001/v1"
     freellmapi_key: str = ""
 
+    # Trained security model / LM Studio compatible endpoint
+    security_model_base_url: str = ""
+    security_model_name: str = "quen_fine_tuned"
+    security_model_timeout_seconds: int = 250
+    security_model_coverage_threshold: float = 80.0
+
     @property
     def cors_origins_list(self) -> list[str]:
         """

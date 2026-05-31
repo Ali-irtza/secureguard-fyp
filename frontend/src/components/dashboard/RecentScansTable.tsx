@@ -1,4 +1,5 @@
-import { FileText, Loader2 } from "lucide-react";
+import { FileText } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +15,7 @@ export interface Scan {
   id: string;
   projectName: string;
   date: Date;
-  status: "completed" | "failed" | "in_progress";
+  status: "completed" | "failed";
   vulnerabilities: {
     critical: number;
     high: number;
@@ -33,24 +34,22 @@ const StatusBadge = ({ status }: { status: Scan["status"] }) => {
   const styles = {
     completed: "badge-low",
     failed: "badge-critical",
-    in_progress: "badge-medium",
   };
 
   const labels = {
     completed: "Completed",
     failed: "Failed",
-    in_progress: "In Progress",
   };
 
   return (
     <Badge className={`${styles[status]} flex items-center gap-1.5`}>
-      {status === "in_progress" && <Loader2 className="h-3 w-3 animate-spin" />}
       {labels[status]}
     </Badge>
   );
 };
 
 const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
+  const navigate = useNavigate();
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
@@ -111,11 +110,12 @@ const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
                 </div>
               </TableCell>
               <TableCell className="text-right">
-                {userRole !== "viewer" && (
+                {userRole !== "viewer" && scan.status === "completed" && (
                   <Button
                     variant="ghost"
                     size="sm"
                     className="text-emerald hover:text-emerald-glow hover:bg-emerald/10 font-medium group"
+                    onClick={() => navigate(`/reports/${scan.id}`)}
                   >
                     <FileText className="h-4 w-4 mr-1.5 transition-transform duration-200 group-hover:scale-110" />
                     View Report
