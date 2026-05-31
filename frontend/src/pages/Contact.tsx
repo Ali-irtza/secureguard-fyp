@@ -1,24 +1,9 @@
-import { ArrowLeft, Shield, Mail, MapPin, Clock, Send } from "lucide-react";
+import { ArrowLeft, Shield, Mail, MapPin, Clock } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { useState } from "react";
-import { toast } from "sonner";
+import ContactForm from "@/components/contact/ContactForm";
 
 const Contact = () => {
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    subject: "",
-    message: "",
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    toast.success("Message sent! We'll get back to you soon.");
-    setFormData({ name: "", email: "", subject: "", message: "" });
-  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-cyber-dark via-cyber-dark to-black text-foreground">
@@ -49,54 +34,7 @@ const Contact = () => {
           {/* Contact Form */}
           <div className="p-8 rounded-2xl bg-white/5 border border-white/10">
             <h2 className="text-2xl font-bold mb-6">Send us a Message</h2>
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label className="block text-sm font-medium mb-2">Name</label>
-                <Input
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="Your name"
-                  required
-                  className="bg-white/5 border-white/10"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Email</label>
-                <Input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="you@example.com"
-                  required
-                  className="bg-white/5 border-white/10"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Subject</label>
-                <Input
-                  value={formData.subject}
-                  onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
-                  placeholder="How can we help?"
-                  required
-                  className="bg-white/5 border-white/10"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Message</label>
-                <Textarea
-                  value={formData.message}
-                  onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                  placeholder="Tell us more about your inquiry..."
-                  rows={5}
-                  required
-                  className="bg-white/5 border-white/10"
-                />
-              </div>
-              <Button type="submit" className="w-full" size="lg">
-                <Send className="mr-2 h-4 w-4" />
-                Send Message
-              </Button>
-            </form>
+            <ContactForm />
           </div>
 
           {/* Contact Info */}
@@ -111,7 +49,7 @@ const Contact = () => {
                   <div>
                     <h3 className="font-semibold mb-1">Email</h3>
                     <p className="text-muted-foreground">support@secureguard.pro</p>
-                    <p className="text-muted-foreground">sales@secureguard.pro</p>
+                    <p className="text-muted-foreground">finalyearproject2025@gmail.com</p>
                   </div>
                 </div>
 
@@ -121,8 +59,8 @@ const Contact = () => {
                   </div>
                   <div>
                     <h3 className="font-semibold mb-1">Location</h3>
-                    <p className="text-muted-foreground">San Francisco, CA</p>
-                    <p className="text-muted-foreground">United States</p>
+                    <p className="text-muted-foreground">Johar Town, Lahore</p>
+                    <p className="text-muted-foreground">Pakistan</p>
                   </div>
                 </div>
 

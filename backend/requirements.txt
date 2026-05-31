@@ -21,3 +21,6 @@ httpx
 # Version range satisfies both gotrue (>=2.10.1) and our JWT signing needs
 PyJWT>=2.10.1,<3.0.0
 cryptography==43.0.3
+
+#email-validator - used by gotrue for validating email addresses during contact form submission and user registration
+email-validator>=2.0.0

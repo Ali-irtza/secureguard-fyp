@@ -1,7 +1,6 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Bell } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { Bell } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +23,6 @@ interface DashboardTopBarProps {
 
 const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   const navigate = useNavigate();
-  const [searchQuery, setSearchQuery] = useState("");
   const { displayName, email, avatarUrl, initials } = useCurrentUser();
 
   // Determine primary role (highest privilege across all teams)
@@ -45,12 +43,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
     }
   };
 
-  const handleSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && searchQuery.trim()) {
-      navigate(`/scan-history?search=${encodeURIComponent(searchQuery.trim())}`);
-    }
-  };
-
   const handleLogout = async () => {
     await supabase.auth.signOut();
     toast.success("Logged out successfully");
@@ -61,19 +53,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
     <header className="h-16 border-b border-border/50 bg-card/30 backdrop-blur-xl flex items-center justify-between px-4 lg:px-6">
       <div className="flex items-center gap-4">
         <SidebarTrigger />
-        
-        {/* Global Search */}
-        <div className="relative hidden sm:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="Search scans, reports, vulnerabilities..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearch}
-            className="w-64 lg:w-96 pl-10 bg-muted/30 border-border/50 focus:border-primary/50 focus:ring-primary/20"
-          />
-        </div>
       </div>
 
       <div className="flex items-center gap-4">
