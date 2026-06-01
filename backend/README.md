@@ -15,7 +15,6 @@ FastAPI backend for SecureGuard Pro, an AI-powered security code scanner.
 | Validation | Pydantic v2 |
 | File Storage | Supabase Storage |
 | GitHub Integration | GitHub App (JWT + installation tokens) |
-| Testing | pytest + Hypothesis |
 
 ## Project Structure
 
@@ -54,8 +53,6 @@ backend/
 │       ├── 002_create_projects_table.sql
 │       ├── 003_create_project_files_bucket.sql
 │       └── 004_create_project_files_table.sql
-├── tests/
-│   └── test_project_service_properties.py   # Hypothesis property-based tests
 ├── .env.example             # Template for environment variables
 ├── Dockerfile
 ├── github-app.pem           # GitHub App RSA private key (never commit the real one)
@@ -103,12 +100,6 @@ uvicorn app.main:app --reload
 ```
 
 API docs available at: `http://localhost:8000/docs` (development only — disabled in production)
-
-### 6. Run tests
-
-```bash
-pytest
-```
 
 ## Environment Variables
 

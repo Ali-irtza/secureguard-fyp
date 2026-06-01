@@ -1,8 +1,7 @@
 """
 Fast C/C++ semantic chunker for model input preparation.
 
-Edit TARGET_FILE below, then run:
-    python run.py
+This module is used by the backend model scanner.
 
 The script writes:
     chunk_output.txt  -> model-ready chunks with relevant context
@@ -34,6 +33,9 @@ OUTPUT_FILE = ROOT / "chunk_output.txt"
 REPORT_FILE = ROOT / "chunk_report.txt"
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_DEPENDENCY_PASSES = 32
+MAX_MODEL_CHUNK_LINES = 70
+CHUNK_OVERLAP_LINES = 1
+CHUNKER_VERSION = "tree-sitter-packed-lines-v3"
 TEMPLATE_ARG_PATTERN = r"<(?:[^<>{};]|<[^<>{};]*>)*>"
 
 
@@ -655,20 +657,87 @@ def detect_language(path: Path) -> str:
     raise ValueError(f"Unsupported extension: {path.suffix}")
 
 
+def _compiler_output_is_environment_or_type_noise(output: str) -> bool:
+    lowered = output.lower()
+    noise_markers = (
+        "no such file or directory",
+        "cannot find",
+        "not found",
+        "fatal error:",
+        "unknown type name",
+        "undeclared",
+        "implicit declaration",
+        "incompatible",
+        "conflicting types",
+        "storage size of",
+        "has no member named",
+        "request for member",
+        "invalid use of undefined type",
+    )
+    return any(marker in lowered for marker in noise_markers)
+
+
+def _compiler_output_is_syntax_error(output: str) -> bool:
+    lowered = output.lower()
+    syntax_markers = (
+        "syntax error",
+        "parse error",
+        "expected ';'",
+        "expected ','",
+        "expected ')'",
+        "expected '}'",
+        "expected expression",
+        "expected declaration",
+        "missing terminating",
+        "unterminated",
+        "stray ",
+    )
+    return any(marker in lowered for marker in syntax_markers)
+
+
 def syntax_check(path: Path, language: str) -> tuple[bool, str, str]:
+    source = path.read_bytes()
+    if not source.strip():
+        return True, "empty/whitespace source", "No syntax-bearing source text was provided."
+    parser_has_error = False
+    parser_warning = ""
+    try:
+        parser = _load_tree_sitter_parser(language)
+        tree = parser.parse(source)
+        parser_has_error = bool(tree.root_node.has_error)
+    except Exception as exc:
+        # Fall back to the compiler only when the parser is unavailable.
+        parser_warning = f"Tree-sitter syntax parse unavailable: {exc}"
+    else:
+        parser_warning = "Tree-sitter syntax parse found recoverable errors." if parser_has_error else "Tree-sitter syntax parse passed."
+
     compiler = "gcc" if language == "C" else "g++"
     exe = shutil.which(compiler)
     if not exe:
-        return True, f"{compiler} not found", "Compiler not found; syntax check skipped."
-    cmd = [exe, "-fsyntax-only", "-Wno-everything", str(path)]
+        if parser_has_error:
+            return False, "tree-sitter syntax parse", parser_warning
+        return True, "tree-sitter syntax parse", f"{parser_warning} Compiler not found; compiler check skipped."
+    cmd = [exe, "-fsyntax-only", "-w", str(path)]
     if language == "CPP":
         cmd.insert(1, "-std=c++20")
+    else:
+        cmd.insert(1, "-std=c11")
     try:
         completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         output = (completed.stdout + completed.stderr).strip()
-        return completed.returncode == 0, " ".join(cmd), output
+        if completed.returncode == 0:
+            return True, "tree-sitter syntax parse; " + " ".join(cmd), output or parser_warning
+        if _compiler_output_is_environment_or_type_noise(output):
+            return True, "tree-sitter syntax parse; compiler dependency check", (
+                f"{parser_warning} Compiler reported a dependency/type/platform issue, not a syntax error: {output}"
+            )
+        if parser_has_error and _compiler_output_is_syntax_error(output):
+            return False, "tree-sitter syntax parse; " + " ".join(cmd), output
+        return True, "tree-sitter syntax parse; compiler non-blocking check", (
+            f"{parser_warning} Compiler reported non-syntax diagnostics, so the scan will continue: {output}"
+        )
     except subprocess.TimeoutExpired:
-        return False, " ".join(cmd), "Syntax check timed out."
+        return True, "tree-sitter syntax parse; compiler timeout", f"{parser_warning} Compiler syntax check timed out; parser result was accepted."
 
 
 def extract_line_directives(text: str) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
@@ -1032,7 +1101,7 @@ def extract_loose_blocks(text: str, covered_spans: list[tuple[int, int]], line_i
     return blocks
 
 
-def parse_source(path: Path) -> ParseResult:
+def parse_source(path: Path, validate_syntax: bool = True) -> ParseResult:
     size = path.stat().st_size
     if size > MAX_FILE_BYTES:
         raise ValueError(f"File is too large for single-file chunking: {size} bytes > {MAX_FILE_BYTES} bytes")
@@ -1040,7 +1109,10 @@ def parse_source(path: Path) -> ParseResult:
     text = mask_inactive_preprocessor_blocks(normalize_digraphs(text))
     line_index = LineIndex.build(text)
     language = detect_language(path)
-    syntax_ok, syntax_command, syntax_output = syntax_check(path, language)
+    if validate_syntax:
+        syntax_ok, syntax_command, syntax_output = syntax_check(path, language)
+    else:
+        syntax_ok, syntax_command, syntax_output = True, "syntax check already passed", "Syntax check skipped after initial validation."
     includes, imports, pragmas, macros, preprocessor_blocks = extract_line_directives(text)
     forward_declarations = extract_forward_declarations(text, line_index)
     extern_blocks, asm_blocks, extern_spans = extract_extern_and_asm(text, line_index)
@@ -1172,6 +1244,378 @@ def make_chunk(parse: ParseResult, target: Unit) -> str:
     return "\n".join(parts).strip() + "\n"
 
 
+def _line_count(text: str) -> int:
+    return max(1, len(text.splitlines()))
+
+
+def _slice_lines(lines: list[str], start_line: int, end_line: int) -> str:
+    return "\n".join(lines[max(0, start_line - 1): max(0, end_line)])
+
+
+def _mask_for_balance(code: str) -> str:
+    return mask_comments_and_strings(normalize_digraphs(code))
+
+
+def _brace_delta(code: str) -> int:
+    masked = _mask_for_balance(code)
+    return masked.count("{") - masked.count("}")
+
+
+def _balanced(code: str) -> bool:
+    return _brace_delta(code) == 0
+
+
+def _balance_chunk(code: str, max_lines: int = MAX_MODEL_CHUNK_LINES) -> str:
+    """Add small real-code wrappers when a source window starts/ends inside braces."""
+    lines = code.splitlines()
+    while lines and not "\n".join(lines).strip():
+        lines.pop(0)
+    if not lines:
+        return code
+
+    delta = _brace_delta("\n".join(lines))
+    prefix: list[str] = []
+    suffix: list[str] = []
+    if delta < 0:
+        prefix.extend(["/* structural opener for clipped context */", "{"] * abs(delta))
+    elif delta > 0:
+        suffix.extend(["/* structural closer for clipped context */", "}"] * delta)
+
+    budget = max_lines - len(prefix) - len(suffix)
+    if budget < 1:
+        budget = 1
+    clipped = lines[:budget]
+    balanced = "\n".join([*prefix, *clipped, *suffix]).strip()
+    return balanced
+
+
+def _safe_chunk_lines(context_lines: list[str], target_lines: list[str]) -> list[str]:
+    reserve = 6
+    context_budget = max(0, min(len(context_lines), MAX_MODEL_CHUNK_LINES - reserve - 1))
+    kept_context = context_lines[:context_budget]
+    target_budget = max(1, MAX_MODEL_CHUNK_LINES - len(kept_context))
+    return [*kept_context, *target_lines[:target_budget]]
+
+
+def _node_lines(node) -> tuple[int, int]:
+    return node.start_point[0] + 1, node.end_point[0] + 1
+
+
+def _node_line_range(node) -> tuple[int, int]:
+    start_line = node.start_point[0] + 1
+    end_line = node.end_point[0] + 1
+    if node.end_point[1] == 0 and end_line > start_line:
+        end_line -= 1
+    return start_line, end_line
+
+
+def _node_text(node, source_bytes: bytes) -> str:
+    return source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+
+def _unit_name(node, source_bytes: bytes) -> str:
+    text = _node_text(node, source_bytes)
+    if node.type in {"class_specifier", "struct_specifier", "union_specifier"}:
+        match = re.search(r"\b(class|struct|union)\s+([A-Za-z_][A-Za-z0-9_]*)", text)
+        return match.group(2) if match else node.type
+    if node.type == "namespace_definition":
+        match = re.search(r"\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*)", text)
+        return match.group(1) if match else "anonymous_namespace"
+    if node.type == "function_definition":
+        header = text.split("{", 1)[0]
+        names = re.findall(r"([~A-Za-z_][A-Za-z0-9_:~]*)\s*\(", header)
+        names = [name for name in names if name.split("::")[-1] not in CONTROL_KEYWORDS]
+        return names[-1] if names else "function"
+    if node.type == "lambda_expression":
+        start, _ = _node_lines(node)
+        return f"lambda_line_{start}"
+    start, _ = _node_lines(node)
+    return f"{node.type}_{start}"
+
+
+def _load_tree_sitter_parser(language: str):
+    try:
+        from tree_sitter import Language, Parser
+        if language == "CPP":
+            import tree_sitter_cpp as grammar
+        else:
+            import tree_sitter_c as grammar
+    except Exception as exc:
+        raise RuntimeError(
+            "Tree-sitter semantic chunking dependencies are missing. "
+            "Install backend requirements before running scans."
+        ) from exc
+    parser = Parser()
+    parser.language = Language(grammar.language())
+    return parser
+
+
+def _collect_header_context(parse: ParseResult, source_lines: list[str], target_code: str) -> list[str]:
+    target_symbols = extract_names(target_code)[0] | extract_names(target_code)[1]
+    context: list[str] = []
+    context.extend(parse.includes[:8])
+    context.extend(parse.imports[:4])
+    context.extend(parse.pragmas[:4])
+    context.extend(line for line in parse.macros if any(symbol and symbol in line for symbol in target_symbols))
+    context.extend(unit.code for unit in parse.forward_declarations if unit.name in target_symbols)
+    context.extend(unit.code for unit in parse.declarations if unit.name in target_symbols)
+    context.extend(unit.code for unit in parse.global_units if unit.name in target_symbols)
+
+    for line in source_lines:
+        stripped = line.strip()
+        if stripped.startswith(("using ", "typedef ", "namespace ")) and stripped.endswith(";"):
+            context.append(stripped)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for line in context:
+        compact = " ".join(str(line).split())
+        if compact and compact not in seen:
+            seen.add(compact)
+            deduped.append(compact)
+    return deduped[:14]
+
+
+def _parent_context_lines(parent_stack: list[tuple[str, str, int, int]]) -> list[str]:
+    lines = []
+    for kind, name, start_line, end_line in parent_stack[-3:]:
+        if kind == "namespace_definition":
+            lines.append(f"namespace {name} {{ /* parent context lines {start_line}-{end_line} */ }}")
+        elif kind == "class_specifier":
+            lines.append(f"class {name} {{ /* parent context lines {start_line}-{end_line}; child chunk follows */ }};")
+        elif kind == "struct_specifier":
+            lines.append(f"struct {name} {{ /* parent context lines {start_line}-{end_line}; child chunk follows */ }};")
+        elif kind == "union_specifier":
+            lines.append(f"union {name} {{ /* parent context lines {start_line}-{end_line}; child chunk follows */ }};")
+    return lines
+
+
+def _target_windows(start_line: int, end_line: int, context_line_count: int) -> list[tuple[int, int]]:
+    target_budget = max(1, MAX_MODEL_CHUNK_LINES - context_line_count - 4)
+    windows: list[tuple[int, int]] = []
+    current = start_line
+    while current <= end_line:
+        stop = min(end_line, current + target_budget - 1)
+        windows.append((current, stop))
+        if stop >= end_line:
+            break
+        current = max(stop + 1 - CHUNK_OVERLAP_LINES, current + 1)
+    return windows
+
+
+def _make_ast_chunk(
+    *,
+    index: int,
+    kind: str,
+    name: str,
+    start_line: int,
+    end_line: int,
+    source_lines: list[str],
+    context_lines: list[str],
+    file_name: str,
+) -> dict:
+    target_code = _slice_lines(source_lines, start_line, end_line)
+    raw_lines = _safe_chunk_lines(context_lines, target_code.splitlines())
+    content = _balance_chunk("\n".join(raw_lines))
+    if _line_count(content) > MAX_MODEL_CHUNK_LINES:
+        content = "\n".join(content.splitlines()[:MAX_MODEL_CHUNK_LINES])
+        content = _balance_chunk(content)
+    if _line_count(content) > MAX_MODEL_CHUNK_LINES or not _balanced(content):
+        raise RuntimeError(
+            f"Semantic chunk validation failed for {file_name} lines {start_line}-{end_line}."
+        )
+    return {
+        "index": index,
+        "kind": kind,
+        "name": name,
+        "start_line": start_line,
+        "end_line": end_line,
+        "content": content,
+        "display_code": target_code,
+        "line_count": _line_count(content),
+        "parser": "tree-sitter",
+    }
+
+
+def _make_packed_source_chunk(
+    *,
+    index: int,
+    start_line: int,
+    end_line: int,
+    source_lines: list[str],
+    file_name: str,
+) -> dict:
+    display_code = _slice_lines(source_lines, start_line, end_line)
+    content = display_code
+    if _line_count(content) > MAX_MODEL_CHUNK_LINES:
+        content = _balance_chunk(content)
+    if _line_count(content) > MAX_MODEL_CHUNK_LINES:
+        raise RuntimeError(
+            f"Semantic packed chunk exceeded {MAX_MODEL_CHUNK_LINES} lines: "
+            f"{file_name} lines {start_line}-{end_line}"
+        )
+    if not _balanced(content):
+        balanced = _balance_chunk(content)
+        if _line_count(balanced) <= MAX_MODEL_CHUNK_LINES and _balanced(balanced):
+            content = balanced
+        else:
+            raise RuntimeError(
+                f"Semantic packed chunk has unbalanced braces: "
+                f"{file_name} lines {start_line}-{end_line}"
+            )
+    return {
+        "index": index,
+        "kind": "semantic_range",
+        "name": f"{file_name}:{start_line}-{end_line}",
+        "start_line": start_line,
+        "end_line": end_line,
+        "content": content,
+        "display_code": display_code,
+        "line_count": _line_count(content),
+        "parser": "tree-sitter-packed",
+    }
+
+
+def _top_level_semantic_segments(root, total_lines: int) -> list[tuple[int, int]]:
+    node_ranges: list[tuple[int, int]] = []
+    for child in root.children:
+        if not child.is_named:
+            continue
+        start, end = _node_line_range(child)
+        if start > total_lines or end < 1:
+            continue
+        node_ranges.append((max(1, start), min(total_lines, end)))
+
+    if not node_ranges:
+        return [(1, total_lines)]
+
+    node_ranges.sort()
+    segments: list[tuple[int, int]] = []
+    cursor = 1
+    for start, end in node_ranges:
+        if end < cursor:
+            continue
+        segment_start = cursor if cursor < start else start
+        if end >= segment_start:
+            segments.append((segment_start, end))
+        cursor = max(cursor, end + 1)
+    if cursor <= total_lines:
+        segments.append((cursor, total_lines))
+    return segments
+
+
+def _split_oversized_segment(start_line: int, end_line: int) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    current = start_line
+    while current <= end_line:
+        stop = min(end_line, current + MAX_MODEL_CHUNK_LINES - 1)
+        ranges.append((current, stop))
+        current = stop + 1
+    return ranges
+
+
+def _pack_semantic_segments(segments: list[tuple[int, int]], source_lines: list[str]) -> list[tuple[int, int]]:
+    packed: list[tuple[int, int]] = []
+    current_start: int | None = None
+    current_end: int | None = None
+
+    for segment_start, segment_end in segments:
+        segment_len = segment_end - segment_start + 1
+        if segment_len > MAX_MODEL_CHUNK_LINES:
+            if current_start is not None and current_end is not None:
+                first_stop = min(segment_end, current_start + MAX_MODEL_CHUNK_LINES - 1)
+                packed.append((current_start, first_stop))
+                next_start = first_stop + 1
+                if next_start <= segment_end:
+                    packed.extend(_split_oversized_segment(next_start, segment_end))
+                current_start = current_end = None
+            else:
+                packed.extend(_split_oversized_segment(segment_start, segment_end))
+            continue
+
+        if current_start is None:
+            current_start, current_end = segment_start, segment_end
+            continue
+
+        assert current_end is not None
+        candidate_len = segment_end - current_start + 1
+        if candidate_len <= MAX_MODEL_CHUNK_LINES:
+            current_end = segment_end
+            continue
+
+        packed.append((current_start, current_end))
+        current_start, current_end = segment_start, segment_end
+
+    if current_start is not None and current_end is not None:
+        packed.append((current_start, current_end))
+
+    repaired: list[tuple[int, int]] = []
+    for start, end in packed:
+        if repaired:
+            prev_start, prev_end = repaired[-1]
+            merged_len = end - prev_start + 1
+            merged_text = _slice_lines(source_lines, prev_start, end)
+            balanced_merged = _balance_chunk(merged_text)
+            if (
+                merged_len <= MAX_MODEL_CHUNK_LINES
+                and _line_count(balanced_merged) <= MAX_MODEL_CHUNK_LINES
+                and _balanced(balanced_merged)
+            ):
+                repaired[-1] = (prev_start, end)
+                continue
+        text = _slice_lines(source_lines, start, end)
+        repaired.append((start, end))
+    return repaired
+
+
+def _validate_packed_ranges(ranges: list[tuple[int, int]], total_lines: int, file_name: str) -> None:
+    if not ranges:
+        raise RuntimeError(f"Semantic chunking produced no chunks for {file_name}.")
+    previous_end = 0
+    for start, end in ranges:
+        if start != previous_end + 1:
+            raise RuntimeError(
+                f"Semantic chunking produced non-contiguous chunks for {file_name}: "
+                f"previous end {previous_end}, next start {start}."
+            )
+        if end < start:
+            raise RuntimeError(f"Semantic chunking produced an invalid range for {file_name}: {start}-{end}.")
+        if end - start + 1 > MAX_MODEL_CHUNK_LINES:
+            raise RuntimeError(
+                f"Semantic chunking produced an oversized range for {file_name}: "
+                f"{start}-{end} exceeds {MAX_MODEL_CHUNK_LINES} lines."
+            )
+        previous_end = end
+    if previous_end != total_lines:
+        raise RuntimeError(
+            f"Semantic chunking did not cover the whole file for {file_name}: "
+            f"covered through line {previous_end}, total lines {total_lines}."
+        )
+
+
+def _tree_sitter_semantic_chunks(source_path: Path, parse: ParseResult) -> list[dict]:
+    source_text = source_path.read_text(encoding="utf-8", errors="replace")
+    source_bytes = source_text.encode("utf-8", errors="replace")
+    source_lines = source_text.splitlines()
+    parser = _load_tree_sitter_parser(parse.language)
+    tree = parser.parse(source_bytes)
+    root = tree.root_node
+    total_lines = max(1, len(source_lines))
+    segments = _top_level_semantic_segments(root, total_lines)
+    packed_ranges = _pack_semantic_segments(segments, source_lines)
+    _validate_packed_ranges(packed_ranges, total_lines, source_path.name)
+    chunks = [
+        _make_packed_source_chunk(
+            index=index,
+            start_line=start,
+            end_line=end,
+            source_lines=source_lines,
+            file_name=source_path.name,
+        )
+        for index, (start, end) in enumerate(packed_ranges, start=1)
+    ]
+    return chunks
+
+
 def run() -> None:
     source_path = ROOT / TARGET_FILE
     if not source_path.exists():
@@ -1238,36 +1682,59 @@ def run() -> None:
     print(f"Report: {REPORT_FILE}")
 
 
-def generate_semantic_chunks(source_path: Path) -> dict:
+def generate_semantic_chunks(source_path: Path, validate_syntax: bool = True) -> dict:
     """Return model-ready chunks and parser metadata for one C/C++ file."""
     start = time.perf_counter()
-    parse = parse_source(source_path)
+    parse = parse_source(source_path, validate_syntax=validate_syntax)
+    source_text = source_path.read_text(encoding="utf-8", errors="replace")
+    total_lines = max(1, len(source_text.splitlines()))
     chunks: list[dict] = []
 
     if parse.syntax_ok:
-        targets = parse.functions if parse.functions else parse.loose_blocks
-        if not targets and parse.type_units:
-            targets = parse.type_units
-        for index, target in enumerate(targets, 1):
-            chunks.append(
+        if total_lines <= MAX_MODEL_CHUNK_LINES:
+            chunks = [
                 {
-                    "index": index,
-                    "kind": target.kind,
-                    "name": target.name,
-                    "start_line": target.start_line,
-                    "end_line": target.end_line,
-                    "content": make_chunk(parse, target),
+                    "index": 1,
+                    "kind": "file",
+                    "name": source_path.name,
+                    "start_line": 1,
+                    "end_line": total_lines,
+                    "content": source_text,
+                    "display_code": source_text,
+                    "line_count": total_lines,
+                    "parser": "whole-file",
+                    "source_line_count": total_lines,
+                    "chunker_version": CHUNKER_VERSION,
                 }
-            )
+            ]
+        else:
+            chunks = _tree_sitter_semantic_chunks(source_path, parse)
+            for chunk in chunks:
+                chunk["source_line_count"] = total_lines
+                chunk["chunker_version"] = CHUNKER_VERSION
+                if _line_count(chunk["content"]) > MAX_MODEL_CHUNK_LINES:
+                    raise RuntimeError(
+                        f"Semantic chunk exceeded {MAX_MODEL_CHUNK_LINES} lines: "
+                        f"{chunk['name']} lines {chunk['start_line']}-{chunk['end_line']}"
+                    )
+                if not _balanced(chunk["content"]):
+                    raise RuntimeError(
+                        f"Semantic chunk has unbalanced braces: "
+                        f"{chunk['name']} lines {chunk['start_line']}-{chunk['end_line']}"
+                    )
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     return {
+        "chunker_version": CHUNKER_VERSION,
         "language": parse.language,
         "syntax_ok": parse.syntax_ok,
         "syntax_command": parse.syntax_command,
         "syntax_output": parse.syntax_output,
+        "source_line_count": total_lines,
         "elapsed_ms": round(elapsed_ms, 3),
         "chunks_created": len(chunks),
+        "max_chunk_lines": MAX_MODEL_CHUNK_LINES,
+        "chunk_overlap_lines": CHUNK_OVERLAP_LINES,
         "chunks": chunks,
         "functions": [{"name": u.name, "lines": [u.start_line, u.end_line]} for u in parse.functions],
         "types": [{"kind": u.kind, "name": u.name, "lines": [u.start_line, u.end_line]} for u in parse.type_units],

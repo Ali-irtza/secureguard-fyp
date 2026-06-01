@@ -136,7 +136,6 @@ def analyze_file(file_path: str) -> str:
     lines = []
     for i, finding in enumerate(all_findings, start=1):
         lines.append(f"finding_{i}")
-        lines.append(f"  file_language: {language} file")
         lines.append(f"  vul_line_location: {finding['vul_line_location']}")
         if "vul_detected_line" in finding:
             lines.append(f"  vul_detected_line: {finding['vul_detected_line']}")
@@ -144,4 +143,3 @@ def analyze_file(file_path: str) -> str:
         lines.append(f"  reason: {finding['reason']}")
         lines.append("")
     return "\n".join(lines)
-

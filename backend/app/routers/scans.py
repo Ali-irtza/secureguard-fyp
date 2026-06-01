@@ -1,8 +1,10 @@
 import io
+import json
 import os
 import time
 import zipfile
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from supabase import Client
 
 from app.dependencies import get_supabase, get_current_user
@@ -15,8 +17,12 @@ from app.services.scans.scan_storage_service import (
     save_report_artifact,
     get_scans_for_user,
     get_scan_with_vulnerabilities,
+    list_reports_for_user,
+    create_manual_report,
+    get_report_for_user,
+    delete_report_scan_for_user,
 )
-from app.services.scans.report_storage_service import load_pdf_from_zip
+from app.services.scans.report_storage_service import load_pdf_from_zip, load_report_from_zip
 
 router = APIRouter()
 
@@ -99,6 +105,18 @@ async def start_scan(
     )
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+            raise
+        duration = int(time.time() - start_time)
+        create_failed_scan_record(
+            supabase,
+            current_user.id,
+            body.project_id,
+            {"project_name": body.project_name, "scan_type": "github", "branch": body.branch, "duration_secs": duration},
+            str(exc.detail),
+        )
+        raise
     except Exception as exc:
         duration = int(time.time() - start_time)
         create_failed_scan_record(
@@ -143,6 +161,18 @@ async def scan_uploaded_file(
     files_dict = {body.filename: body.source_code}
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+            raise
+        duration = int(time.time() - start_time)
+        create_failed_scan_record(
+            supabase,
+            current_user.id,
+            body.project_id,
+            {"project_name": body.project_name, "scan_type": "upload", "file_name": body.filename, "duration_secs": duration},
+            str(exc.detail),
+        )
+        raise
     except Exception as exc:
         duration = int(time.time() - start_time)
         create_failed_scan_record(
@@ -191,6 +221,18 @@ async def scan_uploaded_files(
     files_dict = await _extract_upload_files(files)
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+            raise
+        duration = int(time.time() - start_time)
+        create_failed_scan_record(
+            supabase,
+            current_user.id,
+            project_id,
+            {"project_name": project_name, "scan_type": "upload", "file_name": ", ".join(files_dict.keys())[:500], "duration_secs": duration},
+            str(exc.detail),
+        )
+        raise
     except Exception as exc:
         duration = int(time.time() - start_time)
         create_failed_scan_record(
@@ -221,6 +263,77 @@ async def scan_uploaded_files(
 
     return ScanResponse(**result)
 
+
+@router.post("/scan/upload-files/stream")
+async def scan_uploaded_files_stream(
+    files: list[UploadFile] = File(...),
+    project_id: str = Form(""),
+    project_name: str = Form(""),
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Streams uploaded C/C++ scan progress as newline-delimited JSON.
+    Each line is one event object; the final scan_result event includes the persisted scan_id.
+    """
+    start_time = time.time()
+    files_dict = await _extract_upload_files(files)
+
+    def line(event: dict) -> str:
+        return json.dumps(event, ensure_ascii=False) + "\n"
+
+    def event_stream():
+        final_result = None
+        for event in scanner_service.iter_vulnerability_scanner_events(files_dict):
+            if event.get("event") == "error":
+                status_code = int(event.get("status_code") or status.HTTP_500_INTERNAL_SERVER_ERROR)
+                if status_code != status.HTTP_422_UNPROCESSABLE_ENTITY:
+                    duration = int(time.time() - start_time)
+                    create_failed_scan_record(
+                        supabase,
+                        current_user.id,
+                        project_id,
+                        {
+                            "project_name": project_name,
+                            "scan_type": "upload",
+                            "file_name": ", ".join(files_dict.keys())[:500],
+                            "duration_secs": duration,
+                        },
+                        event.get("message", "Scan failed"),
+                    )
+                yield line(event)
+                return
+            if event.get("event") == "scan_result":
+                final_result = event["result"]
+                duration = int(time.time() - start_time)
+                try:
+                    scan_data = {
+                        **final_result,
+                        "project_name": project_name,
+                        "scan_type": "upload",
+                        "file_name": ", ".join(files_dict.keys())[:500],
+                        "duration_secs": duration,
+                    }
+                    scan_id = create_scan_record(supabase, current_user.id, project_id, scan_data)
+                    save_vulnerabilities(supabase, scan_id, final_result["vulnerabilities"])
+                    save_report_artifact(supabase, current_user.id, scan_id, {**scan_data, **final_result}, final_result["vulnerabilities"])
+                    final_result["scan_id"] = scan_id
+                except Exception as exc:
+                    print(f"[scans] Failed to save streamed scan to DB: {exc}")
+                    final_result["scan_id"] = None
+                yield line({"event": "scan_result", "result": final_result})
+                return
+            yield line(event)
+
+        if final_result is None:
+            yield line({"event": "error", "message": "Scan ended before a report was produced."})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 @router.get("/scans/history", response_model=list[dict])
 async def get_scan_history(
     current_user=Depends(get_current_user),
@@ -231,6 +344,87 @@ async def get_scan_history(
     """
     scans = get_scans_for_user(supabase, current_user.id)
     return scans
+
+
+@router.get("/reports", response_model=list[dict])
+async def get_reports(
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Returns generated report metadata for the authenticated user."""
+    return list_reports_for_user(supabase, current_user.id)
+
+
+@router.post("/reports", response_model=list[dict])
+async def generate_report(
+    body: dict = Body(...),
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Generate PDF, CSV, or both from the latest completed scan for a project."""
+    report_type = body.get("report_type", "full")
+    if report_type != "full":
+        raise HTTPException(status_code=422, detail="Team reports are not available yet.")
+
+    project_id = str(body.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="Select a project before generating a report.")
+
+    report_format = str(body.get("format") or "pdf").lower()
+    if report_format not in {"pdf", "csv", "both"}:
+        raise HTTPException(status_code=422, detail="Report format must be pdf, csv, or both.")
+
+    try:
+        return create_manual_report(
+            supabase,
+            current_user.id,
+            project_id,
+            report_format,
+            body.get("start_date"),
+            body.get("end_date"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/reports/{report_id}/download")
+async def download_report(
+    report_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Download a stored report as its actual PDF/CSV file, not the internal ZIP."""
+    try:
+        report = get_report_for_user(supabase, report_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    storage_path = report.get("file_path")
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Report artifact is not available or has expired.")
+    report_format = report.get("format") or "pdf"
+    content, filename, media_type = load_report_from_zip(supabase, storage_path, report_format)
+    extension = "csv" if report_format == "csv" else "pdf"
+    safe_name = f"secureguard-{report.get('name') or 'report'}-{report_id}.{extension}".replace("/", "-").replace("\\", "-")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
+
+
+@router.delete("/reports/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_report(
+    report_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Delete the report's linked scan so report, scan history, dashboard, and vulnerabilities stay synced."""
+    try:
+        delete_report_scan_for_user(supabase, report_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/scans/{scan_id}", response_model=dict)

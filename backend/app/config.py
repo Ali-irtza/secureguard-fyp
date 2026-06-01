@@ -30,14 +30,10 @@ class Settings(BaseSettings):
     github_private_key_path: str = "github-app.pem"
     github_callback_url:    str = "http://localhost:8000/teams/github/callback"
 
-    # FreeLLMAPI
-    freellmapi_url: str = "http://localhost:3001/v1"
-    freellmapi_key: str = ""
-
     # Trained security model / LM Studio compatible endpoint
     security_model_base_url: str = ""
     security_model_name: str = "quen_fine_tuned"
-    security_model_timeout_seconds: int = 250
+    security_model_timeout_seconds: int = 300
     security_model_coverage_threshold: float = 80.0
 
     @property
@@ -57,6 +53,7 @@ class Settings(BaseSettings):
         env_file=".env",          # tells pydantic where to find the env file
         env_file_encoding="utf-8",
         case_sensitive=False,     # SUPABASE_URL and supabase_url both work
+        extra="ignore",           # tolerate stale local .env keys after config cleanup
     )
 
 

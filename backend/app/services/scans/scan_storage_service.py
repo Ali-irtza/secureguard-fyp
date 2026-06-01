@@ -1,7 +1,7 @@
 from supabase import Client
 from typing import Dict, List
 from datetime import datetime, timezone
-from app.services.scans.report_storage_service import create_zipped_pdf_report, cleanup_expired_reports
+from app.services.scans.report_storage_service import REPORT_BUCKET, create_zipped_pdf_report, create_zipped_report, cleanup_expired_reports
 
 
 def create_scan_record(
@@ -171,6 +171,159 @@ def get_scans_for_user(
         scan["severity_counts"] = severity_counts.get(scan["id"], {"critical": 0, "high": 0, "medium": 0, "low": 0})
         scan["critical_findings"] = critical_findings.get(scan["id"], [])
     return scans
+
+
+def list_reports_for_user(supabase: Client, user_id: str) -> List[Dict]:
+    """Fetch report rows with their owning scan data for the reports page."""
+    cleanup_expired_reports(supabase)
+    scans_result = (
+        supabase.table("scans")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("status", "completed")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    completed_scans = scans_result.data or []
+    existing_result = (
+        supabase.table("reports")
+        .select("id,scan_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    scans_with_reports = {row.get("scan_id") for row in existing_result.data or [] if row.get("scan_id")}
+
+    for scan in completed_scans:
+        scan_id = scan.get("id")
+        if not scan_id or scan_id in scans_with_reports:
+            continue
+        try:
+            vulns_result = (
+                supabase.table("vulnerabilities")
+                .select("*")
+                .eq("scan_id", scan_id)
+                .execute()
+            )
+            save_report_artifact(supabase, user_id, scan_id, scan, vulns_result.data or [])
+            scans_with_reports.add(scan_id)
+        except Exception as exc:
+            print(f"[reports] Failed to backfill report for scan {scan_id}: {exc}")
+
+    result = (
+        supabase.table("reports")
+        .select("*,scans(id,project_id,project_name,scan_type,file_name,risk_level,total_vulns,files_scanned,created_at,completed_at,report_storage_path,report_expires_at)")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+def create_manual_report(
+    supabase: Client,
+    user_id: str,
+    project_id: str,
+    report_format: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> List[Dict]:
+    """Create one or two downloadable report artifacts from the latest matching completed scan."""
+    query = (
+        supabase.table("scans")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .eq("status", "completed")
+        .order("completed_at", desc=True)
+        .limit(1)
+    )
+    if start_date:
+        query = query.gte("completed_at", start_date)
+    if end_date:
+        query = query.lte("completed_at", end_date)
+    scan_result = query.execute()
+    scans = scan_result.data or []
+    if not scans:
+        raise ValueError("No completed scans found for the selected project and date range.")
+
+    scan = scans[0]
+    vulns_result = (
+        supabase.table("vulnerabilities")
+        .select("*")
+        .eq("scan_id", scan["id"])
+        .execute()
+    )
+    vulnerabilities = vulns_result.data or []
+    requested_formats = ["pdf", "csv"] if report_format == "both" else [report_format]
+    created: List[Dict] = []
+    for fmt in requested_formats:
+        safe_format = "csv" if fmt == "csv" else "pdf"
+        artifact = create_zipped_report(supabase, user_id, scan["id"], scan, vulnerabilities, safe_format)
+        report = (
+            supabase.table("reports")
+            .insert(
+                {
+                    "scan_id": scan["id"],
+                    "user_id": user_id,
+                    "name": f"{scan.get('project_name') or 'Scan'} Full Scan Report",
+                    "format": safe_format,
+                    "status": "completed",
+                    "file_path": artifact["path"],
+                    "expires_at": artifact["expires_at"],
+                }
+            )
+            .execute()
+        )
+        created.extend(report.data or [])
+    return created
+
+
+def get_report_for_user(supabase: Client, report_id: str, user_id: str) -> Dict:
+    result = (
+        supabase.table("reports")
+        .select("*")
+        .eq("id", report_id)
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+    if not result.data:
+        raise ValueError("Report not found")
+    return result.data
+
+
+def delete_report_for_user(supabase: Client, report_id: str, user_id: str) -> str | None:
+    """Delete one report artifact and metadata row. Returns linked scan id for UI refresh context."""
+    report = get_report_for_user(supabase, report_id, user_id)
+    storage_path = report.get("file_path")
+    if storage_path:
+        supabase.storage.from_(REPORT_BUCKET).remove([storage_path])
+    supabase.table("reports").delete().eq("id", report_id).eq("user_id", user_id).execute()
+    return report.get("scan_id")
+
+
+def delete_report_scan_for_user(supabase: Client, report_id: str, user_id: str) -> str | None:
+    """Delete a report's linked scan so reports, scan history, dashboard stats, and vulnerabilities stay in sync."""
+    report = get_report_for_user(supabase, report_id, user_id)
+    scan_id = report.get("scan_id")
+    if not scan_id:
+        delete_report_for_user(supabase, report_id, user_id)
+        return None
+
+    related_reports = (
+        supabase.table("reports")
+        .select("id,file_path")
+        .eq("scan_id", scan_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    paths = [row["file_path"] for row in related_reports.data or [] if row.get("file_path")]
+    if paths:
+        supabase.storage.from_(REPORT_BUCKET).remove(paths)
+
+    supabase.table("reports").delete().eq("scan_id", scan_id).eq("user_id", user_id).execute()
+    supabase.table("scans").delete().eq("id", scan_id).eq("user_id", user_id).execute()
+    return scan_id
 
 
 def get_scan_with_vulnerabilities(

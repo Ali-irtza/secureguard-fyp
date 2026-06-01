@@ -1,8 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
-import { triggerScan, getBranchFiles, triggerUploadedFileScan, ScanResult, VulnerabilityDetail } from "@/lib/scans-api";
-import { listProjects, createProject, Project } from "@/lib/projects-api";
+import {
+  triggerScan,
+  getBranchFiles,
+  triggerUploadedFileScan,
+  triggerUploadedFileScanStream,
+  ScanResult,
+  VulnerabilityDetail,
+  ScanStreamEvent,
+  ChunkOutput,
+} from "@/lib/scans-api";
+import { listProjects, createProject, deleteProject } from "@/lib/projects-api";
 import { getTeam, listTeams } from "@/lib/teams-api";
 import type { Team as ApiTeam } from "@/lib/teams-api";
 import {
@@ -14,6 +23,7 @@ import {
 } from "@/lib/project-files-api";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,11 +59,16 @@ import {
   Check,
   ChevronsUpDown,
   AlertTriangle,
+  Boxes,
+  BrainCircuit,
+  Clock3,
+  FileUp,
+  Radar,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
 import { ScanningProgress } from "@/components/scan/ScanningProgress";
-import { ScanLogTerminal, LogEntry } from "@/components/scan/ScanLogTerminal";
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
 import { toast } from "sonner";
 
@@ -63,6 +78,66 @@ interface CodeLine {
   status: "pending" | "scanning" | "safe" | "vulnerable";
   vulnerability?: string;
 }
+
+type ThinkingEventType = "info" | "warning" | "error" | "success";
+
+const splitSourceLines = (source: string): string[] => {
+  const lines = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines.length > 0 ? lines : [""];
+};
+
+const parseThinkingStep = (step: string) => {
+  const match = step.match(/^\[(\d{2}:\d{2})\]\s+([^:]+):\s+(.*)$/);
+  if (!match) {
+    return { time: "", type: "Working", message: step };
+  }
+  return { time: match[1], type: match[2], message: match[3] };
+};
+
+const getThinkingStyle = (message: string, type: string) => {
+  const text = `${type} ${message}`.toLowerCase();
+  if (type.toLowerCase().includes("error")) {
+    return {
+      label: "Attention",
+      icon: AlertTriangle,
+      className: "border-destructive/35 bg-destructive/10 text-destructive",
+      dotClassName: "bg-destructive",
+    };
+  }
+  if (text.includes("upload") || text.includes("source") || text.includes("file") || text.includes("package")) {
+    return {
+      label: "Intake",
+      icon: FileUp,
+      className: "border-blue-500/30 bg-blue-500/10 text-blue-300",
+      dotClassName: "bg-blue-400",
+    };
+  }
+  if (text.includes("chunk") || text.includes("static") || text.includes("review") || text.includes("vulnerab")) {
+    return {
+      label: "Analysis",
+      icon: Radar,
+      className: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+      dotClassName: "bg-amber-400",
+    };
+  }
+  if (text.includes("done") || text.includes("saved") || text.includes("complete") || text.includes("assembled") || text.includes("corrected")) {
+    return {
+      label: "Verdict",
+      icon: Check,
+      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+      dotClassName: "bg-emerald-400",
+    };
+  }
+  return {
+    label: "Node",
+    icon: BrainCircuit,
+    className: "border-primary/30 bg-primary/10 text-primary",
+    dotClassName: "bg-primary",
+  };
+};
 
 const NewScan = () => {
   const [searchParams] = useSearchParams();
@@ -179,8 +254,6 @@ const NewScan = () => {
   const [currentPhase, setCurrentPhase] = useState(0);
   const [currentLine, setCurrentLine] = useState(0);
   const [codeLines, setCodeLines] = useState<CodeLine[]>([]);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [logsExpanded, setLogsExpanded] = useState(true);
   const [stats, setStats] = useState({
     linesScanned: 0,
     totalLines: 0,
@@ -190,6 +263,7 @@ const NewScan = () => {
   
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
+  const sourceLineCountsRef = useRef<Record<string, number>>({});
 
   // New scan result state
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -197,6 +271,7 @@ const NewScan = () => {
   const [branchFiles, setBranchFiles] = useState<string[]>([]);
   const [scanError, setScanError] = useState<string>("");
   const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
+  const [streamingChunks, setStreamingChunks] = useState<ChunkOutput[]>([]);
 
   // Panel visibility state
   const [showPanel, setShowPanel] = useState(true);
@@ -258,11 +333,231 @@ const NewScan = () => {
   // Scan language string for CodeViewer / mock code ("c" | "cpp")
   const scanLang = detectedProjectLanguage === "C++" ? "cpp" : "c";
 
-  const addLog = useCallback((message: string, type: LogEntry["type"] = "info") => {
+  const addLog = useCallback((message: string, type: ThinkingEventType = "info") => {
     const now = new Date();
     const timestamp = `${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
-    setLogs((prev) => [...prev, { timestamp, message, type }]);
+    const prefix = type === "error" ? "Error" : type === "warning" ? "Warning" : type === "success" ? "Done" : "Working";
+    setThinkingSteps((prev) => [...prev, `[${timestamp}] ${prefix}: ${message}`]);
   }, []);
+
+  const upsertStreamingChunk = useCallback((incoming: ChunkOutput) => {
+    setStreamingChunks((prev) => {
+      const key = `${incoming.file_path ?? ""}-${incoming.chunk_index}`;
+      const existingIndex = prev.findIndex((chunk) => `${chunk.file_path ?? ""}-${chunk.chunk_index}` === key);
+      if (existingIndex === -1) return [...prev, incoming];
+      const next = [...prev];
+      next[existingIndex] = { ...next[existingIndex], ...incoming };
+      return next;
+    });
+  }, []);
+
+  const replaceStreamingChunksForFile = useCallback((filePath: string, incomingChunks: ChunkOutput[]) => {
+    setStreamingChunks((prev) => [
+      ...prev.filter((chunk) => (chunk.file_path ?? "") !== filePath),
+      ...incomingChunks,
+    ]);
+  }, []);
+
+  const sanitizeScanResultChunkRanges = useCallback((result: ScanResult): ScanResult => {
+    const chunkOutputs = result.chunk_outputs ?? [];
+    const invalidFiles = new Set<string>();
+    const chunksByFile = chunkOutputs.reduce<Record<string, ChunkOutput[]>>((groups, chunk) => {
+      const filePath = chunk.file_path ?? "";
+      groups[filePath] = [...(groups[filePath] ?? []), chunk];
+      return groups;
+    }, {});
+
+    Object.entries(chunksByFile).forEach(([filePath, chunks]) => {
+      const knownSourceLines =
+        sourceLineCountsRef.current[filePath]
+        ?? Math.max(0, ...chunks.map((chunk) => Number(chunk.source_line_count) || 0));
+      const maxChunkEnd = Math.max(0, ...chunks.map((chunk) => Number(chunk.end_line) || 0));
+      if (knownSourceLines > 0 && maxChunkEnd > knownSourceLines) {
+        invalidFiles.add(filePath);
+      }
+    });
+
+    if (invalidFiles.size === 0) return result;
+    addLog(`Ignored stale chunk data for ${Array.from(invalidFiles).join(", ")}`, "warning");
+    const sanitizedChunks = chunkOutputs.filter((chunk) => !invalidFiles.has(chunk.file_path ?? ""));
+    return {
+      ...result,
+      total_chunks_scanned: sanitizedChunks.length,
+      chunk_outputs: sanitizedChunks,
+      files: result.files.map((file) => ({
+        ...file,
+        chunk_outputs: (file.chunk_outputs ?? []).filter((chunk) => !invalidFiles.has(chunk.file_path ?? file.filename)),
+      })),
+    };
+  }, [addLog]);
+
+  const handleScanStreamEvent = useCallback((event: ScanStreamEvent) => {
+    switch (event.event) {
+      case "scan_started":
+        addLog(`Streaming scan started for ${event.total_files} file${event.total_files === 1 ? "" : "s"}`, "info");
+        break;
+      case "file_started":
+        addLog(`Preparing ${event.file_path}`, "info");
+        break;
+      case "node":
+        addLog(event.message, "info");
+        break;
+      case "chunks_ready":
+        {
+          const knownSourceLines = event.source_lines ?? sourceLineCountsRef.current[event.file_path] ?? 0;
+          const maxChunkEnd = Math.max(0, ...event.chunks.map((chunk) => Number(chunk.end_line) || 0));
+          if (knownSourceLines > 0 && maxChunkEnd > knownSourceLines) {
+            addLog(
+              `Ignored stale chunk stream for ${event.file_path}: chunk line ${maxChunkEnd} exceeds source line count ${knownSourceLines}`,
+              "warning"
+            );
+            break;
+          }
+          const chunks = event.chunks.map((chunk) => ({
+            ...chunk,
+            file_path: chunk.file_path ?? event.file_path,
+            source_line_count: (chunk.source_line_count ?? knownSourceLines) || undefined,
+            chunker_version: chunk.chunker_version ?? event.chunker_version,
+          }));
+          addLog(
+            `${event.total_chunks} semantic chunk${event.total_chunks === 1 ? "" : "s"} ready for ${event.file_path}${event.chunker_version ? ` (${event.chunker_version})` : ""}`,
+            "success"
+          );
+          replaceStreamingChunksForFile(event.file_path, chunks);
+          setScanResult((prev) => {
+            const previousChunks = prev?.chunk_outputs ?? [];
+            const keptChunks = previousChunks.filter((chunk) => (chunk.file_path ?? "") !== event.file_path);
+            return {
+              status: "streaming",
+              total_vulnerabilities: prev?.total_vulnerabilities ?? 0,
+              overall_risk_level: prev?.overall_risk_level ?? "Scanning",
+              overall_risk_score: prev?.overall_risk_score ?? 0,
+              files_analyzed: prev?.files_analyzed ?? 0,
+              total_chunks_scanned: keptChunks.length + chunks.length,
+              files_summary: prev?.files_summary ?? [],
+              vulnerabilities: prev?.vulnerabilities ?? [],
+              corrected_code: prev?.corrected_code ?? "Pending...",
+              files: prev?.files ?? [],
+              chunk_outputs: [...keptChunks, ...chunks],
+              scan_id: prev?.scan_id ?? null,
+            };
+          });
+        }
+        break;
+      case "chunk_started":
+        addLog(event.message, "info");
+        break;
+      case "chunk_result":
+        upsertStreamingChunk(event.chunk);
+        setScanResult((prev) => {
+          const previousChunks = prev?.chunk_outputs ?? [];
+          const key = `${event.chunk.file_path ?? ""}-${event.chunk.chunk_index}`;
+          const filtered = previousChunks.filter((chunk) => `${chunk.file_path ?? ""}-${chunk.chunk_index}` !== key);
+          const vulnerabilities = [...filtered, event.chunk].flatMap((chunk) => chunk.vulnerabilities ?? []);
+          return {
+            status: "streaming",
+            total_vulnerabilities: vulnerabilities.length,
+            overall_risk_level: "Scanning",
+            overall_risk_score: prev?.overall_risk_score ?? 0,
+            files_analyzed: prev?.files_analyzed ?? 0,
+            total_chunks_scanned: filtered.length + 1,
+            files_summary: prev?.files_summary ?? [],
+            vulnerabilities,
+            corrected_code: prev?.corrected_code ?? "Pending...",
+            files: prev?.files ?? [],
+            chunk_outputs: [...filtered, event.chunk],
+            scan_id: prev?.scan_id ?? null,
+          };
+        });
+        addLog(`Chunk ${event.chunk.chunk_index} streamed with ${event.chunk.vulnerabilities.length} issue${event.chunk.vulnerabilities.length === 1 ? "" : "s"}`, event.chunk.vulnerabilities.length ? "warning" : "success");
+        break;
+      case "correction_started":
+        addLog(event.message, "info");
+        break;
+      case "correction_result":
+        setStreamingChunks((prev) => prev.map((chunk) =>
+          (chunk.file_path === event.file_path && chunk.chunk_index === event.chunk_index)
+            ? { ...chunk, corrected_code: event.corrected_code }
+            : chunk
+        ));
+        setScanResult((prev) => prev ? {
+          ...prev,
+          chunk_outputs: (prev.chunk_outputs ?? []).map((chunk) =>
+            (chunk.file_path === event.file_path && chunk.chunk_index === event.chunk_index)
+              ? { ...chunk, corrected_code: event.corrected_code }
+              : chunk
+          ),
+        } : prev);
+        addLog(`Corrected code streamed for chunk ${event.chunk_index}`, "success");
+        break;
+      case "scan_result":
+        {
+          const sanitizedResult = sanitizeScanResultChunkRanges(event.result);
+          setScanResult(sanitizedResult);
+          setStreamingChunks(sanitizedResult.chunk_outputs ?? []);
+        }
+        addLog("Final report assembled", "success");
+        break;
+      case "error":
+        addLog(event.message, "error");
+        break;
+    }
+  }, [addLog, replaceStreamingChunksForFile, sanitizeScanResultChunkRanges, upsertStreamingChunk]);
+
+  const renderThinkingStream = (emptyText: string) => {
+    const activeIndex = thinkingSteps.length - 1;
+    return (
+      <div className="space-y-3">
+        {thinkingSteps.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{emptyText}</p>
+        ) : (
+          thinkingSteps.map((step, index) => {
+            const parsed = parseThinkingStep(step);
+            const style = getThinkingStyle(parsed.message, parsed.type);
+            const Icon = style.icon;
+            const isActive = isScanning && index === activeIndex;
+            return (
+              <div
+                key={`${step}-${index}`}
+                className={cn(
+                  "group rounded-md border p-3 transition-all duration-300 animate-slide-up",
+                  style.className,
+                  isActive && "shadow-[0_0_24px_rgba(16,185,129,0.14)]"
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className={cn("relative grid h-7 w-7 place-items-center rounded-full bg-background/50", isActive && "animate-pulse")}>
+                      <Icon className="h-3.5 w-3.5" />
+                      {isActive && (
+                        <span className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full animate-ping", style.dotClassName)} />
+                      )}
+                    </span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wide">{style.label}</span>
+                  </div>
+                  {parsed.time && (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                      {parsed.time}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 text-sm font-medium text-foreground">{parsed.message}</p>
+                {isActive && (
+                  <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:120ms]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:240ms]" />
+                    <span className="ml-1">streaming</span>
+                    <span className="ml-auto h-4 w-1.5 animate-pulse rounded-sm bg-current" />
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  };
 
   const handleStopScan = () => {
     scanAbortRef.current = true;
@@ -276,14 +571,15 @@ const NewScan = () => {
     setScanComplete(false);
     setScanResult(null);
     setScanError("");
+    setStreamingChunks([]);
     setCurrentPhase(0);
     setCurrentLine(0);
-    setLogs([]);
     setThinkingSteps(["Preparing source files", "Building semantic chunks", "Waiting for chunk analysis"]);
 
     // Resolve project id/name — create new project if needed
     let resolvedProjectId = selectedProjectId;
     let resolvedProjectName = selectedProjectName || projectName;
+    let createdProjectDuringScan = false;
 
     if (selectedProjectId === "__new__") {
       const trimmedName = newProjectName.trim();
@@ -301,6 +597,7 @@ const NewScan = () => {
         });
         resolvedProjectId = created.id;
         resolvedProjectName = created.name;
+        createdProjectDuringScan = true;
         await refetchProjects();
       } catch (err: any) {
         setScanError(err.message || "Failed to create project");
@@ -372,7 +669,11 @@ const NewScan = () => {
       // Use the first file for the code viewer animation
       const primaryFile = filesToScan[0];
       const code = primaryFile?.content ?? "// ZIP archive selected. Source files will be unpacked and scanned on the backend.";
-      const lines = code.split("\n");
+      const lines = splitSourceLines(code);
+      sourceLineCountsRef.current = filesToScan.reduce<Record<string, number>>((counts, file) => {
+        counts[file.name] = splitSourceLines(file.content).length;
+        return counts;
+      }, {});
 
       const initialLines: CodeLine[] = lines.map((content, index) => ({
         lineNumber: index + 1,
@@ -413,10 +714,14 @@ const NewScan = () => {
         let combinedResult: ScanResult | null = null;
 
         if (uploadedFiles.length > 0) {
-          combinedResult = await triggerUploadedFileScan(uploadedFiles, {
-            project_id: resolvedProjectId ?? "",
-            project_name: resolvedProjectName ?? "",
-          });
+          combinedResult = await triggerUploadedFileScanStream(
+            uploadedFiles,
+            {
+              project_id: resolvedProjectId ?? "",
+              project_name: resolvedProjectName ?? "",
+            },
+            handleScanStreamEvent
+          );
         } else {
           const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
           const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -435,7 +740,10 @@ const NewScan = () => {
                 project_name: resolvedProjectName ?? "",
               }),
             });
-            if (!response.ok) throw new Error(`Scan failed: ${response.status}`);
+            if (!response.ok) {
+              const json = await response.json().catch(() => ({}));
+              throw new Error(json.detail ?? `Scan failed: ${response.status}`);
+            }
             combinedResult = await response.json();
           }
         }
@@ -444,6 +752,7 @@ const NewScan = () => {
         clearInterval(timerInterval);
 
         if (!combinedResult) throw new Error("No scan results returned");
+        combinedResult = sanitizeScanResultChunkRanges(combinedResult);
 
         // Mark vulnerable lines on the code viewer (primary file only)
         setCodeLines(prev => prev.map((line) => {
@@ -480,6 +789,10 @@ const NewScan = () => {
       } catch (err: any) {
         clearInterval(lineAnimInterval);
         clearInterval(timerInterval);
+        if (createdProjectDuringScan && resolvedProjectId && err.message?.includes("syntax error")) {
+          await deleteProject(resolvedProjectId).catch(() => undefined);
+          await refetchProjects();
+        }
         setScanError(err.message || "Scan failed");
         addLog(`Error: ${err.message}`, "warning");
       }
@@ -504,6 +817,7 @@ const NewScan = () => {
 
       setCodeLines([]);
       setStats({ linesScanned: 0, totalLines: 0, vulnerabilitiesFound: 0, elapsedTime: 0 });
+      sourceLineCountsRef.current = {};
 
       try {
         addLog("Preparing source package...", "info");
@@ -552,6 +866,10 @@ const NewScan = () => {
 
       } catch (err: any) {
         clearInterval(timerInterval);
+        if (createdProjectDuringScan && resolvedProjectId && err.message?.includes("syntax error")) {
+          await deleteProject(resolvedProjectId).catch(() => undefined);
+          await refetchProjects();
+        }
         setScanError(err.message || "Scan failed");
         addLog(`Error: ${err.message}`, "warning");
       }
@@ -661,7 +979,6 @@ const NewScan = () => {
     setCurrentPhase(0);
     setCurrentLine(0);
     setCodeLines([]);
-    setLogs([]);
     setUploadedFiles([]);
     setFileContent("");
     setRepoUrl("");
@@ -674,6 +991,8 @@ const NewScan = () => {
     setBranchFiles([]);
     setScanError("");
     setThinkingSteps([]);
+    setStreamingChunks([]);
+    sourceLineCountsRef.current = {};
     setProjectFiles([]);
     setSelectedFileIds(new Set());
     setSaveToProject({});
@@ -984,15 +1303,6 @@ const NewScan = () => {
                 />
               </div>
               
-              {/* Terminal Logs */}
-              <div className="p-3 border-t border-border/50">
-                <ScanLogTerminal
-                  logs={logs}
-                  isExpanded={logsExpanded}
-                  onToggleExpand={() => setLogsExpanded(!logsExpanded)}
-                />
-              </div>
-
               {/* Sticky Action Buttons */}
               <div className="p-3 border-t border-border/50 bg-card/80 backdrop-blur-sm">
                 {scanComplete ? (
@@ -1009,14 +1319,14 @@ const NewScan = () => {
                     </Button>
                   </div>
                 ) : (
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    className="w-full" 
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
                     onClick={handleStopScan}
                   >
                     <StopCircle className="h-4 w-4 mr-2" />
-                    Stop Scan
+                    Stop
                   </Button>
                 )}
               </div>
@@ -1048,9 +1358,10 @@ const NewScan = () => {
                     </Card>
                   </div>
                 </div>
-              ) : scanComplete && scanResult ? (
+              ) : scanResult ? (
                 <div className="flex-1 overflow-y-auto p-4 lg:p-6">
-                  <div className="mx-auto max-w-6xl space-y-5">
+                  <div className="mx-auto grid max-w-7xl gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                    <div className="space-y-5">
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                       <Card className="p-4 bg-card/70 border-border/50">
                         <p className="text-xs text-muted-foreground">Risk</p>
@@ -1070,37 +1381,91 @@ const NewScan = () => {
                       </Card>
                     </div>
 
-                    {(scanResult.chunk_outputs?.length ?? 0) > 0 && (
+                    {((streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? []).length > 0) && (
                       <Card className="bg-card/70 border-border/50 overflow-hidden">
                         <div className="p-4 border-b border-border/50">
-                          <h2 className="text-lg font-semibold text-foreground">Chunk Output</h2>
+                          <h2 className="text-lg font-semibold text-foreground">Chunk Report</h2>
                           <p className="text-sm text-muted-foreground mt-1">
-                            The file was reviewed in semantic chunks, one chunk at a time.
+                            Expand a chunk to review its code, vulnerabilities, and corrected code.
                           </p>
                         </div>
-                        <div className="divide-y divide-border/40">
-                          {scanResult.chunk_outputs!.map((chunk) => (
-                            <section key={`${chunk.file_path}-${chunk.chunk_index}`} className="p-4">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="outline">Chunk {chunk.chunk_index}</Badge>
-                                <span className="font-medium text-foreground">{chunk.chunk_name}</span>
-                                <span className="text-xs text-muted-foreground">
-                                  lines {chunk.start_line}-{chunk.end_line}
-                                </span>
-                              </div>
-                              {chunk.summary && (
-                                <p className="text-sm text-muted-foreground mt-2">{chunk.summary}</p>
-                              )}
-                              <p className="text-sm text-foreground mt-2">
-                                {chunk.vulnerabilities.length} issue{chunk.vulnerabilities.length === 1 ? "" : "s"} found in this chunk.
-                              </p>
-                            </section>
+                        <Accordion type="multiple" className="divide-y divide-border/40">
+                          {(streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? []).map((chunk) => (
+                            <AccordionItem key={`${chunk.file_path}-${chunk.chunk_index}`} value={`${chunk.file_path}-${chunk.chunk_index}`} className="border-0 px-4">
+                              <AccordionTrigger className="hover:no-underline">
+                                <div className="flex flex-wrap items-center gap-2 text-left">
+                                  <Badge variant="outline">Chunk {chunk.chunk_index}</Badge>
+                                  <span className="font-medium text-foreground">
+                                    Lines {chunk.start_line} to {chunk.end_line}
+                                  </span>
+                                  <Badge variant={chunk.vulnerabilities.length > 0 ? "destructive" : "outline"}>
+                                    {chunk.vulnerabilities.length} issue{chunk.vulnerabilities.length === 1 ? "" : "s"}
+                                  </Badge>
+                                  {isScanning && chunk.corrected_code === "Pending..." && (
+                                    <Badge variant="outline" className="animate-pulse border-primary/40 text-primary">
+                                      streaming
+                                    </Badge>
+                                  )}
+                                </div>
+                              </AccordionTrigger>
+                              <AccordionContent>
+                                <div className="space-y-5 pb-4">
+                                  <div>
+                                    <p className="text-xs font-medium uppercase text-muted-foreground">Chunk code</p>
+                                    <pre className="mt-2 max-h-[420px] overflow-auto rounded-md border border-border/50 bg-[#0d1117] p-4 text-sm leading-relaxed text-foreground">
+                                      {chunk.code || "No chunk code returned."}
+                                    </pre>
+                                  </div>
+
+                                  <div className="space-y-3">
+                                    <p className="text-xs font-medium uppercase text-muted-foreground">Vulnerabilities</p>
+                                    {chunk.vulnerabilities.length === 0 ? (
+                                      <p className="rounded-md border border-border/50 bg-background/60 p-3 text-sm text-muted-foreground">
+                                        No vulnerabilities were reported in this chunk.
+                                      </p>
+                                    ) : (
+                                      chunk.vulnerabilities.map((vulnerability, index) => (
+                                        <div key={`${chunk.chunk_index}-${vulnerability.cwe_id}-${index}`} className="rounded-md border border-border/50 bg-background/70 p-4">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <Badge variant="outline" className={cn(
+                                              vulnerability.severity === "Critical" && "bg-red-500/15 text-red-300 border-red-500/30",
+                                              vulnerability.severity === "High" && "bg-orange-500/15 text-orange-300 border-orange-500/30",
+                                              vulnerability.severity === "Medium" && "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
+                                              vulnerability.severity === "Low" && "bg-blue-500/15 text-blue-300 border-blue-500/30"
+                                            )}>
+                                              {vulnerability.severity}
+                                            </Badge>
+                                            <span className="font-semibold text-foreground">{vulnerability.cwe_id}</span>
+                                            {vulnerability.line_number > 0 && (
+                                              <span className="text-xs text-muted-foreground">line {vulnerability.line_number}</span>
+                                            )}
+                                          </div>
+                                          <pre className="mt-3 overflow-x-auto rounded-md border border-border/50 bg-muted/30 p-3 text-xs">
+                                            {vulnerability.affected_code || "No exact vulnerable line returned."}
+                                          </pre>
+                                          <p className="mt-3 text-sm text-foreground">{vulnerability.description}</p>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <p className="text-xs font-medium uppercase text-muted-foreground">Corrected chunk code</p>
+                                    <pre className="mt-2 max-h-[420px] overflow-auto rounded-md border border-border/50 bg-[#0d1117] p-4 text-sm leading-relaxed text-foreground">
+                                      {chunk.corrected_code && chunk.corrected_code !== "None"
+                                        ? chunk.corrected_code
+                                        : "Waiting for corrected code..."}
+                                    </pre>
+                                  </div>
+                                </div>
+                              </AccordionContent>
+                            </AccordionItem>
                           ))}
-                        </div>
+                        </Accordion>
                       </Card>
                     )}
 
-                    <div className="grid grid-cols-1 gap-5">
+                    <div className="hidden grid-cols-1 gap-5">
                       <Card className="bg-card/70 border-border/50 overflow-hidden">
                         <div className="p-4 border-b border-border/50">
                           <h2 className="text-lg font-semibold text-foreground">Vulnerability Report</h2>
@@ -1197,7 +1562,7 @@ const NewScan = () => {
                       </Card>
                     </div>
 
-                    <Card className="bg-card/70 border-border/50 overflow-hidden">
+                    <Card className="hidden bg-card/70 border-border/50 overflow-hidden">
                       <div className="p-4 border-b border-border/50">
                         <h2 className="text-lg font-semibold text-foreground">Corrected Code</h2>
                         <p className="text-sm text-muted-foreground mt-1">Model-generated secure version.</p>
@@ -1224,6 +1589,19 @@ const NewScan = () => {
                         ))}
                       </div>
                     </Card>
+                    </div>
+                    <Card className="bg-card/70 border-border/60 overflow-hidden h-fit xl:sticky xl:top-4">
+                      <div className="p-4 border-b border-border/50">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="h-4 w-4 text-primary" />
+                          <h2 className="text-base font-semibold text-foreground">Thinking</h2>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Live node stream and model progress.</p>
+                      </div>
+                      <div className="max-h-[calc(100vh-12rem)] overflow-y-auto p-4">
+                        {renderThinkingStream("No thinking events were recorded.")}
+                      </div>
+                    </Card>
                   </div>
                 </div>
               ) : (
@@ -1236,22 +1614,14 @@ const NewScan = () => {
                     />
                     <Card className="bg-card/70 border-border/60 overflow-hidden h-full">
                       <div className="p-4 border-b border-border/50">
-                        <h2 className="text-base font-semibold text-foreground">Thinking</h2>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Processing semantic chunks one at a time.
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <Boxes className="h-4 w-4 text-primary" />
+                          <h2 className="text-base font-semibold text-foreground">Thinking</h2>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Processing semantic chunks one at a time.</p>
                       </div>
-                      <div className="p-4 space-y-3 overflow-y-auto max-h-full">
-                        {thinkingSteps.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">Waiting for analysis to start.</p>
-                        ) : (
-                          thinkingSteps.map((step, index) => (
-                            <div key={`${step}-${index}`} className="rounded-md border border-border/50 bg-background/60 p-3">
-                              <p className="text-xs text-muted-foreground">Step {index + 1}</p>
-                              <p className="text-sm text-foreground mt-1">{step}</p>
-                            </div>
-                          ))
-                        )}
+                      <div className="p-4 overflow-y-auto max-h-full">
+                        {renderThinkingStream("Waiting for analysis to start.")}
                       </div>
                     </Card>
                   </div>
