@@ -5,11 +5,25 @@ import { toast } from "sonner";
 
 const SUPPORTED_EXTENSIONS = [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".zip"];
 
-const LANGUAGE_BADGES = [
-  { ext: ".c", label: "C", color: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
+const ALL_LANGUAGE_BADGES = [
+  { ext: ".c",   label: "C",   color: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
   { ext: ".cpp", label: "C++", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
   { ext: ".zip", label: "ZIP", color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" },
 ];
+
+// Badges and support text per locked language
+const LANG_CONFIG: Record<"C" | "C++", { badges: typeof ALL_LANGUAGE_BADGES; supportText: string; accept: string }> = {
+  "C": {
+    badges:      [ALL_LANGUAGE_BADGES[0], ALL_LANGUAGE_BADGES[2]],
+    supportText: "Supports .c, .h files or a .zip archive",
+    accept:      ".c,.h,.zip",
+  },
+  "C++": {
+    badges:      [ALL_LANGUAGE_BADGES[1], ALL_LANGUAGE_BADGES[2]],
+    supportText: "Supports .cpp, .cxx, .cc, .hpp, .hxx, .h files or a .zip archive",
+    accept:      ".cpp,.cxx,.cc,.hpp,.hxx,.h,.zip",
+  },
+};
 
 const hasSuspiciousFileName = (filename: string): boolean => {
   const normalized = filename.replace(/\\/g, "/").trim();
@@ -37,6 +51,8 @@ interface FileUploadAreaProps {
   onDrop: (e: React.DragEvent) => void;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemoveFile: (index: number) => void;
+  /** When set, restricts displayed badges, support text, and file input accept to this language only */
+  lockedLanguage?: "C" | "C++" | null;
 }
 
 const validateFile = (file: File): boolean => {
@@ -64,7 +80,14 @@ export const FileUploadArea = ({
   onDrop,
   onFileSelect,
   onRemoveFile,
+  lockedLanguage,
 }: FileUploadAreaProps) => {
+  // Resolve display config based on locked language
+  const config = lockedLanguage ? LANG_CONFIG[lockedLanguage] : null;
+  const badges      = config?.badges      ?? ALL_LANGUAGE_BADGES;
+  const supportText = config?.supportText ?? "Supports .c, .h, .cpp, .cc, .cxx, .hpp, .hxx files or a .zip archive";
+  const acceptAttr  = config?.accept      ?? SUPPORTED_EXTENSIONS.join(",");
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files);
@@ -91,7 +114,7 @@ export const FileUploadArea = ({
       {/* Supported Languages */}
       <div className="flex items-center gap-2 justify-center flex-wrap">
         <span className="text-xs text-muted-foreground">Supported:</span>
-        {LANGUAGE_BADGES.map((lang) => (
+        {badges.map((lang) => (
           <span
             key={lang.ext}
             className={cn(
@@ -120,7 +143,7 @@ export const FileUploadArea = ({
       >
         <input
           type="file"
-          accept={SUPPORTED_EXTENSIONS.join(",")}
+          accept={acceptAttr}
           multiple
           onChange={handleFileSelect}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
@@ -152,7 +175,7 @@ export const FileUploadArea = ({
           </div>
           {uploadedFiles.length === 0 && (
             <p className="text-xs text-muted-foreground/70">
-              Supports .c, .h, .cpp, .cc, .cxx, .hpp, .hxx files or a .zip archive
+              {supportText}
             </p>
           )}
         </div>

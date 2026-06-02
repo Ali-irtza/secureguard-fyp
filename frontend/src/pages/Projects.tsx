@@ -335,6 +335,7 @@ const Projects = () => {
       const created = await Promise.race([createProject(payload), timeout]);
       setProjects((prev) => prev.map((p) => (p.id === optimisticId ? created : p)));
       toast({ title: "Project Created", description: `"${created.name}" has been created.` });
+      navigate(`/projects/${created.id}`);
     } catch (err) {
       setProjects(snapshot);
       toast({

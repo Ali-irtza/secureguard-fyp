@@ -31,13 +31,15 @@ class ProjectUpdateRequest(BaseModel):
     """
     PATCH /projects/{project_id}
     Partial update — all fields optional.
-    Covers: rename project, change language, update health score, change type/team.
+    Covers: rename project, change language, update health score, change type/team,
+    and disconnecting a GitHub repo (set github_repo to empty string "").
     """
     name:         Optional[str]                        = None
     language:     Optional[str]                        = None
     health_score: Optional[str]                        = None
     type:         Optional[Literal["personal", "team"]] = None
     team_id:      Optional[str]                        = None
+    github_repo:  Optional[str]                        = None  # "" to disconnect
 
     @field_validator("name")
     @classmethod
@@ -64,15 +66,17 @@ class ProjectResponse(BaseModel):
     """
     A single project object returned to the frontend.
     """
-    id:           str
-    name:         str
-    language:     Optional[str]  = None
-    health_score: Optional[str]  = None
-    type:         str
-    owner_id:     str
-    team_id:      Optional[str]  = None
-    created_at:   datetime
-    updated_at:   datetime
+    id:               str
+    name:             str
+    language:         Optional[str]       = None
+    health_score:     Optional[str]       = None
+    type:             str
+    owner_id:         str
+    team_id:          Optional[str]       = None
+    github_repo:      Optional[str]       = None
+    github_branches:  List[str]           = []
+    created_at:       datetime
+    updated_at:       datetime
 
 
 class ProjectListResponse(BaseModel):

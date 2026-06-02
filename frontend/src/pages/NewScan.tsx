@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import {
   triggerScan,
   getBranchFiles,
@@ -11,7 +12,13 @@ import {
   ScanStreamEvent,
   ChunkOutput,
 } from "@/lib/scans-api";
-import { listProjects, createProject, deleteProject } from "@/lib/projects-api";
+import {
+  listProjects,
+  createProject,
+  deleteProject,
+  fetchProjectBranchFiles,
+  triggerProjectScan,
+} from "@/lib/projects-api";
 import { getTeam, listTeams } from "@/lib/teams-api";
 import type { Team as ApiTeam } from "@/lib/teams-api";
 import {
@@ -323,6 +330,25 @@ const NewScan = () => {
   const isViewer = userTeamRole === "viewer";
   const canScanInTeam = userTeamRole === "admin" || userTeamRole === "developer";
   const isTeamMode = scanMode === "team";
+
+  // Current authenticated user — needed to resolve assigned branches
+  const { user: currentUser } = useCurrentUser();
+
+  // Branches visible to the current user for the selected team:
+  // - admin  → all branches
+  // - developer → only their assigned branches
+  // - viewer → no branches (scan blocked anyway)
+  const visibleTeamBranches: string[] = (() => {
+    if (!selectedApiTeam?.github_branches?.length) return [];
+    if (userTeamRole === "admin") return selectedApiTeam.github_branches;
+    if (userTeamRole === "developer" && currentUser?.id) {
+      const myMember = selectedApiTeam.members.find((m) => m.user_id === currentUser.id);
+      const assigned = myMember?.branches ?? [];
+      // Only show branches that exist in the synced branch list
+      return assigned.filter((b) => selectedApiTeam.github_branches.includes(b));
+    }
+    return [];
+  })();
   
   // Scanning state
   const [currentPhase, setCurrentPhase] = useState(0);
@@ -375,21 +401,31 @@ const NewScan = () => {
           return null;
         })();
 
-  // Accepted extensions for the file input — locked once first file is uploaded
+  // ── Effective language for upload gating ─────────────────────────────────
+  // If a real project is selected and it has a stored language, that is the
+  // authoritative constraint — regardless of what has been uploaded so far.
+  // This prevents uploading .cpp files into a C project and vice-versa.
+  // Falls back to detectedProjectLanguage when no project is selected.
+  const effectiveLanguage: "C" | "C++" | null =
+    selectedProject?.language === "C"   ? "C"   :
+    selectedProject?.language === "C++" ? "C++" :
+    detectedProjectLanguage;
+
+  // Accepted extensions for the file input — driven by effectiveLanguage
   const acceptedExtensions =
-    detectedProjectLanguage === "C"
+    effectiveLanguage === "C"
       ? ".c,.h"
-      : detectedProjectLanguage === "C++"
+      : effectiveLanguage === "C++"
       ? ".cpp,.cxx,.cc,.hpp,.hxx,.h"
       : ".c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.h,.zip";
 
-  /** Returns true if a file is compatible with the already-detected language */
+  /** Returns true if a file is compatible with the effective project language */
   const isCompatibleFile = (file: File): boolean => {
-    if (!detectedProjectLanguage) return true; // no constraint yet
+    if (!effectiveLanguage) return true; // no constraint yet
     const ext = "." + (file.name.split(".").pop()?.toLowerCase() ?? "");
     if (ext === ".zip") return true;
-    if (detectedProjectLanguage === "C") return [".c", ".h"].includes(ext);
-    if (detectedProjectLanguage === "C++")
+    if (effectiveLanguage === "C") return [".c", ".h"].includes(ext);
+    if (effectiveLanguage === "C++")
       return [".cpp", ".cxx", ".cc", ".hpp", ".hxx", ".h"].includes(ext);
     return true;
   };
@@ -405,7 +441,7 @@ const NewScan = () => {
   };
 
   // Scan language string for CodeViewer / mock code ("c" | "cpp")
-  const scanLang = detectedProjectLanguage === "C++" ? "cpp" : "c";
+  const scanLang = effectiveLanguage === "C++" ? "cpp" : "c";
 
   const addLog = useCallback((message: string, type: ThinkingEventType = "info") => {
     const now = new Date();
@@ -886,7 +922,87 @@ const NewScan = () => {
       return;
     }
 
-    // ── GITHUB MODE ──────────────────────────────────────────────────────────
+    // ── GITHUB MODE — personal project with directly-connected repo ─────────
+    if (activeTab === "github" && !isTeamMode && selectedProject?.github_repo) {
+      const startTime = Date.now();
+      const timerInterval = setInterval(() => {
+        setStats(prev => ({ ...prev, elapsedTime: Math.floor((Date.now() - startTime) / 1000) }));
+      }, 1000);
+
+      setCodeLines([]);
+      setStats({ linesScanned: 0, totalLines: 0, vulnerabilitiesFound: 0, elapsedTime: 0 });
+      sourceLineCountsRef.current = {};
+
+      try {
+        addLog("Preparing source package...", "info");
+        setCurrentPhase(1);
+
+        addLog(`Fetching files from branch: ${branch}...`, "info");
+        const filesResponse = await fetchProjectBranchFiles(resolvedProjectId, branch);
+        // Filter to C/C++ files only (mirrors team scan behaviour)
+        const C_CPP_EXTS = [".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"];
+        const files = filesResponse.files
+          .filter((f) => f.type === "file" && C_CPP_EXTS.some((ext) => f.path.toLowerCase().endsWith(ext)))
+          .map((f) => f.path);
+        setBranchFiles(files);
+        addLog(`Found ${files.length} C/C++ file${files.length === 1 ? "" : "s"}`, "success");
+
+        setCurrentPhase(2);
+        addLog("Reviewing files for vulnerabilities...", "info");
+        addLog("This may take a moment depending on file count...", "info");
+
+        const result = await triggerProjectScan(
+          resolvedProjectId,
+          branch,
+          files,
+          {
+            project_id: resolvedProjectId ?? "",
+            project_name: resolvedProjectName ?? "",
+          }
+        );
+
+        clearInterval(timerInterval);
+
+        setStats({
+          linesScanned: result.total_chunks_scanned,
+          totalLines: result.total_chunks_scanned,
+          vulnerabilitiesFound: result.total_vulnerabilities,
+          elapsedTime: Math.floor((Date.now() - startTime) / 1000),
+        });
+
+        setScanResult(result);
+        setThinkingSteps([
+          ...(result.chunk_outputs ?? []).map(
+            (chunk) =>
+              `Chunk ${chunk.chunk_index}: ${chunk.chunk_name} lines ${chunk.start_line}-${chunk.end_line} reviewed with ${chunk.vulnerabilities.length} issue${chunk.vulnerabilities.length === 1 ? "" : "s"}.`
+          ),
+          "Report assembled",
+        ]);
+        setCurrentPhase(3);
+        setCurrentPhase(4);
+        addLog("Assembling report...", "info");
+        await new Promise(r => setTimeout(r, 500));
+        setCurrentPhase(5);
+        addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
+        addLog("Scan complete!", "success");
+
+      } catch (err: any) {
+        clearInterval(timerInterval);
+        if (createdProjectDuringScan && resolvedProjectId && err.message?.includes("syntax error")) {
+          await deleteProject(resolvedProjectId).catch(() => undefined);
+          await refetchProjects();
+        }
+        const message = friendlyScanError(err.message || "Scan failed");
+        setScanError(message);
+        addLog(`Error: ${message}`, "warning");
+      }
+
+      setIsScanning(false);
+      setScanComplete(true);
+      return;
+    }
+
+    // ── GITHUB MODE — team project ───────────────────────────────────────────
     // Team mode uses the selected team directly; personal mode uses the
     // project's team if it has one.
     const effectiveTeamId = isTeamMode
@@ -990,7 +1106,7 @@ const NewScan = () => {
       }
       if (!isCompatibleFile(f)) {
         toast.error(`Wrong file type: ${f.name}`, {
-          description: `This project uses ${detectedProjectLanguage}. Only ${acceptedExtensions} files are allowed.`,
+          description: `This project uses ${effectiveLanguage ?? detectedProjectLanguage}. Only ${acceptedExtensions} files are allowed.`,
         });
         return false;
       }
@@ -1022,7 +1138,7 @@ const NewScan = () => {
       }
       if (!isCompatibleFile(f)) {
         toast.error(`Wrong file type: ${f.name}`, {
-          description: `This project uses ${detectedProjectLanguage}. Only ${acceptedExtensions} files are allowed.`,
+          description: `This project uses ${effectiveLanguage ?? detectedProjectLanguage}. Only ${acceptedExtensions} files are allowed.`,
         });
         return false;
       }
@@ -1088,12 +1204,12 @@ const NewScan = () => {
   };
 
   // For GitHub tab: valid when there's a team with a connected repo + branch selected,
-  // or a manual repo URL is entered (personal mode with personal project).
+  // or a personal project with a directly-connected github_repo + branch selected.
   const githubReady = isTeamMode
     ? !!(selectedApiTeam?.github_repo && branch)
     : selectedProject?.team_id
       ? !!(projectTeam?.github_repo && branch)
-      : !!repoUrl;
+      : !!(selectedProject?.github_repo && branch);
 
   // Resolve the effective project name for validation
   const effectiveProjectName = selectedProjectId === "__new__"
@@ -1110,7 +1226,11 @@ const NewScan = () => {
     !isViewer &&
     (isTeamMode
       ? !!(selectedTeamId && canScanInTeam) && (activeTab === "upload" ? uploadedFiles.length > 0 : githubReady)
-      : effectiveProjectName !== "" && (activeTab === "upload" ? hasFilesToScan : githubReady)
+      : activeTab === "github"
+        // GitHub tab (personal): need a real project with a connected repo + branch
+        ? !!(selectedProjectId && selectedProjectId !== "__new__" && githubReady)
+        // Upload tab (personal): need a name + files
+        : effectiveProjectName !== "" && hasFilesToScan
     );
 
   // Determine GitHub tab behavior based on selected project / team mode
@@ -1229,6 +1349,68 @@ const NewScan = () => {
             ) : (
               <p className="text-xs text-muted-foreground">
                 No branches found. Try syncing the repository from team settings.
+              </p>
+            )}
+          </div>
+        </CardContent>
+      );
+    }
+
+    // ── Personal project with directly-connected GitHub repo ────────────────
+    if (!isTeamMode && selectedProject && !selectedProject.team_id) {
+      // Project has no GitHub repo connected
+      if (!selectedProject.github_repo) {
+        return (
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center gap-4 py-8">
+              <Github className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground text-center">
+                No GitHub repository connected to{" "}
+                <span className="font-medium">{selectedProject.name}</span>.
+              </p>
+              <p className="text-xs text-muted-foreground text-center">
+                Connect a repository from the project settings page, then come back to scan.
+              </p>
+            </div>
+          </CardContent>
+        );
+      }
+
+      // Project has a connected repo — show read-only repo + branch selector
+      return (
+        <CardContent className="pt-6 space-y-6">
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Repository</Label>
+            <div className="relative">
+              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={selectedProject.github_repo}
+                readOnly
+                className="pl-10 pr-10 opacity-75 bg-muted/30"
+              />
+              <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Connected repository for{" "}
+              <span className="font-medium">{selectedProject.name}</span>
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="branch" className="text-sm font-medium">Branch</Label>
+            {selectedProject.github_branches.length > 0 ? (
+              <Select value={branch} onValueChange={setBranch}>
+                <SelectTrigger id="branch">
+                  <SelectValue placeholder="Select a branch" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedProject.github_branches.map((b) => (
+                    <SelectItem key={b} value={b}>{b}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No branches found. Try refreshing the repository from project settings.
               </p>
             )}
           </div>
@@ -1756,7 +1938,6 @@ const NewScan = () => {
                 className="h-8 px-4 text-xs font-medium"
                 onClick={() => {
                   setScanMode("personal");
-                  if (activeTab === "github") setActiveTab("upload");
                 }}
               >
                 Personal Scan
@@ -1948,21 +2129,19 @@ const NewScan = () => {
 
         {/* Source Selection Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          {scanMode === "team" && (
-            <TabsList className="grid w-full grid-cols-2 h-12">
-              <TabsTrigger value="upload" className="gap-2 text-sm font-medium">
-                <Upload className="h-4 w-4" />
-                Upload File
-              </TabsTrigger>
-              <TabsTrigger value="github" className="gap-2 text-sm font-medium">
-                <Github className="h-4 w-4" />
-                Import from GitHub
-              </TabsTrigger>
-            </TabsList>
-          )}
+          <TabsList className="grid w-full grid-cols-2 h-12">
+            <TabsTrigger value="upload" className="gap-2 text-sm font-medium">
+              <Upload className="h-4 w-4" />
+              Upload File
+            </TabsTrigger>
+            <TabsTrigger value="github" className="gap-2 text-sm font-medium">
+              <Github className="h-4 w-4" />
+              Import from GitHub
+            </TabsTrigger>
+          </TabsList>
 
           {/* Upload Tab */}
-          <TabsContent value="upload" className={cn(scanMode === "team" ? "mt-6" : "mt-0")}>
+          <TabsContent value="upload" className="mt-6">
             {/* ── Existing Project Files (real project selected) ── */}
             {selectedProjectId &&
               selectedProjectId !== "__new__" && (
@@ -2092,7 +2271,7 @@ const NewScan = () => {
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
               <CardContent className="pt-6">
                 {/* Language lock notice */}
-                {detectedProjectLanguage && (
+                {effectiveLanguage && (
                   <div className="flex items-center gap-2 mb-4 px-1">
                     <span className="text-xs text-muted-foreground">
                       Language locked to
@@ -2100,12 +2279,12 @@ const NewScan = () => {
                     <span
                       className={cn(
                         "text-[10px] px-1.5 py-0.5 rounded-full border font-medium",
-                        detectedProjectLanguage === "C"
+                        effectiveLanguage === "C"
                           ? "bg-purple-500/20 text-purple-400 border-purple-500/30"
                           : "bg-pink-500/20 text-pink-400 border-pink-500/30"
                       )}
                     >
-                      {detectedProjectLanguage}
+                      {effectiveLanguage}
                     </span>
                     <span className="text-xs text-muted-foreground">
                       — only {acceptedExtensions} files accepted
@@ -2120,6 +2299,7 @@ const NewScan = () => {
                   onDrop={handleDrop}
                   onFileSelect={handleFileSelect}
                   onRemoveFile={handleRemoveFile}
+                  lockedLanguage={effectiveLanguage}
                 />
 
                 {/* "Save to project" toggles — show whenever a project is selected or being created */}

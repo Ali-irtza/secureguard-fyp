@@ -5,14 +5,15 @@ import {
   AlertTriangle, FolderOpen, Plus, X, CheckCircle2, Loader2,
   Shield, ShieldCheck, ShieldAlert, ShieldX, Clock, RefreshCw,
   Github, GitBranch, ChevronDown, ChevronRight, Eye, Maximize2, User,
+  ExternalLink,
 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -29,7 +30,15 @@ import {
   getAcceptString, isFileAllowed,
   type ProjectFile, type FileSource,
 } from "@/lib/project-files-api";
-import { type Project } from "@/lib/projects-api";
+import {
+  type Project,
+  updateProject,
+  getProjectGithubAuthorizeUrl,
+  listProjectGithubRepos,
+  selectProjectGithubRepo,
+  syncProjectGithubBranches,
+  fetchProjectBranchFiles,
+} from "@/lib/projects-api";
 import {
   apiFetch, listTeams, fetchBranchFiles,
   type Team, type TeamRole, type BranchFileItem,
@@ -114,6 +123,236 @@ interface TeamCtx {
   allBranches:      string[];
   members:          Array<{ user_id: string; full_name: string | null; email: string | null }>;
 }
+
+// ---------------------------------------------------------------------------
+// ProjectGithubCard
+// ---------------------------------------------------------------------------
+// GitHub Repository settings card for PERSONAL projects (type === "personal").
+// Uses the same GitHub App OAuth flow as Team.tsx — no manual PAT entry.
+// Flow: Connect with GitHub → redirect → callback → repo picker → connected.
+// Refresh Branches: uses stored installation token, no PAT needed.
+// ---------------------------------------------------------------------------
+
+interface ProjectGithubCardProps {
+  project: Project;
+  onProjectUpdated: (updated: Project) => void;
+}
+
+const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps) => {
+  const { toast } = useToast();
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [actionLoading, setActionLoading] = useState(false);
+  const [refreshing,    setRefreshing]    = useState(false);
+  const [repoPicker,    setRepoPicker]    = useState(false);
+  const [githubRepos,   setGithubRepos]   = useState<{ full_name: string; private: boolean; url: string }[]>([]);
+  const [reposLoading,  setReposLoading]  = useState(false);
+
+  // ── OAuth: start GitHub App install flow ──────────────────────────────────
+  const handleGithubOAuth = async () => {
+    setActionLoading(true);
+    try {
+      const url = await getProjectGithubAuthorizeUrl(project.id);
+      window.location.href = url;
+    } catch (err: any) {
+      toast({ title: "GitHub error", description: err.message ?? "Failed to start GitHub authorization", variant: "destructive" });
+      setActionLoading(false);
+    }
+  };
+
+  // ── OAuth: load repos after callback ──────────────────────────────────────
+  const handleOAuthCallback = useCallback(async () => {
+    if (!project?.id) return;
+    setReposLoading(true);
+    try {
+      const repos = await listProjectGithubRepos(project.id);
+      if (repos.length === 1) {
+        setActionLoading(true);
+        try {
+          const updated = await selectProjectGithubRepo(project.id, repos[0].full_name, repos[0].url);
+          onProjectUpdated(updated);
+          toast({ title: "Repository connected", description: `${repos[0].full_name} — ${updated.github_branches.length} branches synced` });
+        } catch (err: any) {
+          toast({ title: "Connect failed", description: err.message ?? "Failed to connect repository", variant: "destructive" });
+        } finally {
+          setActionLoading(false);
+        }
+      } else {
+        setGithubRepos(repos);
+        setRepoPicker(true);
+      }
+    } catch (err: any) {
+      toast({ title: "GitHub error", description: err.message ?? "Failed to load repositories", variant: "destructive" });
+    } finally {
+      setReposLoading(false);
+    }
+  }, [project?.id, onProjectUpdated, toast]);
+
+  // ── OAuth: detect ?github_connected=true on this page ────────────────────
+  useEffect(() => {
+    if (!project) return;
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("github_connected");
+    const error     = params.get("github_error");
+    if (error) {
+      toast({ title: "GitHub connection failed", description: error.replace(/_/g, " "), variant: "destructive" });
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    if (connected === "true") {
+      window.history.replaceState({}, "", window.location.pathname);
+      handleOAuthCallback();
+    }
+  }, [project, handleOAuthCallback, toast]);
+
+  const handleSelectRepo = async (repoFullName: string, repoUrl: string) => {
+    setActionLoading(true);
+    try {
+      const updated = await selectProjectGithubRepo(project.id, repoFullName, repoUrl);
+      onProjectUpdated(updated);
+      toast({ title: "Repository connected", description: `${repoFullName} — ${updated.github_branches.length} branches synced` });
+      setRepoPicker(false);
+      setGithubRepos([]);
+    } catch (err: any) {
+      toast({ title: "Connect failed", description: err.message ?? "Failed to connect repository", variant: "destructive" });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRefreshBranches = async () => {
+    setRefreshing(true);
+    try {
+      const updated = await syncProjectGithubBranches(project.id);
+      onProjectUpdated(updated);
+      toast({ title: "Branches refreshed", description: `${updated.github_branches.length} branches synced from GitHub` });
+    } catch (err: any) {
+      toast({ title: "Refresh failed", description: err.message ?? "Failed to sync branches", variant: "destructive" });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setActionLoading(true);
+    try {
+      const updated = await updateProject(project.id, { github_repo: "" });
+      onProjectUpdated({ ...updated, github_repo: null, github_branches: [] });
+      toast({ title: "Repository disconnected" });
+    } catch (err: any) {
+      toast({ title: "Disconnect failed", description: err.message ?? "Unknown error", variant: "destructive" });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+        <CardHeader><CardTitle>GitHub Repository</CardTitle></CardHeader>
+        <CardContent>
+          {project.github_repo ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 flex-wrap">
+                <Github className="h-5 w-5 text-foreground" />
+                <a href={project.github_repo} target="_blank" rel="noopener noreferrer"
+                  className="text-primary hover:underline text-sm flex items-center gap-1">
+                  {project.github_repo.replace("https://github.com/", "")}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+                <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-sm text-muted-foreground">{project.github_branches.length} branches synced</span>
+                <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-2">
+                  {project.github_branches.map((b) => (
+                    <Badge key={b} variant="secondary" className="text-[10px] font-normal bg-muted/50 hover:bg-muted/80">{b}</Badge>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing || actionLoading}>
+                  {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  Refresh Branches
+                </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" size="sm" disabled={actionLoading || refreshing}
+                      className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10">
+                      Disconnect
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Disconnect Repository</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will remove the GitHub connection from <span className="font-medium">{project.name}</span>.
+                        Branch-based scanning will no longer be available until you reconnect.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={handleDisconnect} className="bg-destructive hover:bg-destructive/90">Disconnect</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </div>
+          ) : (
+            <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-4">
+              <Github className="h-10 w-10 text-muted-foreground" />
+              <div className="text-center space-y-1">
+                <p className="font-medium">No repository connected</p>
+                <p className="text-sm text-muted-foreground">Connect a GitHub repository to enable branch-based scanning for this project</p>
+              </div>
+              <Button onClick={handleGithubOAuth} disabled={actionLoading} className="bg-primary hover:bg-primary/90 gap-2">
+                {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                Connect with GitHub
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Repo Picker — shown after OAuth callback when multiple repos are available */}
+      <Dialog open={repoPicker} onOpenChange={(open) => { if (!open) { setRepoPicker(false); setGithubRepos([]); } }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Select a Repository</DialogTitle>
+            <DialogDescription>Choose which repository to connect to <span className="font-medium">{project.name}</span></DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            {reposLoading ? (
+              <div className="flex items-center justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+            ) : githubRepos.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No repositories found.</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
+                {githubRepos.map((repo) => (
+                  <button key={repo.full_name} onClick={() => handleSelectRepo(repo.full_name, repo.url)}
+                    disabled={actionLoading}
+                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-muted/50 transition-colors text-left group">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Github className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium truncate">{repo.full_name}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                      {repo.private && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Private</Badge>}
+                      <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Connect →</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setRepoPicker(false); setGithubRepos([]); }}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // GitHubImportPanel
@@ -326,6 +565,198 @@ const GitHubImportPanel = ({ projectId, language, ctx, onImported }: GitHubImpor
 };
 
 // ---------------------------------------------------------------------------
+// PersonalGitHubImportPanel
+// ---------------------------------------------------------------------------
+// File browser for PERSONAL projects with a connected GitHub repo.
+// Uses the stored installation token (no PAT) — mirrors GitHubImportPanel
+// for team projects exactly, but without role/branch restrictions.
+// ---------------------------------------------------------------------------
+
+interface PersonalGitHubImportPanelProps {
+  projectId:  string;
+  language:   string | null;
+  githubRepo: string;
+  branches:   string[];
+  onImported: (file: ProjectFile) => void;
+}
+
+const PersonalGitHubImportPanel = ({
+  projectId, language, githubRepo, branches, onImported,
+}: PersonalGitHubImportPanelProps) => {
+  const { toast } = useToast();
+
+  const [branch,      setBranch]      = useState<string>(branches[0] ?? "");
+  const [tree,        setTree]        = useState<BranchFileItem[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
+  const [treeError,   setTreeError]   = useState<string | null>(null);
+  const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
+  const [importing,   setImporting]   = useState<Set<string>>(new Set());
+
+  const loadTree = useCallback(async (b: string) => {
+    if (!b) return;
+    setLoadingTree(true);
+    setTreeError(null);
+    setTree([]);
+    setExpanded(new Set());
+    try {
+      const res = await fetchProjectBranchFiles(projectId, b);
+      setTree(res.files);
+    } catch (err) {
+      setTreeError(err instanceof Error ? err.message : "Failed to load files");
+    } finally {
+      setLoadingTree(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { if (branch) loadTree(branch); }, [branch, loadTree]);
+
+  const toggleDir = (path: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(path) ? next.delete(path) : next.add(path);
+      return next;
+    });
+
+  const handleImport = async (filePath: string) => {
+    if (!isFileAllowed(filePath, language)) {
+      toast({
+        title: "File type not allowed",
+        description: `Only ${getAcceptString(language)} files are accepted for ${language} projects.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    setImporting((prev) => new Set(prev).add(filePath));
+    try {
+      const result = await importGithubFile(projectId, { branch, file_path: filePath });
+      onImported(result);
+      toast({ title: "File imported", description: `"${result.name}" imported from ${branch}.` });
+    } catch (err) {
+      toast({
+        title: "Import failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setImporting((prev) => { const n = new Set(prev); n.delete(filePath); return n; });
+    }
+  };
+
+  const renderTree = (items: BranchFileItem[], prefix = "") => {
+    const children = items.filter(
+      (i) => i.path.startsWith(prefix) &&
+             i.path.slice(prefix.length).split("/").filter(Boolean).length === 1
+    );
+    return children.map((item) => {
+      const isDir   = item.type === "directory";
+      const isOpen  = expanded.has(item.path);
+      const name    = item.path.split("/").pop() ?? item.path;
+      const allowed = !isDir && isFileAllowed(item.path, language);
+      return (
+        <div key={item.path}>
+          <div
+            className={`flex items-center gap-2 px-2 py-1 rounded text-sm transition-colors
+              ${isDir ? "cursor-pointer hover:bg-muted/20" : allowed ? "hover:bg-muted/20" : "opacity-40"}`}
+            onClick={() => isDir && toggleDir(item.path)}
+          >
+            {isDir
+              ? (isOpen
+                  ? <ChevronDown  className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                  : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />)
+              : <FileIcon filename={name} />
+            }
+            <span className={`flex-1 truncate ${isDir ? "text-muted-foreground" : "text-foreground"}`}>
+              {name}
+            </span>
+            {!isDir && allowed && (
+              <Button
+                size="sm" variant="ghost"
+                className="h-6 px-2 text-xs text-violet-400 hover:text-violet-300 hover:bg-violet-500/10 flex-shrink-0"
+                disabled={importing.has(item.path)}
+                onClick={(e) => { e.stopPropagation(); handleImport(item.path); }}
+              >
+                {importing.has(item.path) ? <Loader2 className="w-3 h-3 animate-spin" /> : "Import"}
+              </Button>
+            )}
+          </div>
+          {isDir && isOpen && (
+            <div className="ml-4 border-l border-border/30 pl-2">
+              {renderTree(items, item.path + "/")}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
+
+  return (
+    <Card className="bg-card/50 border-border/50">
+      {/* Header */}
+      <div className="p-4 border-b border-border/30 rounded-t-xl flex items-center gap-3">
+        <Github className="w-5 h-5 text-violet-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground">Import from GitHub</p>
+          <p className="text-xs text-muted-foreground truncate">{githubRepo}</p>
+        </div>
+      </div>
+
+      <div className="p-4 space-y-3">
+        {branches.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No branches found. Try refreshing the repository from the GitHub Repository card above.
+          </p>
+        ) : (
+          <>
+            {/* Branch selector + refresh */}
+            <div className="flex items-center gap-2">
+              <GitBranch className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+              <Select value={branch} onValueChange={setBranch}>
+                <SelectTrigger className="flex-1 bg-card/50 border-border/50 h-8 text-sm">
+                  <SelectValue placeholder="Select branch" />
+                </SelectTrigger>
+                <SelectContent>
+                  {branches.map((b) => (
+                    <SelectItem key={b} value={b}>{b}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-8 w-8 border-border/50 flex-shrink-0"
+                    onClick={() => loadTree(branch)} disabled={loadingTree}>
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingTree ? "animate-spin" : ""}`} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Refresh file tree</TooltipContent>
+              </Tooltip>
+            </div>
+
+            {/* File tree */}
+            {loadingTree && (
+              <div className="space-y-1.5 pt-1">
+                {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-6 w-full" />)}
+              </div>
+            )}
+            {treeError && <p className="text-xs text-destructive px-1">{treeError}</p>}
+            {!loadingTree && !treeError && tree.length === 0 && branch && (
+              <p className="text-xs text-muted-foreground text-center py-3">No files found on this branch</p>
+            )}
+            {!loadingTree && tree.length > 0 && (
+              <div className="max-h-72 overflow-y-auto rounded-lg bg-card/30 border border-border/30 p-2">
+                <p className="text-xs text-muted-foreground px-2 pb-2">
+                  Only {getAcceptString(language)} files can be imported
+                </p>
+                {renderTree(tree)}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // ProjectDetail — main page component
 // ---------------------------------------------------------------------------
 
@@ -415,6 +846,11 @@ const ProjectDetail = () => {
   }, [projectId]);
 
   useEffect(() => { loadFiles(); }, [loadFiles]);
+
+  // ── GitHub update callback ───────────────────────────────────────────
+  const handleProjectUpdated = useCallback((updated: Project) => {
+    setProject(updated);
+  }, []);
 
   // ── File validation & enqueue ────────────────────────────────────────
   const validateAndEnqueue = (rawFiles: FileList | File[]) => {
@@ -645,6 +1081,25 @@ const ProjectDetail = () => {
             </Button>
           </div>
         </Card>
+
+        {/* GitHub repository card — personal projects only */}
+        {project.type === "personal" && (
+          <ProjectGithubCard
+            project={project}
+            onProjectUpdated={handleProjectUpdated}
+          />
+        )}
+
+        {/* GitHub file browser — personal projects with a connected repo */}
+        {project.type === "personal" && project.github_repo && (
+          <PersonalGitHubImportPanel
+            projectId={projectId!}
+            language={project.language}
+            githubRepo={project.github_repo}
+            branches={project.github_branches}
+            onImported={handleImported}
+          />
+        )}
 
         {/* GitHub import panel — team projects with connected repo, admin/developer only */}
         {showGithub && teamCtx && (

@@ -613,12 +613,12 @@ const Team = () => {
               <Skeleton className="h-10 w-[300px] rounded-md" />
               <Skeleton className="h-10 w-36 rounded-md" />
             </>
-          ) : teams.length > 1 ? (
+          ) : teams.length >= 1 ? (
             <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
               <SelectTrigger className="w-[300px] h-10 bg-card/50 border-border/50">
                 <SelectValue placeholder="Select a team" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-h-[260px] overflow-y-auto">
                 {teams.map(team => (
                   <SelectItem key={team.id} value={team.id}>
                     <span className="flex items-center gap-2">
