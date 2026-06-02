@@ -64,6 +64,15 @@ class ProjectFileListResponse(BaseModel):
     files: List[ProjectFileResponse]
 
 
+class ProjectSourceFile(BaseModel):
+    name: str
+    content: str
+
+
+class ProjectSourceFilesResponse(BaseModel):
+    files: List[ProjectSourceFile]
+
+
 class ProjectFileDeleteResponse(BaseModel):
     """Response for DELETE /projects/{id}/files/{filename}"""
     deleted: str  # filename that was removed

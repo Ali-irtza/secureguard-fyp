@@ -18,7 +18,6 @@ React + TypeScript frontend for SecureGuard Pro, an AI-powered security code sca
 | Auth & DB | Supabase JS v2 |
 | Charts | Recharts |
 | Toasts | Sonner |
-| Testing | Vitest + Testing Library + fast-check |
 
 ## Project Structure
 
@@ -77,8 +76,6 @@ frontend/
 │   │   └── NotFound.tsx         # 404
 │   ├── types/
 │   │   └── realtime.ts          # Supabase realtime event types
-│   └── test/
-│       └── setup.ts             # Vitest + Testing Library setup
 ├── public/
 │   ├── favicon.ico
 │   └── robots.txt
@@ -86,7 +83,6 @@ frontend/
 ├── components.json              # shadcn/ui configuration
 ├── tailwind.config.ts
 ├── vite.config.ts
-└── vitest.config.ts
 ```
 
 ## Getting Started
@@ -116,12 +112,6 @@ App runs at `http://localhost:5173` by default.
 
 ```bash
 npm run build
-```
-
-### 5. Run tests
-
-```bash
-npm test
 ```
 
 ## Environment Variables

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { CalendarIcon, FileText } from "lucide-react";
 import { format as formatDate } from "date-fns";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,53 +9,63 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
+import { listProjects, Project } from "@/lib/projects-api";
+import { generateReport } from "@/lib/scans-api";
 
 interface GenerateReportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   scanTypeFilter: "all" | "personal" | "team";
   selectedTeamId: string;
+  onGenerated?: () => void;
 }
 
-const personalProjects = [
-  { id: "p1", name: "Project Alpha" },
-  { id: "p2", name: "Project Beta" },
-  { id: "p3", name: "API Gateway" },
-  { id: "p4", name: "Mobile App" },
-];
-
-const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeamId }: GenerateReportDialogProps) => {
-  const [reportType, setReportType] = useState("");
+const GenerateReportDialog = ({ open, onOpenChange, onGenerated }: GenerateReportDialogProps) => {
+  const [reportType, setReportType] = useState("full");
   const [selectedProject, setSelectedProject] = useState("");
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
     from: undefined,
     to: undefined,
   });
   const [format, setFormat] = useState("pdf");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
-  const userTeams = mockTeams.filter((t) => t.members.some((m) => m.id === CURRENT_USER_ID));
-  const hasTeams = userTeams.length > 0;
-  const selectedTeam = userTeams.find((t) => t.id === selectedTeamId);
-  const isAdmin = selectedTeam?.currentUserRole === "admin";
-  const isTeamMode = scanTypeFilter === "team" && hasTeams;
-
-  const projects = useMemo(() => {
-    if (isTeamMode && selectedTeam) {
-      const uniqueProjects = [...new Set(selectedTeam.scans.map((s) => s.projectName))];
-      return uniqueProjects.map((name, i) => ({ id: `tp-${i}`, name }));
-    }
-    return personalProjects;
-  }, [isTeamMode, selectedTeam]);
+  useEffect(() => {
+    if (!open) return;
+    setLoadingProjects(true);
+    listProjects()
+      .then((items) => setProjects(items))
+      .catch((error) => toast.error(error.message || "Failed to load projects"))
+      .finally(() => setLoadingProjects(false));
+  }, [open]);
 
   const canGenerate = reportType !== "" && selectedProject !== "";
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!canGenerate) return;
-    toast.success("Report generation started. You'll be notified when it's ready.");
-    setReportType("");
-    setSelectedProject("");
-    onOpenChange(false);
+    setGenerating(true);
+    try {
+      await generateReport({
+        report_type: "full",
+        project_id: selectedProject,
+        format: format as "pdf" | "csv" | "both",
+        start_date: dateRange.from?.toISOString(),
+        end_date: dateRange.to?.toISOString(),
+      });
+      toast.success("Report generated");
+      setReportType("full");
+      setSelectedProject("");
+      setDateRange({ from: undefined, to: undefined });
+      setFormat("pdf");
+      onGenerated?.();
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to generate report");
+    } finally {
+      setGenerating(false);
+    }
   };
 
   return (
@@ -87,14 +97,6 @@ const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeam
                       <p className="text-xs text-muted-foreground">Complete vulnerability details for selected project</p>
                     </div>
                   </SelectItem>
-                  {hasTeams && isAdmin && (
-                    <SelectItem value="team-summary">
-                      <div>
-                        <span>Team Summary Report</span>
-                        <p className="text-xs text-muted-foreground">High level overview of all team members' scan results</p>
-                      </div>
-                    </SelectItem>
-                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -104,14 +106,20 @@ const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeam
               <Label>Select Project</Label>
               <Select value={selectedProject} onValueChange={setSelectedProject}>
                 <SelectTrigger className="bg-background/50">
-                  <SelectValue placeholder="Select project" />
+                  <SelectValue placeholder={loadingProjects ? "Loading projects..." : "Select project"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      {project.name}
+                  {projects.length === 0 ? (
+                    <SelectItem value="no-projects" disabled>
+                      No projects found
                     </SelectItem>
-                  ))}
+                  ) : (
+                    projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.name}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -175,8 +183,8 @@ const GenerateReportDialog = ({ open, onOpenChange, scanTypeFilter, selectedTeam
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleGenerate} disabled={!canGenerate} className="gap-2">
-            Generate Report
+          <Button onClick={handleGenerate} disabled={!canGenerate || generating} className="gap-2">
+            {generating ? "Generating..." : "Generate Report"}
           </Button>
         </DialogFooter>
       </DialogContent>

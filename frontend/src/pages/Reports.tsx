@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
-import { FileText, Calendar, Download, Trash2, Share2, Plus, FileBarChart, CheckCircle2, Users, Crown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { FileText, Calendar, Download, Trash2, Plus, FileBarChart, CheckCircle2, Users, Loader2, RefreshCw } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,67 +9,102 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import GenerateReportDialog from "@/components/dashboard/GenerateReportDialog";
 import { toast } from "sonner";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
+import { deleteReport, downloadReport, listReports, ReportItem } from "@/lib/scans-api";
 
-interface Report {
-  id: number;
-  name: string;
-  type: string;
-  date: string;
-  status: string;
-  format: string;
-  scanType: "personal" | "team";
-  teamId?: string;
-  teamName?: string;
-}
+const formatDate = (value?: string | null) => {
+  if (!value) return "Unknown";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(value));
+};
 
-const recentReports: Report[] = [
-  { id: 1, name: "Weekly Security Summary", type: "Executive Summary", date: "Dec 9, 2024", status: "completed", format: "PDF", scanType: "team", teamId: "team-1", teamName: "SecureGuard Team" },
-  { id: 2, name: "Project Alpha Audit", type: "Full Audit", date: "Dec 8, 2024", status: "completed", format: "PDF", scanType: "personal" },
-  { id: 3, name: "Dependencies Analysis", type: "Vulnerability Trends", date: "Dec 7, 2024", status: "completed", format: "CSV", scanType: "team", teamId: "team-2", teamName: "Ali's Project" },
-  { id: 4, name: "Monthly Compliance", type: "Compliance Report", date: "Dec 1, 2024", status: "completed", format: "PDF", scanType: "personal" },
-];
+const isThisMonth = (value?: string | null) => {
+  if (!value) return false;
+  const date = new Date(value);
+  const now = new Date();
+  return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+};
 
 const Reports = () => {
+  const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [reportTypeFilter, setReportTypeFilter] = useState<"all" | "personal" | "team">("all");
+  const [reports, setReports] = useState<ReportItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyReportId, setBusyReportId] = useState<string | null>(null);
 
-  const userTeams = mockTeams.filter((t) =>
-    t.members.some((m) => m.id === CURRENT_USER_ID)
-  );
-  const hasTeams = userTeams.length > 0;
+  const loadReports = async () => {
+    setLoading(true);
+    try {
+      setReports(await listReports());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load reports");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const defaultTeamId = userTeams.find((t) => t.currentUserRole === "admin")?.id || userTeams[0]?.id || "";
-  const [selectedTeamId, setSelectedTeamId] = useState(defaultTeamId);
-  const selectedTeam = userTeams.find((t) => t.id === selectedTeamId);
+  useEffect(() => {
+    loadReports();
+  }, []);
 
   const filteredReports = useMemo(() => {
-    if (reportTypeFilter === "personal") return recentReports.filter((r) => r.scanType === "personal");
-    if (reportTypeFilter === "team") return recentReports.filter((r) => r.scanType === "team" && r.teamId === selectedTeamId);
-    return recentReports;
-  }, [reportTypeFilter, selectedTeamId]);
-
-  const teamReportCount = recentReports.filter((r) => r.scanType === "team").length;
-  const isTeamFilter = reportTypeFilter === "team";
+    if (reportTypeFilter === "team") return [];
+    return reports;
+  }, [reports, reportTypeFilter]);
 
   const stats = useMemo(() => {
-    const source = filteredReports;
     return [
-      { label: "Total Reports", value: String(source.length), icon: FileText },
-      { label: "This Month", value: String(source.filter((r) => r.date.includes("Dec")).length), icon: Calendar },
-      { label: "Team Reports", value: String(isTeamFilter ? source.length : teamReportCount), icon: Users },
-      { label: "Storage Used", value: `${source.length * 3} MB`, icon: FileBarChart },
+      { label: "Total Reports", value: String(filteredReports.length), icon: FileText },
+      { label: "This Month", value: String(filteredReports.filter((r) => isThisMonth(r.created_at)).length), icon: Calendar },
+      { label: "Team Reports", value: "0", icon: Users },
+      { label: "Stored Files", value: String(filteredReports.filter((r) => r.file_path).length), icon: FileBarChart },
     ];
-  }, [filteredReports, isTeamFilter, teamReportCount]);
+  }, [filteredReports]);
 
-  const handleDownload = (name: string) => toast.success(`Downloading ${name}...`);
-  const handleDelete = (name: string) => toast.success(`Report "${name}" deleted`);
-  const handleShare = (name: string) => toast.success(`Share link copied for ${name}`);
+  const handleDownload = async (report: ReportItem) => {
+    setBusyReportId(report.id);
+    try {
+      await downloadReport(report);
+      toast.success(`${report.format.toUpperCase()} download started`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Download failed");
+    } finally {
+      setBusyReportId(null);
+    }
+  };
+
+  const handleDelete = async (report: ReportItem) => {
+    const confirmed = window.confirm(
+      `Delete "${report.name}"? This also removes its linked scan from Scan History and Dashboard.`
+    );
+    if (!confirmed) return;
+    setBusyReportId(report.id);
+    try {
+      await deleteReport(report.id);
+      setReports((current) =>
+        current.filter((item) =>
+          report.scan_id ? item.scan_id !== report.scan_id : item.id !== report.id
+        )
+      );
+      toast.success("Report and linked scan removed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Delete failed");
+    } finally {
+      setBusyReportId(null);
+    }
+  };
+
+  const handleRescan = (report: ReportItem) => {
+    const projectId = report.scans?.project_id;
+    if (!projectId) {
+      toast.error("This report is not linked to a project.");
+      return;
+    }
+    navigate(`/new-scan?projectId=${encodeURIComponent(projectId)}&autoStart=1`);
+  };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground">Reports</h1>
@@ -80,7 +116,6 @@ const Reports = () => {
           </Button>
         </div>
 
-        {/* Summary Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {stats.map((stat) => (
             <Card key={stat.label} className="bg-card/50 backdrop-blur-sm border-border/50">
@@ -91,16 +126,12 @@ const Reports = () => {
                 <div>
                   <p className="text-2xl font-bold text-foreground">{stat.value}</p>
                   <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  {isTeamFilter && (
-                    <p className="text-[10px] text-muted-foreground">Team</p>
-                  )}
                 </div>
               </CardContent>
             </Card>
           ))}
         </div>
 
-        {/* Filter Row */}
         <div className="flex items-center gap-3 flex-wrap">
           <Select value={reportTypeFilter} onValueChange={(v) => setReportTypeFilter(v as "all" | "personal" | "team")}>
             <SelectTrigger className="w-[160px] bg-card/50 border-border/50">
@@ -109,61 +140,40 @@ const Reports = () => {
             <SelectContent>
               <SelectItem value="all">All Reports</SelectItem>
               <SelectItem value="personal">Personal</SelectItem>
-              {hasTeams && <SelectItem value="team">Team</SelectItem>}
+              <SelectItem value="team">Team Reports</SelectItem>
             </SelectContent>
           </Select>
-
-          {reportTypeFilter === "team" && hasTeams && (
-            <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
-              <SelectTrigger className="w-[220px] bg-card/50 border-border/50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {userTeams.map((team) => (
-                  <SelectItem key={team.id} value={team.id}>
-                    <div className="flex items-center gap-2">
-                      {team.currentUserRole === "admin" && <Crown className="h-3 w-3 text-yellow-500" />}
-                      <span>{team.name}</span>
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 ml-1">
-                        {team.currentUserRole}
-                      </Badge>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
         </div>
 
-        {/* Recent Reports Table */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
             <CardTitle>Recent Reports</CardTitle>
-            <CardDescription>All your generated security reports</CardDescription>
+            <CardDescription>Reports generated from your saved scan history</CardDescription>
           </CardHeader>
           <CardContent>
-            {filteredReports.length === 0 ? (
-              reportTypeFilter === "all" ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                  <h3 className="text-lg font-semibold text-foreground mb-1">No Reports Yet</h3>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Generate your first report or complete a scan to get started
-                  </p>
+            {loading ? (
+              <div className="flex items-center justify-center py-12 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                Loading reports...
+              </div>
+            ) : filteredReports.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                <h3 className="text-lg font-semibold text-foreground mb-1">
+                  {reportTypeFilter === "team" ? "No Team Reports" : "No Reports Yet"}
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {reportTypeFilter === "team"
+                    ? "Team report generation is disabled until teams are configured."
+                    : "Complete a scan or generate a report from an existing project."}
+                </p>
+                {reportTypeFilter !== "team" && (
                   <Button onClick={() => setDialogOpen(true)} className="gap-2">
                     <Plus className="h-4 w-4" />
                     Generate Report
                   </Button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center py-12">
-                  <p className="text-sm text-muted-foreground">
-                    {reportTypeFilter === "personal"
-                      ? "No personal reports yet."
-                      : "No team reports found for this team yet."}
-                  </p>
-                </div>
-              )
+                )}
+              </div>
             ) : (
               <Table>
                 <TableHeader>
@@ -173,53 +183,77 @@ const Reports = () => {
                     <TableHead>Date</TableHead>
                     <TableHead>Format</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead className="text-center">Download</TableHead>
+                    <TableHead className="text-center">Rescan</TableHead>
+                    <TableHead className="text-center">Delete</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredReports.map((report) => (
-                    <TableRow key={report.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{report.name}</span>
-                          {report.scanType === "team" && (
-                            <Badge className="bg-primary/15 text-primary border-0 text-[10px] px-1.5 py-0">
-                              Team
-                            </Badge>
-                          )}
-                        </div>
-                        {report.scanType === "team" && report.teamName && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{report.teamName}</p>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{report.type}</TableCell>
-                      <TableCell className="text-muted-foreground">{report.date}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-mono text-xs">
-                          {report.format}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2 text-primary">
-                          <CheckCircle2 className="h-4 w-4" />
-                          <span className="text-sm capitalize">{report.status}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => handleDownload(report.name)} className="h-8 w-8">
-                            <Download className="h-4 w-4" />
+                  {filteredReports.map((report) => {
+                    const scan = report.scans;
+                    const busy = busyReportId === report.id;
+                    return (
+                      <TableRow key={report.id}>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <span className="font-medium">{report.name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {scan?.project_name || "Project"} · {scan?.total_vulns ?? 0} issue{(scan?.total_vulns ?? 0) === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">Full Scan Report</TableCell>
+                        <TableCell className="text-muted-foreground">{formatDate(report.created_at)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="font-mono text-xs">
+                            {report.format.toUpperCase()}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 text-primary">
+                            <CheckCircle2 className="h-4 w-4" />
+                            <span className="text-sm capitalize">{report.status}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDownload(report)}
+                            disabled={busy || !report.file_path}
+                            className="h-8 w-8"
+                            title="Download report"
+                          >
+                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleShare(report.name)} className="h-8 w-8">
-                            <Share2 className="h-4 w-4" />
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleRescan(report)}
+                            disabled={busy || !report.scans?.project_id}
+                            className="h-8 w-8"
+                            title="Rescan project"
+                          >
+                            <RefreshCw className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleDelete(report.name)} className="h-8 w-8 text-destructive hover:text-destructive">
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(report)}
+                            disabled={busy}
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            title="Delete report and linked scan"
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -231,7 +265,8 @@ const Reports = () => {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         scanTypeFilter={reportTypeFilter}
-        selectedTeamId={selectedTeamId}
+        selectedTeamId=""
+        onGenerated={loadReports}
       />
     </DashboardLayout>
   );

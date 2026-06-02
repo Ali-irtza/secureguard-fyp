@@ -1,8 +1,7 @@
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { getScanHistory, ScanHistoryItem } from "@/lib/scans-api";
+import { getScanDetail, getScanHistory, ScanDetailResult, ScanHistoryItem, StoredVulnerability } from "@/lib/scans-api";
 import { useQuery } from "@tanstack/react-query";
-import { History, Search, RefreshCw, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info } from "lucide-react";
+import { History, Search, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info, X } from "lucide-react";
 import { format } from "date-fns";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -70,6 +69,7 @@ interface ScanRecord {
   branch?: string;
   scanType: string;
   fileName: string;
+  projectId: string | null;
   riskLevel: string;
   riskScore: number;
   filesScanned: number;
@@ -80,20 +80,21 @@ type SortDirection = "asc" | "desc";
 const ITEMS_PER_PAGE = 10;
 
 const ScanHistory = () => {
-  const navigate = useNavigate();
-
   const { data: rawScans = [], isLoading, isError } = useQuery({
     queryKey: ["scan-history"],
     queryFn: getScanHistory,
   });
 
-  const scans: ScanRecord[] = rawScans.map((s) => ({
+  const scans: ScanRecord[] = rawScans
+  .filter((s) => Boolean(s.project_name || s.file_name || s.branch))
+  .map((s) => ({
     id: s.id,
-    projectName: s.project_name ?? "Unknown Project",
+    projectId: s.project_id,
+    projectName: s.project_name || s.file_name || "Project",
     scanType: s.scan_type ?? "upload",
     fileName: s.file_name ?? s.branch ?? "—",
     branch: s.branch ?? "—",
-    status: s.status,
+    status: s.status === "completed" ? "completed" : "failed",
     riskLevel: s.risk_level ?? "unknown",
     riskScore: s.risk_score ?? 0,
     vulnerabilities: s.total_vulns ?? 0,
@@ -111,6 +112,10 @@ const ScanHistory = () => {
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
   const [failureDialogOpen, setFailureDialogOpen] = useState(false);
   const [selectedFailedScan, setSelectedFailedScan] = useState<ScanRecord | null>(null);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [selectedHistoryScan, setSelectedHistoryScan] = useState<ScanRecord | null>(null);
+  const [selectedHistoryDetail, setSelectedHistoryDetail] = useState<ScanDetailResult | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const formatDuration = (seconds: number): string => {
     if (seconds === 0) return "—";
@@ -158,20 +163,40 @@ const ScanHistory = () => {
       : <ArrowDown className="h-3.5 w-3.5 ml-1" />;
   };
 
-  const handleRerunScan = (e: React.MouseEvent, scan: ScanRecord) => {
-    e.stopPropagation();
-    toast.success(`Re-running scan for ${scan.projectName}`);
+  const scannedFileNames = (scan?: ScanRecord | null): string[] => {
+    if (!scan?.fileName) return [];
+    const placeholderFileName = scan.fileName.trim();
+    if (placeholderFileName.length <= 3 && !placeholderFileName.includes(".")) return [];
+    return placeholderFileName
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
   };
 
-  const handleViewReport = (e: React.MouseEvent, scan: ScanRecord) => {
+  const openHistory = async (scan: ScanRecord) => {
+    if (scan.status !== "completed") return;
+    setSelectedHistoryScan(scan);
+    setSelectedHistoryDetail(null);
+    setHistoryDialogOpen(true);
+    setHistoryLoading(true);
+    try {
+      const detail = await getScanDetail(scan.id);
+      setSelectedHistoryDetail(detail);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not load scan history details.";
+      toast.error(message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleViewHistory = (e: React.MouseEvent, scan: ScanRecord) => {
     e.stopPropagation();
-    navigate(`/reports/${scan.id}`);
+    void openHistory(scan);
   };
 
   const handleRowClick = (scan: ScanRecord) => {
-    if (scan.status === "completed") {
-      navigate(`/reports/${scan.id}`);
-    }
+    void openHistory(scan);
   };
 
   const handleViewFailureDetails = (e: React.MouseEvent, scan: ScanRecord) => {
@@ -353,14 +378,33 @@ const ScanHistory = () => {
             Failed
           </Badge>
         );
-      case "in_progress":
+      default:
         return (
-          <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20">
-            <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
-            In Progress
+          <Badge className="bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20">
+            Failed
           </Badge>
         );
     }
+  };
+
+  const SeverityBadge = ({ severity }: { severity: string }) => {
+    const normalized = severity.toLowerCase();
+    const classes =
+      normalized === "critical"
+        ? "bg-red-500/15 text-red-300 border-red-500/35"
+        : normalized === "high"
+          ? "bg-orange-500/15 text-orange-300 border-orange-500/35"
+          : normalized === "medium"
+            ? "bg-amber-500/15 text-amber-200 border-amber-500/35"
+            : "bg-emerald-500/15 text-emerald-300 border-emerald-500/35";
+    return <Badge className={cn("capitalize", classes)}>{severity || "unknown"}</Badge>;
+  };
+
+  const vulnerabilityTitle = (vulnerability: StoredVulnerability): string => {
+    const primary = vulnerability.cwe_id || vulnerability.type || "Finding";
+    const secondary = vulnerability.cwe_name;
+    if (!secondary || secondary === primary) return primary;
+    return `${primary} - ${secondary}`;
   };
 
   const isTeamView = false;
@@ -475,7 +519,6 @@ const ScanHistory = () => {
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="completed">Completed</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -537,6 +580,7 @@ const ScanHistory = () => {
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-lg">All Scans</CardTitle>
+              <CardDescription>Reports are saved for 5 days only.</CardDescription>
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -695,29 +739,19 @@ const ScanHistory = () => {
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {scan.status === "completed" && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => handleViewReport(e, scan)}
-                                className="text-muted-foreground hover:text-foreground"
-                              >
-                                <FileText className="h-4 w-4 mr-1.5" />
-                                View Report
-                              </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => handleViewHistory(e, scan)}
+                            disabled={scan.status !== "completed"}
+                            className={cn(
+                              "text-muted-foreground hover:text-foreground",
+                              scan.status !== "completed" && "cursor-not-allowed opacity-45 hover:text-muted-foreground"
                             )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => handleRerunScan(e, scan)}
-                              disabled={scan.status === "in_progress"}
-                              className="text-muted-foreground hover:text-foreground"
-                            >
-                              <RefreshCw className="h-4 w-4 mr-1.5" />
-                              Re-run
-                            </Button>
-                          </div>
+                          >
+                            <FileText className="h-4 w-4 mr-1.5" />
+                            History
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))
@@ -772,6 +806,128 @@ const ScanHistory = () => {
           </CardContent>
         </Card>
 
+        <Dialog open={historyDialogOpen} onOpenChange={setHistoryDialogOpen}>
+          <DialogContent
+            showCloseButton={false}
+            className="max-w-5xl max-h-[86vh] overflow-hidden border-primary/25 bg-background/95 p-0 shadow-2xl shadow-black/50 backdrop-blur-xl"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-border/60 bg-muted/20 px-6 py-5">
+              <div className="space-y-2">
+                <DialogTitle className="flex items-center gap-3 text-2xl">
+                  <History className="h-6 w-6 text-primary" />
+                  History
+                </DialogTitle>
+                <DialogDescription>
+                  {selectedHistoryScan?.projectName} - {selectedHistoryScan && formatDate(selectedHistoryScan.date)}
+                </DialogDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-full text-muted-foreground hover:text-foreground"
+                onClick={() => setHistoryDialogOpen(false)}
+                aria-label="Close history"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div className="max-h-[calc(86vh-88px)] overflow-y-auto px-6 py-5">
+              {historyLoading ? (
+                <div className="flex min-h-[280px] items-center justify-center text-muted-foreground">
+                  Loading history...
+                </div>
+              ) : selectedHistoryScan ? (
+                <div className="space-y-5">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-border/60 bg-card/70 p-4">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">Project</p>
+                      <p className="mt-2 text-lg font-semibold text-foreground">{selectedHistoryScan.projectName}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-card/70 p-4">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">Files</p>
+                      <p className="mt-2 text-lg font-semibold text-foreground">{selectedHistoryScan.filesScanned}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/60 bg-card/70 p-4">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">Vulnerabilities</p>
+                      <p className="mt-2 text-lg font-semibold text-foreground">{selectedHistoryScan.vulnerabilities}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border/60 bg-card/60">
+                    <div className="border-b border-border/60 px-4 py-3">
+                      <h3 className="font-semibold">Files Scanned</h3>
+                    </div>
+                    <div className="flex flex-wrap gap-2 p-4">
+                      {scannedFileNames(selectedHistoryScan).length > 0 ? (
+                        scannedFileNames(selectedHistoryScan).map((fileName) => (
+                          <Badge
+                            key={fileName}
+                            variant="outline"
+                            className="max-w-full truncate border-border/70 bg-background/60 px-3 py-1.5 text-sm"
+                            title={fileName}
+                          >
+                            {fileName}
+                          </Badge>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No file names were recorded for this scan.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border/60 bg-card/60">
+                    <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+                      <h3 className="font-semibold">Vulnerabilities</h3>
+                      <Badge variant="outline" className="border-border/70">
+                        {selectedHistoryDetail?.vulnerabilities.length ?? selectedHistoryScan.vulnerabilities} total
+                      </Badge>
+                    </div>
+                    <div className="divide-y divide-border/60">
+                      {selectedHistoryDetail?.vulnerabilities?.length ? (
+                        selectedHistoryDetail.vulnerabilities.map((vulnerability, index) => (
+                          <div key={vulnerability.id ?? `${vulnerabilityTitle(vulnerability)}-${index}`} className="space-y-3 p-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-muted-foreground">Issue {index + 1}</span>
+                              <SeverityBadge severity={vulnerability.severity} />
+                              <span className="font-semibold text-foreground">{vulnerabilityTitle(vulnerability)}</span>
+                              {vulnerability.line_number ? (
+                                <span className="text-sm text-muted-foreground">line {vulnerability.line_number}</span>
+                              ) : null}
+                            </div>
+                            <div className="grid gap-3 lg:grid-cols-[260px_1fr]">
+                              <div>
+                                <p className="text-xs font-semibold uppercase text-muted-foreground">File</p>
+                                <p className="mt-1 break-words text-sm text-foreground">{vulnerability.file_path || "Unknown file"}</p>
+                              </div>
+                              <div className="space-y-3">
+                                <div>
+                                  <p className="text-xs font-semibold uppercase text-muted-foreground">What is vulnerable here</p>
+                                  <p className="mt-1 text-sm text-foreground">{vulnerability.description}</p>
+                                </div>
+                                {vulnerability.fix_suggestion ? (
+                                  <div>
+                                    <p className="text-xs font-semibold uppercase text-muted-foreground">Recommended fix</p>
+                                    <p className="mt-1 text-sm text-foreground">{vulnerability.fix_suggestion}</p>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-6 text-sm text-muted-foreground">
+                          No vulnerability details were returned for this scan.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </DialogContent>
+        </Dialog>
+
         {/* Failure Details Dialog */}
         <Dialog open={failureDialogOpen} onOpenChange={setFailureDialogOpen}>
           <DialogContent className="sm:max-w-md">
@@ -791,25 +947,12 @@ const ScanHistory = () => {
                   {selectedFailedScan?.errorMessage}
                 </p>
               </div>
-              <div className="flex gap-2 pt-2">
+              <div className="flex justify-end pt-2">
                 <Button
                   variant="outline"
-                  className="flex-1"
                   onClick={() => setFailureDialogOpen(false)}
                 >
                   Close
-                </Button>
-                <Button
-                  className="flex-1 gap-2"
-                  onClick={(e) => {
-                    if (selectedFailedScan) {
-                      handleRerunScan(e, selectedFailedScan);
-                      setFailureDialogOpen(false);
-                    }
-                  }}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  Retry Scan
                 </Button>
               </div>
             </div>

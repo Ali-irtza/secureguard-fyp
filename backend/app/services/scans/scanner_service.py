@@ -9,10 +9,20 @@ from typing import List, Dict
 
 from app.services.teams.github_service import _get_installation_token, _parse_github_owner_repo
 from app.services.teams.team_service import require_member
-from app.services.scans.ai_scanner import scan_file
+from app.services.model_scanner.graph_runner import SyntaxValidationError, iter_analysis_events, run_analysis
 
 GITHUB_API = "https://api.github.com"
 C_CPP_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx')
+
+
+def _safe_chunk_count(result: dict, source_code: str) -> int:
+    chunks_created = result.get("chunks_created")
+    if isinstance(chunks_created, int) and chunks_created > 0:
+        return chunks_created
+    chunk_outputs = result.get("chunk_outputs") or []
+    if chunk_outputs:
+        return len(chunk_outputs)
+    return max(1, source_code.count("\n") + 1)
 
 async def _get_token_for_team(team_id: str, supabase: Client) -> str:
     """Helper to get a fresh installation token for a team."""
@@ -163,10 +173,7 @@ async def fetch_selected_code_hybrid(team_id: str, branch_name: str, selected_fi
 
 async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
     """
-    AI-powered vulnerability scanner using FreeLLMAPI.
-    Scans each C/C++ file for the 26 target CWEs.
-    Drop-in replacement for dummy_vulnerability_scanner.
-    When the real ML model is ready, replace scan_file() with the new model call.
+    Runs the trained model scanner for every C/C++ file and aggregates results.
     """
     all_vulnerabilities = []
     files_scanned = []
@@ -177,32 +184,43 @@ async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
             continue
 
         try:
-            result = await scan_file(source_code)
+            result = run_analysis(file_path, source_code)
 
             # Tag each vulnerability with which file it came from
             for vuln in result["vulnerabilities"]:
                 vuln["file_path"] = file_path
 
             all_vulnerabilities.extend(result["vulnerabilities"])
-            total_chunks += result["chunks_scanned"]
+            chunks_scanned = _safe_chunk_count(result, source_code)
+            total_chunks += chunks_scanned
             files_scanned.append({
                 "file_path": file_path,
-                "chunks_scanned": result["chunks_scanned"],
+                "chunks_scanned": chunks_scanned,
                 "vulnerabilities_found": len(result["vulnerabilities"]),
-                "risk_level": result["risk_level"],
+                "risk_level": "Vulnerable" if result["vulnerabilities"] else "Safe",
+                "language": result.get("language", ""),
+                "static_findings": result.get("static_findings", ""),
             })
 
+        except SyntaxValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=f"Model scan failed for {file_path}: Request timeout exceeded. Please try again.",
+            ) from exc
         except Exception as exc:
             print(f"[scanner_service] Failed to scan {file_path}: {exc}")
-            files_scanned.append({
-                "file_path": file_path,
-                "chunks_scanned": 0,
-                "vulnerabilities_found": 0,
-                "risk_level": "Unknown",
-            })
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Model scan failed for {file_path}. Please try again.",
+            ) from exc
 
     # Calculate overall risk score across all files
-    severity_points = {"Critical": 10, "High": 7, "Medium": 4}
+    severity_points = {"Critical": 10, "High": 7, "Medium": 4, "Low": 1}
     total_score = sum(
         severity_points.get(v.get("severity", ""), 0)
         for v in all_vulnerabilities
@@ -226,6 +244,141 @@ async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
         "overall_risk_score": total_score,
         "files_analyzed": len(files_scanned),
         "total_chunks_scanned": total_chunks,
-        "files_summary": files_scanned,
+        "files_summary": [
+            {
+                "file_path": item["file_path"],
+                "chunks_scanned": item["chunks_scanned"],
+                "vulnerabilities_found": item["vulnerabilities_found"],
+                "risk_level": item["risk_level"],
+            }
+            for item in files_scanned
+        ],
         "vulnerabilities": all_vulnerabilities,
+        "corrected_code": "None",
+        "files": [
+            {
+                "filename": item["file_path"],
+                "language": item.get("language", ""),
+                "corrected_code": "None",
+                "static_findings": item.get("static_findings", ""),
+                "corrected_code_is_clean": False,
+                "chunk_outputs": item.get("chunk_outputs", []),
+            }
+            for item in files_scanned
+        ],
+        "chunk_outputs": [
+            {**chunk, "file_path": item["file_path"]}
+            for item in files_scanned
+            for chunk in item.get("chunk_outputs", [])
+        ],
     }
+
+
+def build_scan_response_from_file_results(file_results: list[tuple[str, dict]]) -> dict:
+    all_vulnerabilities = []
+    files_scanned = []
+    total_chunks = 0
+
+    for file_path, result in file_results:
+        for vuln in result["vulnerabilities"]:
+            vuln["file_path"] = file_path
+        all_vulnerabilities.extend(result["vulnerabilities"])
+        chunk_outputs = result.get("chunk_outputs", [])
+        chunks_scanned = len(chunk_outputs) or int(result.get("chunks_created") or 0)
+        total_chunks += chunks_scanned
+        files_scanned.append({
+            "file_path": file_path,
+            "chunks_scanned": chunks_scanned,
+            "vulnerabilities_found": len(result["vulnerabilities"]),
+            "risk_level": "Vulnerable" if result["vulnerabilities"] else "Safe",
+            "language": result.get("language", ""),
+            "static_findings": result.get("static_findings", ""),
+            "chunk_outputs": chunk_outputs,
+        })
+
+    severity_points = {"Critical": 10, "High": 7, "Medium": 4, "Low": 1}
+    total_score = sum(severity_points.get(v.get("severity", ""), 0) for v in all_vulnerabilities)
+    if total_score == 0:
+        overall_risk = "Safe"
+    elif total_score < 10:
+        overall_risk = "Low Risk"
+    elif total_score < 30:
+        overall_risk = "Medium Risk"
+    elif total_score < 60:
+        overall_risk = "High Risk"
+    else:
+        overall_risk = "Critical Risk"
+
+    return {
+        "status": "success",
+        "total_vulnerabilities": len(all_vulnerabilities),
+        "overall_risk_level": overall_risk,
+        "overall_risk_score": total_score,
+        "files_analyzed": len(files_scanned),
+        "total_chunks_scanned": total_chunks,
+        "files_summary": [
+            {
+                "file_path": item["file_path"],
+                "chunks_scanned": item["chunks_scanned"],
+                "vulnerabilities_found": item["vulnerabilities_found"],
+                "risk_level": item["risk_level"],
+            }
+            for item in files_scanned
+        ],
+        "vulnerabilities": all_vulnerabilities,
+        "corrected_code": "None",
+        "files": [
+            {
+                "filename": item["file_path"],
+                "language": item.get("language", ""),
+                "corrected_code": "None",
+                "static_findings": item.get("static_findings", ""),
+                "corrected_code_is_clean": False,
+                "chunk_outputs": item.get("chunk_outputs", []),
+            }
+            for item in files_scanned
+        ],
+        "chunk_outputs": [
+            {**chunk, "file_path": item["file_path"]}
+            for item in files_scanned
+            for chunk in item.get("chunk_outputs", [])
+        ],
+    }
+
+
+def iter_vulnerability_scanner_events(files_dict: Dict[str, str]):
+    file_results: list[tuple[str, dict]] = []
+    total_files = sum(1 for source_code in files_dict.values() if source_code.strip())
+    yield {"event": "scan_started", "total_files": total_files}
+
+    for file_path, source_code in files_dict.items():
+        if not source_code.strip():
+            continue
+        try:
+            file_result = None
+            for event in iter_analysis_events(file_path, source_code):
+                if event.get("event") == "file_result":
+                    file_result = event["result"]
+                yield event
+            if file_result is None:
+                raise RuntimeError("Model scan did not return a file result.")
+            file_results.append((file_path, file_result))
+        except SyntaxValidationError as exc:
+            yield {"event": "error", "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY, "message": str(exc)}
+            return
+        except TimeoutError:
+            yield {
+                "event": "error",
+                "status_code": status.HTTP_504_GATEWAY_TIMEOUT,
+                "message": f"Model scan failed for {file_path}: Request timeout exceeded. Please try again.",
+            }
+            return
+        except Exception:
+            yield {
+                "event": "error",
+                "status_code": status.HTTP_502_BAD_GATEWAY,
+                "message": f"Model scan failed for {file_path}. Please try again.",
+            }
+            return
+
+    yield {"event": "scan_result", "result": build_scan_response_from_file_results(file_results)}

@@ -3,13 +3,31 @@ import { Upload, FileCode, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-const SUPPORTED_EXTENSIONS = [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".zip"];
+const SUPPORTED_EXTENSIONS = [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".zip"];
 
 const LANGUAGE_BADGES = [
   { ext: ".c", label: "C", color: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
   { ext: ".cpp", label: "C++", color: "bg-pink-500/20 text-pink-400 border-pink-500/30" },
   { ext: ".zip", label: "ZIP", color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" },
 ];
+
+const hasSuspiciousFileName = (filename: string): boolean => {
+  const normalized = filename.replace(/\\/g, "/").trim();
+  const parts = normalized.split("/");
+  return (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    normalized.endsWith("/..") ||
+    normalized.startsWith("./") ||
+    normalized.includes("/./") ||
+    normalized.endsWith("/.") ||
+    parts.some((part) => part === "") ||
+    /^[a-zA-Z]:/.test(normalized) ||
+    /[\x00-\x1f]/.test(normalized)
+  );
+};
 
 interface FileUploadAreaProps {
   uploadedFiles: File[];
@@ -22,10 +40,16 @@ interface FileUploadAreaProps {
 }
 
 const validateFile = (file: File): boolean => {
+  if (hasSuspiciousFileName(file.name)) {
+    toast.error(`Suspicious file name: ${file.name || "unnamed file"}`, {
+      description: "Rename the file and upload it again.",
+    });
+    return false;
+  }
   const extension = "." + file.name.split(".").pop()?.toLowerCase();
   if (!SUPPORTED_EXTENSIONS.includes(extension)) {
     toast.error(`Unsupported file type: ${extension}`, {
-      description: "Please upload C (.c, .h), C++ (.cpp, .hpp), or .zip files only.",
+      description: "Please upload C/C++ source files or a .zip archive.",
     });
     return false;
   }
@@ -128,7 +152,7 @@ export const FileUploadArea = ({
           </div>
           {uploadedFiles.length === 0 && (
             <p className="text-xs text-muted-foreground/70">
-              Supports .c, .cpp, .h, .hpp files or a .zip archive up to 50MB
+              Supports .c, .h, .cpp, .cc, .cxx, .hpp, .hxx files or a .zip archive
             </p>
           )}
         </div>

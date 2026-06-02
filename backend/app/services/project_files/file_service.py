@@ -1,5 +1,8 @@
 import os
 import base64
+import io
+import zipfile
+import uuid
 from fastapi import HTTPException, UploadFile, status
 from supabase import Client
 from typing import List
@@ -12,6 +15,8 @@ from app.models.project_files import (
     FILE_SOURCE_GITHUB,
     ProjectFileResponse,
     ProjectFileListResponse,
+    ProjectSourceFile,
+    ProjectSourceFilesResponse,
     ProjectFileDeleteResponse,
     GitHubImportRequest,
 )
@@ -101,7 +106,7 @@ def _validate_extension(filename: str, language: str | None) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Project has no language set. Cannot determine allowed file types.",
         )
-    allowed = ALLOWED_EXTENSIONS.get(language, [])
+    allowed = [*ALLOWED_EXTENSIONS.get(language, []), ".zip"]
     ext = os.path.splitext(filename)[1].lower()
     if ext not in allowed:
         raise HTTPException(
@@ -116,6 +121,17 @@ def _validate_extension(filename: str, language: str | None) -> None:
 def _storage_path(project_id: str, filename: str) -> str:
     """Returns the canonical storage path for a file."""
     return f"{project_id}/{filename}"
+
+
+def _scan_zip_storage_path(project_id: str) -> str:
+    """Returns a storage path for a scan source bundle."""
+    return f"{project_id}/scan-sources/{uuid.uuid4().hex}.zip"
+
+
+def _source_filename(file_path: str) -> str:
+    """Returns a safe source name for project_files.filename."""
+    normalized = file_path.replace("\\", "/").strip().strip("/")
+    return normalized or os.path.basename(file_path) or uuid.uuid4().hex
 
 
 def _make_signed_url(storage_path: str, supabase: Client) -> str:
@@ -142,6 +158,36 @@ def _upload_bytes(
         "x-upsert": "true",
     }
     supabase.storage.from_(STORAGE_BUCKET).upload(storage_path, content, file_options=file_options)
+
+
+def _build_source_zip(files_dict: dict[str, str]) -> bytes:
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path, source_code in files_dict.items():
+            archive.writestr(file_path.replace("\\", "/").strip().lstrip("/"), source_code)
+    return zip_buffer.getvalue()
+
+
+def _is_c_cpp_source(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in {
+        ".c",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".h",
+        ".hpp",
+        ".hxx",
+    }
+
+
+def _safe_zip_source_name(name: str) -> str | None:
+    normalized = name.replace("\\", "/").strip().strip("/")
+    if not normalized:
+        return None
+    parts = [part for part in normalized.split("/") if part]
+    if any(part in {".", ".."} for part in parts):
+        return None
+    return "/".join(parts)
 
 
 def _upsert_db_record(
@@ -297,6 +343,121 @@ def list_project_files(
     return ProjectFileListResponse(files=files)
 
 
+def list_project_source_files(
+    project_id: str,
+    user_id: str,
+    supabase: Client,
+) -> ProjectSourceFilesResponse:
+    """
+    Returns project files as source text for rescans.
+    Stored scan bundles are ZIPs, so extract only safe C/C++ paths in memory.
+    """
+    _require_project_access(project_id, user_id, supabase)
+
+    result = (
+        supabase.table("project_files")
+        .select("filename,storage_path,content_type,created_at")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    source_files: list[ProjectSourceFile] = []
+    seen_names: set[str] = set()
+    seen_storage_paths: set[str] = set()
+
+    for row in result.data or []:
+        storage_path = row.get("storage_path")
+        if not storage_path or storage_path in seen_storage_paths:
+            continue
+        seen_storage_paths.add(storage_path)
+        try:
+            content = supabase.storage.from_(STORAGE_BUCKET).download(storage_path)
+        except Exception:
+            continue
+
+        filename = row.get("filename") or os.path.basename(storage_path)
+        content_type = (row.get("content_type") or "").lower()
+        is_zip = storage_path.lower().endswith(".zip") or content_type in {"application/zip", "application/x-zip-compressed"}
+
+        if is_zip:
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                    for member in archive.infolist():
+                        if member.is_dir():
+                            continue
+                        safe_name = _safe_zip_source_name(member.filename)
+                        if not safe_name or not _is_c_cpp_source(safe_name) or safe_name in seen_names:
+                            continue
+                        source_files.append(
+                            ProjectSourceFile(
+                                name=safe_name,
+                                content=archive.read(member).decode("utf-8", errors="replace"),
+                            )
+                        )
+                        seen_names.add(safe_name)
+            except zipfile.BadZipFile:
+                continue
+            continue
+
+        if not _is_c_cpp_source(filename) or filename in seen_names:
+            continue
+        source_files.append(ProjectSourceFile(name=filename, content=content.decode("utf-8", errors="replace")))
+        seen_names.add(filename)
+
+    if not source_files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No C/C++ source files were found for this project.",
+        )
+
+    return ProjectSourceFilesResponse(files=source_files)
+
+
+def save_scanned_sources_zip(
+    project_id: str,
+    user_id: str,
+    files_dict: dict[str, str],
+    supabase: Client,
+) -> list[dict]:
+    """
+    Store the exact scanned C/C++ sources as a single ZIP object.
+    Each scanned source gets a project_files row with its original extension,
+    and all rows point to the same storage_path.
+    """
+    if not project_id or not files_dict:
+        return []
+
+    _require_project_access(project_id, user_id, supabase)
+    zip_bytes = _build_source_zip(files_dict)
+    storage_path = _scan_zip_storage_path(project_id)
+    _upload_bytes(storage_path, zip_bytes, "application/zip", supabase)
+
+    rows: list[dict] = []
+    used_names: set[str] = set()
+    for file_path in files_dict.keys():
+        filename = _source_filename(file_path)
+        unique_filename = filename
+        duplicate_index = 2
+        while unique_filename in used_names:
+            unique_filename = f"{filename}-{duplicate_index}"
+            duplicate_index += 1
+        used_names.add(unique_filename)
+        rows.append(
+            _upsert_db_record(
+                project_id=project_id,
+                user_id=user_id,
+                filename=unique_filename,
+                storage_path=storage_path,
+                size=len(zip_bytes),
+                content_type="application/zip",
+                source=FILE_SOURCE_LOCAL,
+                supabase=supabase,
+            )
+        )
+    return rows
+
+
 async def upload_project_file(
     project_id: str,
     user_id: str,
@@ -318,8 +479,6 @@ async def upload_project_file(
             detail="Filename cannot be empty",
         )
 
-    _validate_extension(filename, project.get("language"))
-
     content = await file.read()
     if len(content) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
@@ -332,13 +491,55 @@ async def upload_project_file(
             detail="Cannot upload an empty file",
         )
 
+    _validate_extension(filename, project.get("language"))
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".zip":
+        rows: list[dict] = []
+        allowed = ALLOWED_EXTENSIONS.get(project.get("language") or "", [])
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                for entry in archive.infolist():
+                    if entry.is_dir():
+                        continue
+                    inner_name = os.path.basename(entry.filename.replace("\\", "/"))
+                    if not inner_name:
+                        continue
+                    inner_ext = os.path.splitext(inner_name)[1].lower()
+                    if inner_ext not in allowed:
+                        continue
+                    inner_content = archive.read(entry)
+                    if not inner_content or len(inner_content) > MAX_FILE_SIZE_BYTES:
+                        continue
+                    path = _storage_path(project_id, inner_name)
+                    _upload_bytes(path, inner_content, "text/plain", supabase)
+                    rows.append(
+                        _upsert_db_record(
+                            project_id=project_id,
+                            user_id=user_id,
+                            filename=inner_name,
+                            storage_path=path,
+                            size=len(inner_content),
+                            content_type="text/plain",
+                            source=FILE_SOURCE_LOCAL,
+                            supabase=supabase,
+                        )
+                    )
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid ZIP archive",
+            )
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="ZIP archive did not contain any files allowed by this project's language.",
+            )
+        return _db_row_to_response(rows[0], supabase)
+
     content_type = file.content_type or "application/octet-stream"
     path = _storage_path(project_id, filename)
-
-    # 1. Write to storage
     _upload_bytes(path, content, content_type, supabase)
-
-    # 2. Persist metadata to DB
     row = _upsert_db_record(
         project_id=project_id,
         user_id=user_id,
@@ -349,7 +550,6 @@ async def upload_project_file(
         source=FILE_SOURCE_LOCAL,
         supabase=supabase,
     )
-
     return _db_row_to_response(row, supabase)
 
 

@@ -1,6 +1,11 @@
+import httpx
+import httpcore
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
+from postgrest import SyncPostgrestClient
+from postgrest.base_request_builder import SyncClient as PostgrestSyncClient
 from app.config import settings
 
 # ---------------------------------------------------------------------------
@@ -13,6 +18,54 @@ from app.config import settings
 # NEVER expose the service_role key to the frontend.
 # ---------------------------------------------------------------------------
 _supabase_client: Client | None = None
+SUPABASE_TRANSPORT_EXCEPTIONS = (
+    httpx.RemoteProtocolError,
+    httpcore.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.TimeoutException,
+)
+
+
+class Http1PostgrestClient(SyncPostgrestClient):
+    """PostgREST client that avoids flaky Supabase HTTP/2 stream resets."""
+
+    def create_session(
+        self,
+        base_url: str,
+        headers: dict[str, str],
+        timeout: int | float | httpx.Timeout,
+        verify: bool = True,
+        proxy: str | None = None,
+    ) -> PostgrestSyncClient:
+        return PostgrestSyncClient(
+            base_url=base_url,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            proxy=proxy,
+            follow_redirects=True,
+            http2=False,
+        )
+
+
+def _create_supabase_client() -> Client:
+    """Create a shared Supabase client with an HTTP/1.1 PostgREST transport.
+
+    postgrest-py 0.18 hardcodes http2=True, which can surface as
+    httpx.RemoteProtocolError when Supabase closes an HTTP/2 stream.
+    """
+    client = create_client(
+        settings.supabase_url,
+        settings.supabase_service_role_key,
+    )
+    client._postgrest = Http1PostgrestClient(
+        client.rest_url,
+        headers=client.options.headers,
+        schema=client.options.schema,
+        timeout=client.options.postgrest_client_timeout,
+    )
+    return client
 
 def get_supabase() -> Client:
     """
@@ -21,10 +74,7 @@ def get_supabase() -> Client:
     """
     global _supabase_client
     if _supabase_client is None:
-        _supabase_client = create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key,
-        )
+        _supabase_client = _create_supabase_client()
     return _supabase_client
 
 
@@ -70,6 +120,11 @@ async def get_current_user(
 
         return response.user
 
+    except SUPABASE_TRANSPORT_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service temporarily unavailable. Please retry.",
+        ) from exc
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

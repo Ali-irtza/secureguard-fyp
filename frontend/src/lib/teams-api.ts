@@ -50,24 +50,41 @@ export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  // Get the current session token — Supabase stores it in localStorage
-  const { data: { session } } = await supabase.auth.getSession();
+  const getSessionToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) return session.access_token;
 
-  if (!session) throw new Error("Not authenticated");
+    const refreshed = await supabase.auth.refreshSession();
+    return refreshed.data.session?.access_token ?? null;
+  };
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${session.access_token}`,
-      ...options.headers,
-    },
-  });
+  const request = async (accessToken: string) => {
+    return fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        ...options.headers,
+      },
+    });
+  };
+
+  let accessToken = await getSessionToken();
+  if (!accessToken) throw new Error("Not authenticated");
+
+  let res = await request(accessToken);
+
+  if (res.status === 401) {
+    const refreshed = await supabase.auth.refreshSession();
+    accessToken = refreshed.data.session?.access_token ?? "";
+    if (!accessToken) throw new Error("Not authenticated");
+    res = await request(accessToken);
+  }
 
   // 204 No Content — DELETE endpoints return no body
   if (res.status === 204) return undefined as T;
 
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
 
   if (!res.ok) {
     // FastAPI returns { detail: "..." } on errors

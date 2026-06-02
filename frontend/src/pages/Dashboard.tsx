@@ -7,12 +7,14 @@ import MetricsRow from "@/components/dashboard/MetricsRow";
 import EmptyState from "@/components/dashboard/EmptyState";
 import RecentScansTable, { Scan } from "@/components/dashboard/RecentScansTable";
 import VulnerabilityChart from "@/components/dashboard/VulnerabilityChart";
+import VulnerabilityBarChart from "@/components/dashboard/VulnerabilityBarChart";
+import VulnerabilityPieChart from "@/components/dashboard/VulnerabilityPieChart";
 import CriticalAlerts from "@/components/dashboard/CriticalAlerts";
 import TeamViewToggle from "@/components/dashboard/TeamViewToggle";
 import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
 import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import type { ScanRecord, AlertRecord, SubscriptionStatus } from "@/types/realtime";
+import type { ScanRecord, AlertRecord } from "@/types/realtime";
 import { applyOptimisticInsert, applyOptimisticUpdate, applyOptimisticDelete } from "@/types/realtime";
 
 const Dashboard = () => {
@@ -40,21 +42,43 @@ const Dashboard = () => {
 
   // Top 5 most recent scans mapped to the Scan shape RecentScansTable expects
   const recentScans: Scan[] = rawScans
+    .filter((s) => Boolean(s.project_name || s.file_name || s.branch))
     .slice()
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 5)
     .map((s) => ({
       id: s.id,
-      projectName: s.project_name ?? "Unknown Project",
+      projectName: s.project_name || s.file_name || "Project",
       date: new Date(s.created_at),
-      status: (s.status === "pending" ? "in_progress" : s.status) as Scan["status"],
-      vulnerabilities: { critical: 0, high: 0, medium: 0, low: s.total_vulns ?? 0 },
+      status: (s.status === "completed" ? "completed" : "failed") as Scan["status"],
+      vulnerabilities: s.severity_counts ?? { critical: 0, high: 0, medium: 0, low: s.total_vulns ?? 0 },
     }));
 
   // Stat card values derived from real data
   const totalScans = rawScans.length;
-  const criticalScans = rawScans.filter((s) => s.risk_level === "critical").length;
+  const criticalVulns = rawScans.reduce((sum, scan) => sum + (scan.severity_counts?.critical ?? 0), 0);
   const completedScans = rawScans.filter((s) => s.status === "completed").length;
+  const vulnerabilityTrend = rawScans
+    .filter((scan) => scan.status === "completed")
+    .reduce((acc, scan) => {
+      const date = new Date(scan.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const current = acc.get(date) ?? { date, critical: 0, high: 0, medium: 0 };
+      current.critical += scan.severity_counts?.critical ?? 0;
+      current.high += scan.severity_counts?.high ?? 0;
+      current.medium += scan.severity_counts?.medium ?? 0;
+      acc.set(date, current);
+      return acc;
+    }, new Map<string, { date: string; critical: number; high: number; medium: number }>());
+  const criticalAlerts = rawScans
+    .flatMap((scan) =>
+      (scan.critical_findings ?? []).map((finding) => ({
+        id: finding.id,
+        title: `${finding.cwe_id || finding.type || "Critical Issue"}${finding.line_number ? ` at line ${finding.line_number}` : ""}`,
+        project: scan.project_name || finding.file_path || "Project",
+        timeAgo: new Date(finding.created_at).toLocaleString(),
+      }))
+    )
+    .slice(0, 10);
 
   const selectedTeam = mockTeams.find((t) => t.id === selectedTeamId);
   const userRole = selectedTeam?.currentUserRole;
@@ -94,16 +118,15 @@ const Dashboard = () => {
     id: record.id,
     projectName: record.file_name ?? record.file_path ?? record.branch ?? record.project_id,
     date: new Date(record.started_at ?? record.created_at),
-    status: record.status === "pending" ? "in_progress" : record.status,
+    status: record.status === "completed" ? "completed" : "failed",
     vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 },
   });
 
   // Determine metrics
   const personalMetrics = {
     totalScans,
-    criticalVulns: criticalScans,
+    criticalVulns,
     healthScore: totalScans > 0 ? Math.round((completedScans / totalScans) * 100) : 100,
-    pendingScans: rawScans.filter((s) => s.status === "in_progress" || s.status === "pending").length,
   };
 
   const metrics = isTeamView && selectedTeam ? selectedTeam.metrics : personalMetrics;
@@ -122,11 +145,15 @@ const Dashboard = () => {
       return mapped;
     }
     // Fall back to real recent scans while realtime hasn't loaded yet
+    const normalizeTeamScan = (scan: Scan): Scan => ({
+      ...scan,
+      status: scan.status === "completed" ? "completed" : "failed",
+    });
     if (!isTeamView || !selectedTeam) return recentScans;
     if (userRole === "developer") {
-      return selectedTeam.scans.filter((s) => s.memberId === CURRENT_USER_ID);
+      return selectedTeam.scans.filter((s) => s.memberId === CURRENT_USER_ID).map(normalizeTeamScan);
     }
-    return selectedTeam.scans;
+    return selectedTeam.scans.map(normalizeTeamScan);
   };
 
   // ---------------------------------------------------------------------------
@@ -229,21 +256,27 @@ const Dashboard = () => {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left Column - 2/3 width */}
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 space-y-6">
               <RecentScansTable
                 scans={getScans()}
                 userRole={isTeamView ? userRole : undefined}
               />
+              {/* Bar Chart and Pie Chart */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <VulnerabilityBarChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
+                <VulnerabilityPieChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
+              </div>
             </div>
 
             {/* Right Column - 1/3 width */}
             <div className="space-y-6">
-              <VulnerabilityChart />
+              <VulnerabilityChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
               <CriticalAlerts
                 isTeamView={isTeamView}
                 teamAlerts={isTeamView && selectedTeam ? selectedTeam.alerts : undefined}
                 userRole={isTeamView ? userRole : undefined}
                 realtimeAlerts={realtimeAlerts.length > 0 ? realtimeAlerts : undefined}
+                scanAlerts={criticalAlerts}
                 connectionStatus={{ status: alertsStatus, connectionCount: alertsConnectionCount }}
               />
             </div>

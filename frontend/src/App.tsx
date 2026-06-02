@@ -18,6 +18,7 @@ import ScanHistory from "./pages/ScanHistory";
 import Settings from "./pages/Settings";
 import Help from "./pages/Help";
 import Reports from "./pages/Reports";
+import ReportDetail from "./pages/ReportDetail";
 import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/NotFound";
 import About from "./pages/About";
@@ -53,6 +54,7 @@ const App = () => (
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="/help" element={<ProtectedRoute><Help /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+          <Route path="/reports/:scanId" element={<ProtectedRoute><ReportDetail /></ProtectedRoute>} />
           <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
           <Route path="/design-system" element={<Index />} />
           <Route path="/about" element={<About />} />
