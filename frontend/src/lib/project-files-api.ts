@@ -31,6 +31,15 @@ export interface ProjectFileDeleteResponse {
   deleted: string; // filename that was removed
 }
 
+export interface ProjectSourceFile {
+  name: string;
+  content: string;
+}
+
+export interface ProjectSourceFilesResponse {
+  files: ProjectSourceFile[];
+}
+
 export interface GitHubImportRequest {
   branch: string;
   file_path: string;
@@ -116,6 +125,15 @@ export async function listProjectFiles(
 ): Promise<ProjectFileResponse[]> {
   const res = await apiFetch<ProjectFileListResponse>(
     `/projects/${projectId}/files`
+  );
+  return res.files;
+}
+
+export async function listProjectSourceFiles(
+  projectId: string
+): Promise<ProjectSourceFile[]> {
+  const res = await apiFetch<ProjectSourceFilesResponse>(
+    `/projects/${projectId}/source-files`
   );
   return res.files;
 }

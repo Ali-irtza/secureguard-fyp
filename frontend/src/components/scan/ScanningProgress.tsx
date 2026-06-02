@@ -82,33 +82,33 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
     : 0;
 
   return (
-    <div className="h-full flex flex-col p-3">
-      <div className="grid grid-cols-3 gap-2 border-b border-border/50 pb-3">
-        <div className="rounded-md border border-border/50 bg-background/50 px-2 py-2">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase text-muted-foreground">
+    <div className="h-full flex flex-col p-3 bg-gradient-to-b from-[#0b121d] via-[#0b1019] to-[#080d15]">
+      <div className="grid grid-cols-3 gap-2 border-b border-emerald-500/15 pb-3">
+        <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-2 py-2 shadow-inner shadow-cyan-950/20">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase text-cyan-200/80">
             <Code2 className="h-3 w-3" />
             Lines
           </div>
-          <p className="mt-1 font-mono text-sm font-semibold text-foreground">
-            {stats.linesScanned}<span className="text-muted-foreground">/{stats.totalLines}</span>
+          <p className="mt-1 font-mono text-sm font-semibold text-cyan-50">
+            {stats.linesScanned}<span className="text-cyan-200/50">/{stats.totalLines}</span>
           </p>
         </div>
-        <div className="rounded-md border border-border/50 bg-background/50 px-2 py-2">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase text-muted-foreground">
+        <div className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-2 py-2 shadow-inner shadow-violet-950/20">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase text-violet-200/80">
             <Clock3 className="h-3 w-3" />
             Time
           </div>
-          <p className="mt-1 font-mono text-sm font-semibold text-foreground">{elapsedDisplay}</p>
+          <p className="mt-1 font-mono text-sm font-semibold text-violet-50">{elapsedDisplay}</p>
         </div>
-        <div className="rounded-md border border-border/50 bg-background/50 px-2 py-2">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase text-muted-foreground">
+        <div className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-2 py-2 shadow-inner shadow-rose-950/20">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase text-rose-200/80">
             <AlertTriangle className="h-3 w-3" />
             Issues
           </div>
           <p
             className={cn(
               "mt-1 font-mono text-sm font-semibold",
-              stats.vulnerabilitiesFound > 0 ? "text-destructive" : "text-foreground"
+              stats.vulnerabilitiesFound > 0 ? "text-rose-300" : "text-rose-50"
             )}
           >
             {stats.vulnerabilitiesFound}
@@ -117,7 +117,7 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
       </div>
 
       <div className="space-y-2 py-4">
-        <div className="h-2.5 overflow-hidden rounded-full bg-muted/60 shadow-inner">
+        <div className="h-2.5 overflow-hidden rounded-full bg-white/8 shadow-inner">
           <div
             className={cn(
               "h-full rounded-full bg-gradient-to-r from-cyan-400 via-emerald-400 to-primary transition-all duration-500",
@@ -127,23 +127,23 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
           />
         </div>
         <div className="flex justify-between text-xs">
-          <span className={cn("font-medium", isComplete ? "text-primary" : "text-muted-foreground")}>
+          <span className={cn("font-medium", isComplete ? "text-emerald-300" : "text-cyan-100/80")}>
             {isComplete ? "Complete" : "Scanning..."}
           </span>
-          <span className="text-primary font-mono font-medium">{progressPercentage}%</span>
+          <span className="text-emerald-300 font-mono font-medium">{progressPercentage}%</span>
         </div>
       </div>
 
       <div className="flex-1 space-y-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Phases</h3>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-cyan-100/70">Phases</h3>
         {phases.map((phase) => (
           <div
             key={phase.id}
             className={cn(
-              "relative flex items-center gap-3 rounded-md border px-3 py-2.5 text-xs transition-all",
-              phase.status === "active" && "border-primary/35 bg-primary/10 shadow-[0_0_22px_rgba(16,185,129,0.10)]",
-              phase.status === "completed" && "border-primary/15 bg-primary/5 text-foreground",
-              phase.status === "pending" && "border-transparent bg-transparent text-muted-foreground/60"
+              "relative flex items-center gap-3 rounded-xl border px-3 py-3 text-xs transition-all",
+              phase.status === "active" && "border-emerald-400/45 bg-emerald-500/15 shadow-[0_0_24px_rgba(16,185,129,0.18)]",
+              phase.status === "completed" && "border-emerald-500/25 bg-emerald-500/10 text-foreground",
+              phase.status === "pending" && "border-white/5 bg-white/[0.02] text-muted-foreground/65"
             )}
           >
             {phase.status === "active" && (
@@ -151,10 +151,10 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
             )}
             <div
               className={cn(
-                "grid h-7 w-7 place-items-center rounded-full border",
-                phase.status === "active" && "border-primary/40 bg-primary/15 text-primary",
-                phase.status === "completed" && "border-primary/30 bg-primary/10 text-primary",
-                phase.status === "pending" && "border-border/40 bg-background/40 text-muted-foreground"
+                "grid h-8 w-8 place-items-center rounded-full border",
+                phase.status === "active" && "border-emerald-300/50 bg-emerald-400/20 text-emerald-200",
+                phase.status === "completed" && "border-emerald-400/35 bg-emerald-500/15 text-emerald-300",
+                phase.status === "pending" && "border-white/10 bg-white/[0.04] text-muted-foreground"
               )}
             >
               {phase.status === "active" ? (
@@ -168,7 +168,7 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
             <span
               className={cn(
                 "font-semibold",
-                phase.status === "active" && "text-primary",
+                phase.status === "active" && "text-emerald-200",
                 phase.status === "completed" && "text-foreground",
                 phase.status === "pending" && "text-muted-foreground"
               )}

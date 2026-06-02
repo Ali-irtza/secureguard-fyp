@@ -16,6 +16,7 @@ import { getTeam, listTeams } from "@/lib/teams-api";
 import type { Team as ApiTeam } from "@/lib/teams-api";
 import {
   listProjectFiles,
+  listProjectSourceFiles,
   uploadProjectFile,
   formatFileSize,
   formatRelativeTime,
@@ -65,6 +66,7 @@ import {
   FileUp,
   Radar,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
@@ -112,6 +114,52 @@ const getChunkReportTitle = (chunks: ChunkOutput[]): string => {
     ?.split("/")[0]
     ?.trim();
   return zipFolderName || "Source Files";
+};
+
+const sourceLineForVulnerability = (chunk: ChunkOutput, vulnerability: VulnerabilityDetail): string => {
+  const codeLines = splitSourceLines(chunk.code ?? "");
+  const absoluteLine = vulnerability.line_number || vulnerability.absolute_line || 0;
+  if (absoluteLine >= chunk.start_line && absoluteLine <= chunk.end_line) {
+    return codeLines[absoluteLine - chunk.start_line] ?? "";
+  }
+  if (vulnerability.line_number > 0 && vulnerability.line_number <= codeLines.length) {
+    return codeLines[vulnerability.line_number - 1] ?? "";
+  }
+  return "";
+};
+
+const codeForVulnerability = (chunk: ChunkOutput, vulnerability: VulnerabilityDetail): string => {
+  const affectedCode = vulnerability.affected_code?.trim();
+  if (affectedCode) return affectedCode;
+  return sourceLineForVulnerability(chunk, vulnerability).trim() || `Line ${vulnerability.line_number || vulnerability.absolute_line || "N/A"}`;
+};
+
+const NumberedCodeBlock = ({
+  code,
+  startLine = 1,
+  emptyText = "No code returned.",
+}: {
+  code?: string;
+  startLine?: number;
+  emptyText?: string;
+}) => {
+  const lines = splitSourceLines(code?.trimEnd() ? code : emptyText);
+  return (
+    <div className="mt-2 max-h-[420px] overflow-auto rounded-md border border-border/50 bg-[#0d1117] text-sm leading-relaxed text-foreground">
+      <table className="w-full border-collapse font-mono">
+        <tbody>
+          {lines.map((line, index) => (
+            <tr key={`${index}-${line}`}>
+              <td className="w-10 min-w-10 max-w-10 select-none border-r border-white/10 bg-white/[0.03] px-2 py-0.5 text-right align-top text-xs text-muted-foreground">
+                {startLine + index}
+              </td>
+              <td className="whitespace-pre px-4 py-0.5 align-top">{line || " "}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 };
 
 const parseThinkingStep = (step: string) => {
@@ -194,6 +242,7 @@ const NewScan = () => {
   const [projectFiles, setProjectFiles] = useState<ProjectFileResponse[]>([]);
   const [projectFilesLoading, setProjectFilesLoading] = useState(false);
   const [projectFilesError, setProjectFilesError] = useState<string>("");
+  const [autoRescanPreparing, setAutoRescanPreparing] = useState(false);
   // Set of file IDs that are checked for scanning
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
   const [saveToProject, setSaveToProject] = useState<Record<number, boolean>>({});
@@ -534,6 +583,7 @@ const NewScan = () => {
 
   const renderThinkingStream = (emptyText: string) => {
     const activeIndex = thinkingSteps.length - 1;
+
     return (
       <div className="space-y-3">
         {thinkingSteps.length === 0 ? (
@@ -594,7 +644,9 @@ const NewScan = () => {
   };
 
   const handleStartScan = async () => {
+    const isAutoRescan = searchParams.get("autoStart") === "1";
     scanAbortRef.current = false;
+    setAutoRescanPreparing(isAutoRescan);
     setIsScanning(true);
     setScanComplete(false);
     setScanResult(null);
@@ -661,7 +713,17 @@ const NewScan = () => {
       const filesToScan: FileTuple[] = [];
 
       // Existing project files that are checked
-      if (projectFiles.length > 0 && selectedFileIds.size > 0) {
+      if (isAutoRescan && resolvedProjectId && resolvedProjectId !== "__new__") {
+        setAutoRescanPreparing(true);
+        try {
+          const sourceFiles = await listProjectSourceFiles(resolvedProjectId);
+          for (const sourceFile of sourceFiles) {
+            filesToScan.push({ name: sourceFile.name, content: sourceFile.content });
+          }
+        } finally {
+          setAutoRescanPreparing(false);
+        }
+      } else if (projectFiles.length > 0 && selectedFileIds.size > 0) {
         const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
         for (const pf of projectFiles) {
           if (!selectedFileIds.has(pf.id)) continue;
@@ -696,7 +758,7 @@ const NewScan = () => {
 
       // Use the first file for the code viewer animation
       const primaryFile = filesToScan[0];
-      const code = primaryFile?.content ?? "// ZIP archive selected. Source files will be unpacked and scanned on the backend.";
+      const code = primaryFile?.content ?? "";
       const lines = splitSourceLines(code);
       sourceLineCountsRef.current = filesToScan.reduce<Record<string, number>>((counts, file) => {
         counts[file.name] = splitSourceLines(file.content).length;
@@ -758,29 +820,17 @@ const NewScan = () => {
             handleScanStreamEvent
           );
         } else {
-          const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
-          const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-          for (const fileTuple of filesToScan) {
-            if (scanAbortRef.current) break;
-            const response = await fetch(`${API_BASE}/scan/upload`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${session?.access_token}`,
-              },
-              body: JSON.stringify({
-                filename: fileTuple.name,
-                source_code: fileTuple.content,
-                project_id: resolvedProjectId ?? "",
-                project_name: resolvedProjectName ?? "",
-              }),
-            });
-            if (!response.ok) {
-              const json = await response.json().catch(() => ({}));
-              throw new Error(json.detail ?? `Scan failed: ${response.status}`);
-            }
-            combinedResult = await response.json();
-          }
+          const rescanFiles = filesToScan.map(
+            (fileTuple) => new File([fileTuple.content], fileTuple.name, { type: "text/plain" })
+          );
+          combinedResult = await triggerUploadedFileScanStream(
+            rescanFiles,
+            {
+              project_id: resolvedProjectId ?? "",
+              project_name: resolvedProjectName ?? "",
+            },
+            handleScanStreamEvent
+          );
         }
 
         clearInterval(lineAnimInterval);
@@ -1242,14 +1292,33 @@ const NewScan = () => {
 
   // If scanning or complete, show split-screen view
   if (isScanning || scanComplete) {
-    const progressPercentage = stats.totalLines > 0 
-      ? Math.round((stats.linesScanned / stats.totalLines) * 100) 
-      : 0;
+    if (autoRescanPreparing) {
+      return (
+        <DashboardLayout>
+          <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center">
+            <div className="flex flex-col items-center gap-4 rounded-lg border border-border/60 bg-card/60 px-10 py-8 text-center shadow-xl">
+              <Loader2 className="h-10 w-10 animate-spin text-primary" />
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Preparing project sources</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Extracting stored C/C++ files for rescan...
+                </p>
+              </div>
+            </div>
+          </div>
+        </DashboardLayout>
+      );
+    }
 
     const firstFile = uploadedFiles[0];
     const displayName = effectiveProjectName
       ? `${effectiveProjectName}${firstFile ? ` · ${firstFile.name}` : ""}`
       : firstFile?.name || "Code Analysis";
+    const showSourceLoader =
+      isScanning &&
+      uploadedFiles.some((file) => file.name.toLowerCase().endsWith(".zip")) &&
+      codeLines.length === 1 &&
+      !codeLines[0]?.content.trim();
 
     return (
       <DashboardLayout>
@@ -1271,18 +1340,6 @@ const NewScan = () => {
                   </span>
                 )}
               </div>
-              {/* Inline Progress */}
-              <div className="hidden sm:flex items-center gap-2">
-                <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
-                  <div 
-                    className="h-full bg-primary transition-all duration-300" 
-                    style={{ width: `${progressPercentage}%` }} 
-                  />
-                </div>
-                <span className="text-xs font-mono text-muted-foreground w-8">
-                  {progressPercentage}%
-                </span>
-              </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button 
@@ -1303,18 +1360,9 @@ const NewScan = () => {
                 </Button>
               )}
               {scanComplete && !showPanel && (
-                <>
-                  <Button
-                    size="sm"
-                    className="h-8"
-                    onClick={() => setShowPanel(false)}
-                  >
-                    View Report
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-8" onClick={handleReset}>
-                    New Scan
-                  </Button>
-                </>
+                <Button variant="outline" size="sm" className="h-8" onClick={handleReset}>
+                  New Scan
+                </Button>
               )}
             </div>
           </div>
@@ -1324,7 +1372,7 @@ const NewScan = () => {
             {/* Left Panel - Collapsible */}
             <div 
               className={cn(
-                "w-[280px] shrink-0 border-r border-border/50 bg-card/30 flex flex-col transition-all duration-300",
+                "w-[280px] shrink-0 border-r border-emerald-500/20 bg-[#080d15] flex flex-col transition-all duration-300",
                 showPanel ? "translate-x-0" : "-translate-x-full absolute -left-[280px]"
               )}
             >
@@ -1337,20 +1385,11 @@ const NewScan = () => {
               </div>
               
               {/* Sticky Action Buttons */}
-              <div className="p-3 border-t border-border/50 bg-card/80 backdrop-blur-sm">
+              <div className="p-3 border-t border-emerald-500/15 bg-[#111820]/95 backdrop-blur-sm">
                 {scanComplete ? (
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      className="flex-1 shadow-lg shadow-primary/25"
-                      onClick={() => setShowPanel(false)}
-                    >
-                      View Report
-                    </Button>
-                    <Button variant="outline" size="sm" className="flex-1" onClick={handleReset}>
-                      New Scan
-                    </Button>
-                  </div>
+                  <Button variant="outline" size="sm" className="w-full" onClick={handleReset}>
+                    New Scan
+                  </Button>
                 ) : (
                   <Button
                     variant="outline"
@@ -1400,21 +1439,21 @@ const NewScan = () => {
                   <div className="mx-auto grid max-w-7xl gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
                     <div className="space-y-5">
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                      <Card className="p-4 bg-card/70 border-border/50">
+                      <Card className="overflow-hidden border-red-500/30 bg-gradient-to-br from-red-500/18 via-card/80 to-card/70 p-4 shadow-lg shadow-red-950/15">
                         <p className="text-xs text-muted-foreground">Risk</p>
-                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.overall_risk_level}</p>
+                        <p className="mt-1 text-xl font-semibold text-red-100">{scanResult.overall_risk_level}</p>
                       </Card>
-                      <Card className="p-4 bg-card/70 border-border/50">
+                      <Card className="overflow-hidden border-rose-500/30 bg-gradient-to-br from-rose-500/18 via-card/80 to-card/70 p-4 shadow-lg shadow-rose-950/15">
                         <p className="text-xs text-muted-foreground">Vulnerabilities</p>
-                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.total_vulnerabilities}</p>
+                        <p className="mt-1 text-xl font-semibold text-rose-100">{scanResult.total_vulnerabilities}</p>
                       </Card>
-                      <Card className="p-4 bg-card/70 border-border/50">
+                      <Card className="overflow-hidden border-cyan-500/30 bg-gradient-to-br from-cyan-500/18 via-card/80 to-card/70 p-4 shadow-lg shadow-cyan-950/15">
                         <p className="text-xs text-muted-foreground">Files</p>
-                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.files_analyzed}</p>
+                        <p className="mt-1 text-xl font-semibold text-cyan-100">{scanResult.files_analyzed}</p>
                       </Card>
-                      <Card className="p-4 bg-card/70 border-border/50">
+                      <Card className="overflow-hidden border-violet-500/30 bg-gradient-to-br from-violet-500/18 via-card/80 to-card/70 p-4 shadow-lg shadow-violet-950/15">
                         <p className="text-xs text-muted-foreground">Score</p>
-                        <p className="text-xl font-semibold text-foreground mt-1">{scanResult.overall_risk_score}</p>
+                        <p className="mt-1 text-xl font-semibold text-violet-100">{scanResult.overall_risk_score}</p>
                       </Card>
                     </div>
 
@@ -1450,10 +1489,12 @@ const NewScan = () => {
                               <AccordionContent>
                                 <div className="space-y-5 pb-4">
                                   <div>
-                                    <p className="text-xs font-medium uppercase text-muted-foreground">Chunk code</p>
-                                    <pre className="mt-2 max-h-[420px] overflow-auto rounded-md border border-border/50 bg-[#0d1117] p-4 text-sm leading-relaxed text-foreground">
-                                      {chunk.code || "No chunk code returned."}
-                                    </pre>
+                                    <p className="text-xs font-medium uppercase text-muted-foreground">Input code</p>
+                                    <NumberedCodeBlock
+                                      code={chunk.code}
+                                      startLine={chunk.start_line}
+                                      emptyText="No input code returned."
+                                    />
                                   </div>
 
                                   <div className="space-y-3">
@@ -1479,9 +1520,10 @@ const NewScan = () => {
                                               <span className="text-xs text-muted-foreground">line {vulnerability.line_number}</span>
                                             )}
                                           </div>
-                                          <pre className="mt-3 overflow-x-auto rounded-md border border-border/50 bg-muted/30 p-3 text-xs">
-                                            {vulnerability.affected_code || "No exact vulnerable line returned."}
-                                          </pre>
+                                          <NumberedCodeBlock
+                                            code={codeForVulnerability(chunk, vulnerability)}
+                                            startLine={vulnerability.line_number || vulnerability.absolute_line || chunk.start_line}
+                                          />
                                           <p className="mt-3 text-sm text-foreground">{vulnerability.description}</p>
                                         </div>
                                       ))
@@ -1489,12 +1531,12 @@ const NewScan = () => {
                                   </div>
 
                                   <div>
-                                    <p className="text-xs font-medium uppercase text-muted-foreground">Corrected chunk code</p>
-                                    <pre className="mt-2 max-h-[420px] overflow-auto rounded-md border border-border/50 bg-[#0d1117] p-4 text-sm leading-relaxed text-foreground">
-                                      {chunk.corrected_code && chunk.corrected_code !== "None"
-                                        ? chunk.corrected_code
-                                        : "Waiting for corrected code..."}
-                                    </pre>
+                                    <p className="text-xs font-medium uppercase text-muted-foreground">Corrected code</p>
+                                    <NumberedCodeBlock
+                                      code={chunk.corrected_code && chunk.corrected_code !== "None" ? chunk.corrected_code : ""}
+                                      startLine={chunk.start_line}
+                                      emptyText="Waiting for corrected code..."
+                                    />
                                   </div>
                                 </div>
                               </AccordionContent>
@@ -1553,9 +1595,10 @@ const NewScan = () => {
                                   <div className="space-y-4">
                                     <div>
                                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code at this line</p>
-                                      <pre className="mt-2 rounded-md bg-background/80 border border-border/50 p-3 text-xs overflow-x-auto">
-                                        {vulnerability.affected_code || "No exact source line returned."}
-                                      </pre>
+                                      <NumberedCodeBlock
+                                        code={vulnerability.affected_code || `Line ${vulnerability.line_number || vulnerability.absolute_line || "N/A"}`}
+                                        startLine={vulnerability.line_number || vulnerability.absolute_line || 1}
+                                      />
                                     </div>
                                     <div>
                                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">What is vulnerable here</p>
@@ -1586,9 +1629,10 @@ const NewScan = () => {
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground">Affected Code</p>
-                              <pre className="mt-1 rounded-md bg-background/80 border border-border/50 p-3 text-xs overflow-x-auto">
-                                {selectedVulnerability.affected_code || "No exact source line returned."}
-                              </pre>
+                              <NumberedCodeBlock
+                                code={selectedVulnerability.affected_code || `Line ${selectedVulnerability.line_number || selectedVulnerability.absolute_line || "N/A"}`}
+                                startLine={selectedVulnerability.line_number || selectedVulnerability.absolute_line || 1}
+                              />
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground">Remediation</p>
@@ -1619,11 +1663,10 @@ const NewScan = () => {
                                 </Badge>
                               )}
                             </div>
-                            <pre className="p-4 text-sm leading-relaxed overflow-x-auto max-h-[520px]">
-                              {file.corrected_code && file.corrected_code !== "None"
-                                ? file.corrected_code
-                                : "No corrected code was returned."}
-                            </pre>
+                            <NumberedCodeBlock
+                              code={file.corrected_code && file.corrected_code !== "None" ? file.corrected_code : ""}
+                              emptyText="No corrected code was returned."
+                            />
                           </section>
                         ))}
                       </div>
@@ -1646,11 +1689,17 @@ const NewScan = () => {
               ) : (
                 <div className="flex-1 p-4 lg:p-6 overflow-hidden">
                   <div className="grid h-full gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                    <CodeViewer
-                      lines={codeLines}
-                      currentLine={currentLine}
-                      language={firstFile ? scanLang : "c"}
-                    />
+                    {showSourceLoader ? (
+                      <div className="grid h-full place-items-center rounded-lg border border-border/30 bg-[#0d1117]">
+                        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                      </div>
+                    ) : (
+                      <CodeViewer
+                        lines={codeLines}
+                        currentLine={currentLine}
+                        language={firstFile ? scanLang : "c"}
+                      />
+                    )}
                     <Card className="bg-card/70 border-border/60 overflow-hidden h-full">
                       <div className="p-4 border-b border-border/50">
                         <div className="flex items-center gap-2">

@@ -127,6 +127,11 @@ export interface StoredVulnerability {
 export interface ScanDetailResult {
   scan: ScanHistoryItem;
   vulnerabilities: StoredVulnerability[];
+  source_files?: Array<{
+    filename: string;
+    source_code: string;
+    storage_path?: string | null;
+  }>;
 }
 
 export interface ReportItem {

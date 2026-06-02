@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { getScanDetail, getScanReportPdf } from "@/lib/scans-api";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import type { StoredVulnerability } from "@/lib/scans-api";
 
 const severityClass = (severity: string) =>
   cn(
@@ -16,6 +17,61 @@ const severityClass = (severity: string) =>
     severity === "medium" && "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
     severity === "low" && "bg-blue-500/15 text-blue-300 border-blue-500/30"
   );
+
+const splitSourceLines = (source: string): string[] => {
+  const lines = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines.length > 0 ? lines : [""];
+};
+
+const NumberedCodeBlock = ({
+  code,
+  startLine = 1,
+  emptyText = "No code returned.",
+}: {
+  code?: string | null;
+  startLine?: number | null;
+  emptyText?: string;
+}) => {
+  const lines = splitSourceLines(code?.trimEnd() ? code : emptyText);
+  const firstLine = startLine || 1;
+  return (
+    <div className="mt-2 max-h-[420px] overflow-auto rounded-md border border-border/50 bg-[#0d1117] text-sm leading-relaxed text-foreground">
+      <table className="w-full border-collapse font-mono">
+        <tbody>
+          {lines.map((line, index) => (
+            <tr key={`${index}-${line}`}>
+              <td className="w-10 min-w-10 max-w-10 select-none border-r border-white/10 bg-white/[0.03] px-2 py-0.5 text-right align-top text-xs text-muted-foreground">
+                {firstLine + index}
+              </td>
+              <td className="whitespace-pre px-4 py-0.5 align-top">{line || " "}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const sourceLineForVulnerability = (
+  sourceFiles: Array<{ filename: string; source_code: string }>,
+  vulnerability: StoredVulnerability
+): string => {
+  const filename = vulnerability.file_path || "";
+  const source = sourceFiles.find((file) => file.filename === filename || filename.endsWith(file.filename));
+  const lineNumber = vulnerability.line_number || vulnerability.absolute_line || 0;
+  if (!source || lineNumber <= 0) return "";
+  return splitSourceLines(source.source_code)[lineNumber - 1] ?? "";
+};
+
+const codeForVulnerability = (
+  sourceFiles: Array<{ filename: string; source_code: string }>,
+  vulnerability: StoredVulnerability
+): string => {
+  const snippet = vulnerability.code_snippet?.trim();
+  if (snippet) return snippet;
+  return sourceLineForVulnerability(sourceFiles, vulnerability).trim() || `Line ${vulnerability.line_number || vulnerability.absolute_line || "N/A"}`;
+};
 
 const ReportDetail = () => {
   const { scanId } = useParams();
@@ -48,7 +104,7 @@ const ReportDetail = () => {
     );
   }
 
-  const { scan, vulnerabilities } = data;
+  const { scan, vulnerabilities, source_files = [] } = data;
   const expiresAt = scan.report_expires_at ? new Date(scan.report_expires_at) : null;
 
   return (
@@ -108,34 +164,6 @@ const ReportDetail = () => {
           </Card>
         </div>
 
-        {(scan.chunk_outputs?.length ?? 0) > 0 && (
-          <Card className="bg-card/70 border-border/50 overflow-hidden">
-            <div className="p-4 border-b border-border/50">
-              <h2 className="text-lg font-semibold">Chunk Output</h2>
-              <p className="text-sm text-muted-foreground mt-1">
-                This report was produced chunk by chunk for larger files.
-              </p>
-            </div>
-            <div className="divide-y divide-border/40">
-              {scan.chunk_outputs!.map((chunk) => (
-                <section key={`${chunk.file_path}-${chunk.chunk_index}`} className="p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline">Chunk {chunk.chunk_index}</Badge>
-                    <span className="font-medium">{chunk.chunk_name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      lines {chunk.start_line}-{chunk.end_line}
-                    </span>
-                  </div>
-                  {chunk.summary && <p className="text-sm text-muted-foreground mt-2">{chunk.summary}</p>}
-                  <p className="text-sm mt-2">
-                    {chunk.vulnerabilities.length} issue{chunk.vulnerabilities.length === 1 ? "" : "s"} found in this chunk.
-                  </p>
-                </section>
-              ))}
-            </div>
-          </Card>
-        )}
-
         <Card className="bg-card/70 border-border/50 overflow-hidden">
           <div className="p-4 border-b border-border/50">
             <h2 className="text-lg font-semibold">Issues</h2>
@@ -155,14 +183,15 @@ const ReportDetail = () => {
                       {vulnerability.severity}
                     </Badge>
                     <span className="font-semibold">{vulnerability.cwe_id || vulnerability.type}</span>
-                    <span className="text-sm text-muted-foreground">{vulnerability.cwe_name || vulnerability.type}</span>
+                    {vulnerability.cwe_name && vulnerability.cwe_name !== vulnerability.cwe_id && vulnerability.cwe_name !== vulnerability.type && (
+                      <span className="text-sm text-muted-foreground">{vulnerability.cwe_name}</span>
+                    )}
                   </div>
                   <div className="mt-4 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Line</p>
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">File</p>
                       <p className="mt-1 text-sm font-medium">
                         {vulnerability.file_path || scan.file_name || "source"}
-                        {vulnerability.line_number ? `, line ${vulnerability.line_number}` : ""}
                       </p>
                       {vulnerability.location && (
                         <p className="mt-1 text-xs text-muted-foreground">{vulnerability.location}</p>
@@ -171,9 +200,10 @@ const ReportDetail = () => {
                     <div className="space-y-4">
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code at this line</p>
-                        <pre className="mt-2 rounded-md bg-background/80 border border-border/50 p-3 text-xs overflow-x-auto">
-                          {vulnerability.code_snippet || "No exact source line returned."}
-                        </pre>
+                        <NumberedCodeBlock
+                          code={codeForVulnerability(source_files, vulnerability)}
+                          startLine={vulnerability.line_number || vulnerability.absolute_line || 1}
+                        />
                       </div>
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">What is vulnerable here</p>
@@ -189,18 +219,6 @@ const ReportDetail = () => {
               ))
             )}
           </div>
-        </Card>
-
-        <Card className="bg-card/70 border-border/50 overflow-hidden">
-          <div className="p-4 border-b border-border/50">
-            <h2 className="text-lg font-semibold">Corrected Code</h2>
-            <p className="text-sm text-muted-foreground mt-1">Secure version generated at the end of the scan.</p>
-          </div>
-          <pre className="p-4 text-sm leading-relaxed overflow-x-auto max-h-[520px] bg-background/70">
-            {scan.corrected_code && scan.corrected_code !== "None"
-              ? scan.corrected_code
-              : "No corrected code was saved for this scan."}
-          </pre>
         </Card>
       </div>
     </DashboardLayout>

@@ -5,6 +5,7 @@ from app.dependencies import get_supabase, get_current_user
 from app.models.project_files import (
     GitHubImportRequest,
     ProjectFileListResponse,
+    ProjectSourceFilesResponse,
     ProjectFileResponse,
     ProjectFileDeleteResponse,
 )
@@ -21,6 +22,16 @@ async def list_files(
 ):
     """List all files for a project, including source tags (local / github)."""
     return file_service.list_project_files(project_id, current_user.id, supabase)
+
+
+@router.get("/{project_id}/source-files", response_model=ProjectSourceFilesResponse)
+async def list_source_files(
+    project_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Return C/C++ source text for project rescans, extracting stored ZIP bundles in memory."""
+    return file_service.list_project_source_files(project_id, current_user.id, supabase)
 
 
 @router.post(

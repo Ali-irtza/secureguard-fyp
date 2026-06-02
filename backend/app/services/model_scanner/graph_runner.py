@@ -547,7 +547,8 @@ def generate_corrected_code_for_file(state: AnalyzerState, vulnerabilities: list
         raise RuntimeError(error)
     corrected_code = extract_json_object(response).get("corrected_code", "")
     if not corrected_code:
-        raise RuntimeError("Security model did not return corrected code.")
+        print("[model_scanner] corrected code missing: using original source fallback")
+        return code, response
     return corrected_code, response
 
 

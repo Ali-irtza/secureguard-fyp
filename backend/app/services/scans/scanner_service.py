@@ -262,11 +262,15 @@ async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
                 "corrected_code": "None",
                 "static_findings": item.get("static_findings", ""),
                 "corrected_code_is_clean": False,
-                "chunk_outputs": [],
+                "chunk_outputs": item.get("chunk_outputs", []),
             }
             for item in files_scanned
         ],
-        "chunk_outputs": [],
+        "chunk_outputs": [
+            {**chunk, "file_path": item["file_path"]}
+            for item in files_scanned
+            for chunk in item.get("chunk_outputs", [])
+        ],
     }
 
 
@@ -289,6 +293,7 @@ def build_scan_response_from_file_results(file_results: list[tuple[str, dict]]) 
             "risk_level": "Vulnerable" if result["vulnerabilities"] else "Safe",
             "language": result.get("language", ""),
             "static_findings": result.get("static_findings", ""),
+            "chunk_outputs": chunk_outputs,
         })
 
     severity_points = {"Critical": 10, "High": 7, "Medium": 4, "Low": 1}
@@ -329,11 +334,15 @@ def build_scan_response_from_file_results(file_results: list[tuple[str, dict]]) 
                 "corrected_code": "None",
                 "static_findings": item.get("static_findings", ""),
                 "corrected_code_is_clean": False,
-                "chunk_outputs": [],
+                "chunk_outputs": item.get("chunk_outputs", []),
             }
             for item in files_scanned
         ],
-        "chunk_outputs": [],
+        "chunk_outputs": [
+            {**chunk, "file_path": item["file_path"]}
+            for item in files_scanned
+            for chunk in item.get("chunk_outputs", [])
+        ],
     }
 
 

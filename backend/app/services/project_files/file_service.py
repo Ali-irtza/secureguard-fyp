@@ -15,6 +15,8 @@ from app.models.project_files import (
     FILE_SOURCE_GITHUB,
     ProjectFileResponse,
     ProjectFileListResponse,
+    ProjectSourceFile,
+    ProjectSourceFilesResponse,
     ProjectFileDeleteResponse,
     GitHubImportRequest,
 )
@@ -164,6 +166,28 @@ def _build_source_zip(files_dict: dict[str, str]) -> bytes:
         for file_path, source_code in files_dict.items():
             archive.writestr(file_path.replace("\\", "/").strip().lstrip("/"), source_code)
     return zip_buffer.getvalue()
+
+
+def _is_c_cpp_source(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in {
+        ".c",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".h",
+        ".hpp",
+        ".hxx",
+    }
+
+
+def _safe_zip_source_name(name: str) -> str | None:
+    normalized = name.replace("\\", "/").strip().strip("/")
+    if not normalized:
+        return None
+    parts = [part for part in normalized.split("/") if part]
+    if any(part in {".", ".."} for part in parts):
+        return None
+    return "/".join(parts)
 
 
 def _upsert_db_record(
@@ -317,6 +341,77 @@ def list_project_files(
     ]
 
     return ProjectFileListResponse(files=files)
+
+
+def list_project_source_files(
+    project_id: str,
+    user_id: str,
+    supabase: Client,
+) -> ProjectSourceFilesResponse:
+    """
+    Returns project files as source text for rescans.
+    Stored scan bundles are ZIPs, so extract only safe C/C++ paths in memory.
+    """
+    _require_project_access(project_id, user_id, supabase)
+
+    result = (
+        supabase.table("project_files")
+        .select("filename,storage_path,content_type,created_at")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    source_files: list[ProjectSourceFile] = []
+    seen_names: set[str] = set()
+    seen_storage_paths: set[str] = set()
+
+    for row in result.data or []:
+        storage_path = row.get("storage_path")
+        if not storage_path or storage_path in seen_storage_paths:
+            continue
+        seen_storage_paths.add(storage_path)
+        try:
+            content = supabase.storage.from_(STORAGE_BUCKET).download(storage_path)
+        except Exception:
+            continue
+
+        filename = row.get("filename") or os.path.basename(storage_path)
+        content_type = (row.get("content_type") or "").lower()
+        is_zip = storage_path.lower().endswith(".zip") or content_type in {"application/zip", "application/x-zip-compressed"}
+
+        if is_zip:
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                    for member in archive.infolist():
+                        if member.is_dir():
+                            continue
+                        safe_name = _safe_zip_source_name(member.filename)
+                        if not safe_name or not _is_c_cpp_source(safe_name) or safe_name in seen_names:
+                            continue
+                        source_files.append(
+                            ProjectSourceFile(
+                                name=safe_name,
+                                content=archive.read(member).decode("utf-8", errors="replace"),
+                            )
+                        )
+                        seen_names.add(safe_name)
+            except zipfile.BadZipFile:
+                continue
+            continue
+
+        if not _is_c_cpp_source(filename) or filename in seen_names:
+            continue
+        source_files.append(ProjectSourceFile(name=filename, content=content.decode("utf-8", errors="replace")))
+        seen_names.add(filename)
+
+    if not source_files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No C/C++ source files were found for this project.",
+        )
+
+    return ProjectSourceFilesResponse(files=source_files)
 
 
 def save_scanned_sources_zip(

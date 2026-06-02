@@ -1,12 +1,15 @@
 from supabase import Client
 import time
 import random
+import io
+import zipfile
 
 import httpcore
 import httpx
 from typing import Dict, List
 from datetime import datetime, timezone
 from app.services.scans.report_storage_service import REPORT_BUCKET, create_zipped_pdf_report, create_zipped_report, cleanup_expired_reports
+from app.services.project_files.file_service import STORAGE_BUCKET as PROJECT_FILES_BUCKET
 
 
 RETRYABLE_SUPABASE_EXCEPTIONS = (
@@ -410,8 +413,53 @@ def get_scan_with_vulnerabilities(
         .eq("scan_id", scan_id)
         .execute()
     )
+    project_files_result = (
+        supabase.table("project_files")
+        .select("filename,storage_path")
+        .eq("project_id", scan_result.data.get("project_id"))
+        .eq("uploaded_by", user_id)
+        .like("storage_path", f"{scan_result.data.get('project_id')}/scan-sources/%")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    source_files: list[dict] = []
+    scan_file_names = {
+        name.strip()
+        for name in str(scan_result.data.get("file_name") or "").split(",")
+        if name.strip()
+    }
+    storage_path = None
+    storage_groups: dict[str, set[str]] = {}
+    for row in project_files_result.data or []:
+        row_path = row.get("storage_path")
+        row_name = row.get("filename")
+        if row_path and row_name:
+            storage_groups.setdefault(row_path, set()).add(row_name)
+    for row_path, row_names in storage_groups.items():
+        if scan_file_names and scan_file_names.issubset(row_names):
+            storage_path = row_path
+            break
+    if not storage_path:
+        storage_path = next((row.get("storage_path") for row in project_files_result.data or [] if row.get("storage_path")), None)
+    if storage_path:
+        try:
+            zipped = supabase.storage.from_(PROJECT_FILES_BUCKET).download(storage_path)
+            with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
+                for name in archive.namelist():
+                    if name.endswith("/"):
+                        continue
+                    source_files.append(
+                        {
+                            "filename": name,
+                            "source_code": archive.read(name).decode("utf-8", errors="replace"),
+                            "storage_path": storage_path,
+                        }
+                    )
+        except Exception as exc:
+            print(f"[scans] Failed to load scanned source ZIP for scan {scan_id}: {exc}")
 
     return {
         "scan": scan_result.data,
         "vulnerabilities": vulns_result.data,
+        "source_files": source_files,
     }

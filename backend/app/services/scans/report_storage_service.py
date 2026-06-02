@@ -160,6 +160,31 @@ def _build_code_table(code: str, start_line: int, styles: dict, dark: bool = Fal
     return table
 
 
+def _chunk_line(chunk: Dict, line_number: int) -> str:
+    if line_number <= 0:
+        return ""
+    start_line = int(chunk.get("start_line") or 1)
+    end_line = int(chunk.get("end_line") or 0)
+    if line_number < start_line or (end_line and line_number > end_line):
+        return ""
+    lines = str(chunk.get("code") or "").splitlines()
+    return lines[line_number - start_line] if 0 <= line_number - start_line < len(lines) else ""
+
+
+def _affected_code_for_issue(issue: Dict, chunks: List[Dict]) -> str:
+    direct = str(issue.get("affected_code") or issue.get("code_snippet") or "").strip()
+    if direct:
+        return direct
+    file_path = issue.get("file_path") or ""
+    line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    for chunk in chunks:
+        if (chunk.get("file_path") or "") == file_path:
+            source_line = _chunk_line(chunk, line_number)
+            if source_line.strip():
+                return source_line
+    return f"Line {line_number or 'N/A'}"
+
+
 class NumberedCanvas:
     def __init__(self, canvas, report_name: str):
         self.canvas = canvas
@@ -300,7 +325,29 @@ def _build_simple_pdf(title: str, scan_data: Dict, vulnerabilities: List[Dict]) 
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
-    story.extend([summary, Spacer(1, 18), Paragraph("Vulnerability Findings", styles["section"])])
+    story.extend([summary, Spacer(1, 18)])
+    chunk_outputs = scan_data.get("chunk_outputs") or []
+
+    if chunk_outputs:
+        story.extend([Paragraph("Input And Corrected Code", styles["section"]), Spacer(1, 6)])
+        for chunk in chunk_outputs:
+            filename = chunk.get("file_path") or chunk.get("chunk_name") or "source"
+            start_line = int(chunk.get("start_line") or 1)
+            story.extend([
+                Paragraph(_escape(filename), styles["issue"]),
+                Paragraph("INPUT CODE", styles["label"]),
+                Spacer(1, 4),
+                _build_code_table(str(chunk.get("code") or ""), start_line, styles, dark=True),
+                Spacer(1, 8),
+                Paragraph("CORRECTED CODE", styles["label_green"]),
+                Spacer(1, 4),
+                _build_code_table(str(chunk.get("corrected_code") or "No corrected code was returned."), start_line, styles, dark=True),
+                Spacer(1, 14),
+            ])
+
+        story.extend([PageBreak()])
+
+    story.append(Paragraph("Vulnerability Findings", styles["section"]))
 
     if not vulnerabilities:
         story.append(Paragraph("No vulnerabilities were reported for this scan.", styles["body"]))
@@ -310,7 +357,7 @@ def _build_simple_pdf(title: str, scan_data: Dict, vulnerabilities: List[Dict]) 
         cwe = issue.get("cwe_id") or issue.get("cwe_name") or "CWE"
         line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
         filename = issue.get("file_path") or scan_data.get("file_name") or "source"
-        affected_code = issue.get("affected_code") or issue.get("code_snippet") or "No exact source line returned."
+        affected_code = _affected_code_for_issue(issue, chunk_outputs)
 
         badge = Table([[Paragraph(severity.upper(), ParagraphStyle("badge_inner", parent=styles["badge"], textColor=sev_text))]], colWidths=[72])
         badge.setStyle(TableStyle([
@@ -386,6 +433,17 @@ def _build_csv(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
     writer.writerow(["Files Scanned", scan_data.get("files_scanned") or scan_data.get("files_analyzed") or 0])
     writer.writerow(["Total Vulnerabilities", scan_data.get("total_vulnerabilities") or scan_data.get("total_vulns") or len(vulnerabilities)])
     writer.writerow([])
+    writer.writerow(["Input And Corrected Code"])
+    writer.writerow(["File", "Start Line", "End Line", "Input Code", "Corrected Code"])
+    for chunk in scan_data.get("chunk_outputs") or []:
+        writer.writerow([
+            chunk.get("file_path") or "",
+            chunk.get("start_line") or "",
+            chunk.get("end_line") or "",
+            chunk.get("code") or "",
+            chunk.get("corrected_code") or "",
+        ])
+    writer.writerow([])
     writer.writerow(["Vulnerability Details"])
     writer.writerow([
         "Severity",
@@ -406,7 +464,7 @@ def _build_csv(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
             vuln.get("cwe_name") or vuln.get("type") or "",
             vuln.get("file_path") or "",
             vuln.get("line_number") or vuln.get("absolute_line") or "",
-            vuln.get("affected_code") or vuln.get("code_snippet") or "",
+            _affected_code_for_issue(vuln, scan_data.get("chunk_outputs") or []),
             vuln.get("description") or "",
             vuln.get("fix_suggestion") or "",
             vuln.get("function_name") or "",
