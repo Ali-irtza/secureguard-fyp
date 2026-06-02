@@ -101,16 +101,6 @@ def _report_lines(scan_data: Dict, vulnerabilities: List[Dict]) -> list[str]:
         f"Vulnerabilities: {scan_data.get('total_vulnerabilities') or scan_data.get('total_vulns') or len(vulnerabilities)}",
         "",
     ]
-    chunk_outputs = scan_data.get("chunk_outputs") or []
-    if chunk_outputs:
-        lines.append("Chunks:")
-        for chunk in chunk_outputs:
-            lines.append(
-                f"- Chunk {chunk.get('chunk_index')}: lines {chunk.get('start_line')}-{chunk.get('end_line')} "
-                f"with {len(chunk.get('vulnerabilities') or [])} issue(s)"
-            )
-        lines.append("")
-
     for index, vuln in enumerate(vulnerabilities, start=1):
         lines.extend(
             [
@@ -122,9 +112,6 @@ def _report_lines(scan_data: Dict, vulnerabilities: List[Dict]) -> list[str]:
                 "",
             ]
         )
-    corrected = scan_data.get("corrected_code") or ""
-    if corrected and corrected != "None":
-        lines.extend(["Corrected Code:", corrected[:4000]])
     return lines
 
 
@@ -378,16 +365,6 @@ def _build_simple_pdf(title: str, scan_data: Dict, vulnerabilities: List[Dict]) 
         ]
         story.extend([KeepTogether(card), Spacer(1, 14)])
 
-    corrected = scan_data.get("corrected_code") or ""
-    if corrected and corrected != "None":
-        story.extend([
-            PageBreak(),
-            Paragraph("Corrected Code", styles["section"]),
-            Paragraph(f"Full corrected version of {scan_data.get('file_name') or scan_data.get('project_name') or 'source file'}", styles["subtle"]),
-            Spacer(1, 10),
-            _build_code_table(corrected, 1, styles, dark=True),
-        ])
-
     def canvas_factory(*args, **kwargs):
         from reportlab.pdfgen import canvas as canvas_module
         return NumberedCanvas(canvas_module.Canvas(*args, **kwargs), report_name)
@@ -408,16 +385,6 @@ def _build_csv(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
     writer.writerow(["Risk Score", scan_data.get("overall_risk_score") or scan_data.get("risk_score") or 0])
     writer.writerow(["Files Scanned", scan_data.get("files_scanned") or scan_data.get("files_analyzed") or 0])
     writer.writerow(["Total Vulnerabilities", scan_data.get("total_vulnerabilities") or scan_data.get("total_vulns") or len(vulnerabilities)])
-    writer.writerow([])
-    writer.writerow(["Chunk Summary"])
-    writer.writerow(["Chunk", "Lines", "Issues", "Name"])
-    for chunk in scan_data.get("chunk_outputs") or []:
-        writer.writerow([
-            chunk.get("chunk_index", ""),
-            f"{chunk.get('start_line', '')}-{chunk.get('end_line', '')}",
-            len(chunk.get("vulnerabilities") or []),
-            chunk.get("chunk_name", ""),
-        ])
     writer.writerow([])
     writer.writerow(["Vulnerability Details"])
     writer.writerow([

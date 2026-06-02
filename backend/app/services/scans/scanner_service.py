@@ -14,6 +14,16 @@ from app.services.model_scanner.graph_runner import SyntaxValidationError, iter_
 GITHUB_API = "https://api.github.com"
 C_CPP_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx')
 
+
+def _safe_chunk_count(result: dict, source_code: str) -> int:
+    chunks_created = result.get("chunks_created")
+    if isinstance(chunks_created, int) and chunks_created > 0:
+        return chunks_created
+    chunk_outputs = result.get("chunk_outputs") or []
+    if chunk_outputs:
+        return len(chunk_outputs)
+    return max(1, source_code.count("\n") + 1)
+
 async def _get_token_for_team(team_id: str, supabase: Client) -> str:
     """Helper to get a fresh installation token for a team."""
     team_result = supabase.table("teams").select("github_installation_id").eq("id", team_id).single().execute()
@@ -181,17 +191,15 @@ async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
                 vuln["file_path"] = file_path
 
             all_vulnerabilities.extend(result["vulnerabilities"])
-            total_chunks += max(1, source_code.count("\n") + 1)
+            chunks_scanned = _safe_chunk_count(result, source_code)
+            total_chunks += chunks_scanned
             files_scanned.append({
                 "file_path": file_path,
-                "chunks_scanned": max(1, source_code.count("\n") + 1),
+                "chunks_scanned": chunks_scanned,
                 "vulnerabilities_found": len(result["vulnerabilities"]),
                 "risk_level": "Vulnerable" if result["vulnerabilities"] else "Safe",
-                "corrected_code": result.get("corrected_code", "None"),
                 "language": result.get("language", ""),
                 "static_findings": result.get("static_findings", ""),
-                "corrected_code_is_clean": result.get("corrected_code_is_clean", False),
-                "chunk_outputs": result.get("chunk_outputs", []),
             })
 
         except SyntaxValidationError as exc:
@@ -246,23 +254,19 @@ async def run_vulnerability_scanner(files_dict: Dict[str, str]) -> dict:
             for item in files_scanned
         ],
         "vulnerabilities": all_vulnerabilities,
-        "corrected_code": files_scanned[0]["corrected_code"] if files_scanned else "None",
+        "corrected_code": "None",
         "files": [
             {
                 "filename": item["file_path"],
                 "language": item.get("language", ""),
-                "corrected_code": item.get("corrected_code", "None"),
+                "corrected_code": "None",
                 "static_findings": item.get("static_findings", ""),
-                "corrected_code_is_clean": item.get("corrected_code_is_clean", False),
-                "chunk_outputs": item.get("chunk_outputs", []),
+                "corrected_code_is_clean": False,
+                "chunk_outputs": [],
             }
             for item in files_scanned
         ],
-        "chunk_outputs": [
-            {**chunk, "file_path": item["file_path"]}
-            for item in files_scanned
-            for chunk in item.get("chunk_outputs", [])
-        ],
+        "chunk_outputs": [],
     }
 
 
@@ -276,17 +280,15 @@ def build_scan_response_from_file_results(file_results: list[tuple[str, dict]]) 
             vuln["file_path"] = file_path
         all_vulnerabilities.extend(result["vulnerabilities"])
         chunk_outputs = result.get("chunk_outputs", [])
-        total_chunks += len(chunk_outputs)
+        chunks_scanned = len(chunk_outputs) or int(result.get("chunks_created") or 0)
+        total_chunks += chunks_scanned
         files_scanned.append({
             "file_path": file_path,
-            "chunks_scanned": len(chunk_outputs),
+            "chunks_scanned": chunks_scanned,
             "vulnerabilities_found": len(result["vulnerabilities"]),
             "risk_level": "Vulnerable" if result["vulnerabilities"] else "Safe",
-            "corrected_code": result.get("corrected_code", "None"),
             "language": result.get("language", ""),
             "static_findings": result.get("static_findings", ""),
-            "corrected_code_is_clean": result.get("corrected_code_is_clean", False),
-            "chunk_outputs": chunk_outputs,
         })
 
     severity_points = {"Critical": 10, "High": 7, "Medium": 4, "Low": 1}
@@ -319,23 +321,19 @@ def build_scan_response_from_file_results(file_results: list[tuple[str, dict]]) 
             for item in files_scanned
         ],
         "vulnerabilities": all_vulnerabilities,
-        "corrected_code": files_scanned[0]["corrected_code"] if files_scanned else "None",
+        "corrected_code": "None",
         "files": [
             {
                 "filename": item["file_path"],
                 "language": item.get("language", ""),
-                "corrected_code": item.get("corrected_code", "None"),
+                "corrected_code": "None",
                 "static_findings": item.get("static_findings", ""),
-                "corrected_code_is_clean": item.get("corrected_code_is_clean", False),
-                "chunk_outputs": item.get("chunk_outputs", []),
+                "corrected_code_is_clean": False,
+                "chunk_outputs": [],
             }
             for item in files_scanned
         ],
-        "chunk_outputs": [
-            {**chunk, "file_path": item["file_path"]}
-            for item in files_scanned
-            for chunk in item.get("chunk_outputs", [])
-        ],
+        "chunk_outputs": [],
     }
 
 

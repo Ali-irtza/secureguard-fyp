@@ -11,6 +11,24 @@ const LANGUAGE_BADGES = [
   { ext: ".zip", label: "ZIP", color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" },
 ];
 
+const hasSuspiciousFileName = (filename: string): boolean => {
+  const normalized = filename.replace(/\\/g, "/").trim();
+  const parts = normalized.split("/");
+  return (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    normalized.endsWith("/..") ||
+    normalized.startsWith("./") ||
+    normalized.includes("/./") ||
+    normalized.endsWith("/.") ||
+    parts.some((part) => part === "") ||
+    /^[a-zA-Z]:/.test(normalized) ||
+    /[\x00-\x1f]/.test(normalized)
+  );
+};
+
 interface FileUploadAreaProps {
   uploadedFiles: File[];
   isDragOver: boolean;
@@ -22,6 +40,12 @@ interface FileUploadAreaProps {
 }
 
 const validateFile = (file: File): boolean => {
+  if (hasSuspiciousFileName(file.name)) {
+    toast.error(`Suspicious file name: ${file.name || "unnamed file"}`, {
+      description: "Rename the file and upload it again.",
+    });
+    return false;
+  }
   const extension = "." + file.name.split(".").pop()?.toLowerCase();
   if (!SUPPORTED_EXTENSIONS.includes(extension)) {
     toast.error(`Unsupported file type: ${extension}`, {

@@ -23,10 +23,40 @@ from app.services.scans.scan_storage_service import (
     delete_report_scan_for_user,
 )
 from app.services.scans.report_storage_service import load_pdf_from_zip, load_report_from_zip
+from app.services.project_files.file_service import save_scanned_sources_zip
 
 router = APIRouter()
 
 C_CPP_EXTENSIONS = {".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx"}
+NO_SOURCE_FILES_MESSAGE = (
+    "This ZIP does not contain any C or C++ source files. "
+    "Please upload a ZIP with .c, .cpp, .h, .hpp, .cc, .cxx, or .hxx files."
+)
+
+
+def _suspicious_filename_message(filename: str, *, in_zip: bool = False) -> str:
+    location = " inside the ZIP" if in_zip else ""
+    upload_target = " and upload the ZIP again" if in_zip else " and upload it again"
+    return f"Suspicious file name found{location}: {filename}. Rename the file{upload_target}."
+
+
+def _normalize_safe_upload_path(filename: str) -> str:
+    normalized = (filename or "").replace("\\", "/").strip().lstrip("/")
+    parts = normalized.split("/")
+    if (
+        not normalized
+        or normalized.startswith("../")
+        or "/../" in normalized
+        or normalized.endswith("/..")
+        or normalized.startswith("./")
+        or "/./" in normalized
+        or normalized.endswith("/.")
+        or any(part == "" for part in parts)
+        or (len(normalized) > 1 and normalized[1] == ":")
+        or any(ord(char) < 32 for char in normalized)
+    ):
+        raise ValueError(filename)
+    return normalized
 
 
 async def _extract_upload_files(files: list[UploadFile]) -> dict[str, str]:
@@ -34,9 +64,14 @@ async def _extract_upload_files(files: list[UploadFile]) -> dict[str, str]:
     rejected: list[str] = []
 
     for upload in files:
-        filename = os.path.basename(upload.filename or "").strip()
-        if not filename:
-            continue
+        raw_filename = (upload.filename or "").strip()
+        try:
+            filename = _normalize_safe_upload_path(raw_filename)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=_suspicious_filename_message(raw_filename or "unnamed file"),
+            )
         content = await upload.read()
         ext = os.path.splitext(filename)[1].lower()
 
@@ -46,12 +81,24 @@ async def _extract_upload_files(files: list[UploadFile]) -> dict[str, str]:
                     for entry in archive.infolist():
                         if entry.is_dir():
                             continue
-                        inner_name = entry.filename.replace("\\", "/")
+                        try:
+                            inner_name = _normalize_safe_upload_path(entry.filename)
+                        except ValueError:
+                            raise HTTPException(
+                                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=_suspicious_filename_message(entry.filename, in_zip=True),
+                            )
                         inner_ext = os.path.splitext(inner_name)[1].lower()
                         if inner_ext not in C_CPP_EXTENSIONS:
                             rejected.append(inner_name)
                             continue
-                        extracted[inner_name] = archive.read(entry).decode("utf-8", errors="replace")
+                        key = inner_name
+                        duplicate_index = 2
+                        while key in extracted:
+                            stem, suffix = os.path.splitext(inner_name)
+                            key = f"{stem}-{duplicate_index}{suffix}"
+                            duplicate_index += 1
+                        extracted[key] = archive.read(entry).decode("utf-8", errors="replace")
             except zipfile.BadZipFile:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -67,7 +114,7 @@ async def _extract_upload_files(files: list[UploadFile]) -> dict[str, str]:
     if not extracted:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="No C or C++ source files were found. Upload .c, .h, .cpp, .cc, .cxx, .hpp, .hxx, or a ZIP containing those files.",
+            detail=NO_SOURCE_FILES_MESSAGE,
         )
 
     return extracted
@@ -158,7 +205,15 @@ async def scan_uploaded_file(
     Scans a single uploaded file and saves results to Supabase.
     """
     start_time = time.time()
-    files_dict = {body.filename: body.source_code}
+    try:
+        filename = _normalize_safe_upload_path(body.filename)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_suspicious_filename_message(body.filename or "unnamed file"),
+        )
+    files_dict = {filename: body.source_code}
+    save_scanned_sources_zip(body.project_id, current_user.id, files_dict, supabase)
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
     except HTTPException as exc:
@@ -169,7 +224,7 @@ async def scan_uploaded_file(
             supabase,
             current_user.id,
             body.project_id,
-            {"project_name": body.project_name, "scan_type": "upload", "file_name": body.filename, "duration_secs": duration},
+            {"project_name": body.project_name, "scan_type": "upload", "file_name": filename, "duration_secs": duration},
             str(exc.detail),
         )
         raise
@@ -179,7 +234,7 @@ async def scan_uploaded_file(
             supabase,
             current_user.id,
             body.project_id,
-            {"project_name": body.project_name, "scan_type": "upload", "file_name": body.filename, "duration_secs": duration},
+            {"project_name": body.project_name, "scan_type": "upload", "file_name": filename, "duration_secs": duration},
             str(exc),
         )
         raise
@@ -191,7 +246,7 @@ async def scan_uploaded_file(
             **result,
             "project_name": body.project_name,
             "scan_type": "upload",
-            "file_name": body.filename,
+            "file_name": filename,
             "duration_secs": duration,
         }
         scan_id = create_scan_record(supabase, current_user.id, body.project_id, scan_data)
@@ -219,6 +274,7 @@ async def scan_uploaded_files(
     """
     start_time = time.time()
     files_dict = await _extract_upload_files(files)
+    save_scanned_sources_zip(project_id, current_user.id, files_dict, supabase)
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
     except HTTPException as exc:
@@ -278,6 +334,7 @@ async def scan_uploaded_files_stream(
     """
     start_time = time.time()
     files_dict = await _extract_upload_files(files)
+    save_scanned_sources_zip(project_id, current_user.id, files_dict, supabase)
 
     def line(event: dict) -> str:
         return json.dumps(event, ensure_ascii=False) + "\n"

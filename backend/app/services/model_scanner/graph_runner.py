@@ -37,6 +37,7 @@ class AnalyzerState(TypedDict, total=False):
 
 MODEL_NAME = getattr(settings, "security_model_name", "quen_fine_tuned")
 MODEL_PASS_TIMEOUT_SECONDS = int(getattr(settings, "security_model_timeout_seconds", 300))
+GROQ_RATE_LIMIT_RETRY_SECONDS = 120
 MAX_CHUNK_LINES = 70
 CACHE_ROOT = Path(tempfile.gettempdir()) / "secureguard_chunks"
 
@@ -446,33 +447,46 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     groq_key = getattr(settings, "groq_api_key", "") or ""
     if groq_base and groq_key:
         groq_url = f"{groq_base.rstrip('/')}/chat/completions"
-        groq_model = getattr(settings, "groq_model_name", "openai/gpt-oss-120b") or "openai/gpt-oss-120b"
+        groq_model = getattr(settings, "groq_model_name", "meta-llama/llama-4-scout-17b-16e-instruct") or "meta-llama/llama-4-scout-17b-16e-instruct"
         headers = {"Authorization": f"Bearer {groq_key}"}
         groq_payload = {**payload, "model": groq_model}
         groq_payload.pop("repeat_penalty", None)
-        try:
-            started_at = time.monotonic()
-            response = requests.post(groq_url, json=groq_payload, timeout=(10, MODEL_PASS_TIMEOUT_SECONDS), headers=headers)
-            if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
+        for attempt in range(2):
+            try:
+                started_at = time.monotonic()
+                response = requests.post(groq_url, json=groq_payload, timeout=(10, MODEL_PASS_TIMEOUT_SECONDS), headers=headers)
+                if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
+                    print(f"[model_scanner] groq timeout: model={groq_model}")
+                    return "", "Request timeout exceeded. Please try again."
+                if response.status_code == 429 and attempt == 0:
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        retry_seconds = max(GROQ_RATE_LIMIT_RETRY_SECONDS, int(float(retry_after or 0)))
+                    except ValueError:
+                        retry_seconds = GROQ_RATE_LIMIT_RETRY_SECONDS
+                    print(
+                        f"[model_scanner] groq rate limit: waiting {retry_seconds}s before retry "
+                        f"model={groq_model} body={response.text[:300]}"
+                    )
+                    time.sleep(retry_seconds)
+                    continue
+                if response.status_code != 200:
+                    print(f"[model_scanner] groq error: status={response.status_code} model={groq_model} body={response.text[:300]}")
+                    return "", f"GROQ API error: {response.status_code} - {response.text}"
+                data = response.json()
+                choices = data.get("choices") or []
+                content = choices[0].get("message", {}).get("content", "") if choices else ""
+                if content:
+                    print(f"[model_scanner] groq success: model={groq_model}")
+                    return content, ""
+                print(f"[model_scanner] groq empty response: model={groq_model}")
+                return "", "GROQ API returned an empty response."
+            except requests.Timeout:
                 print(f"[model_scanner] groq timeout: model={groq_model}")
                 return "", "Request timeout exceeded. Please try again."
-            if response.status_code != 200:
-                print(f"[model_scanner] groq error: status={response.status_code} model={groq_model} body={response.text[:300]}")
-                return "", f"GROQ API error: {response.status_code} - {response.text}"
-            data = response.json()
-            choices = data.get("choices") or []
-            content = choices[0].get("message", {}).get("content", "") if choices else ""
-            if content:
-                print(f"[model_scanner] groq success: model={groq_model}")
-                return content, ""
-            print(f"[model_scanner] groq empty response: model={groq_model}")
-            return "", "GROQ API returned an empty response."
-        except requests.Timeout:
-            print(f"[model_scanner] groq timeout: model={groq_model}")
-            return "", "Request timeout exceeded. Please try again."
-        except Exception as exc:
-            print(f"[model_scanner] groq exception: {exc}")
-            return "", f"GROQ request failed: {exc}"
+            except Exception as exc:
+                print(f"[model_scanner] groq exception: {exc}")
+                return "", f"GROQ request failed: {exc}"
 
     # No fallback available — return primary error
     return "", primary_error
@@ -866,7 +880,7 @@ def iter_analysis_events(file_name: str, source_code: str):
                 "event": "chunk_started",
                 "file_path": file_name,
                 "chunk_index": chunk["index"],
-                "message": f"Reviewing chunk {chunk['index']} of {len(chunks)}",
+                "message": f"Reviewing {file_name}: chunk {chunk['index']} of {len(chunks)}",
             }
             chunk_vulns, summary = analyze_chunk_with_model(state, chunk, len(chunks))
             unique_chunk_vulns = []

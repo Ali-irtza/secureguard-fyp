@@ -2,6 +2,7 @@ import os
 import base64
 import io
 import zipfile
+import uuid
 from fastapi import HTTPException, UploadFile, status
 from supabase import Client
 from typing import List
@@ -120,6 +121,17 @@ def _storage_path(project_id: str, filename: str) -> str:
     return f"{project_id}/{filename}"
 
 
+def _scan_zip_storage_path(project_id: str) -> str:
+    """Returns a storage path for a scan source bundle."""
+    return f"{project_id}/scan-sources/{uuid.uuid4().hex}.zip"
+
+
+def _source_filename(file_path: str) -> str:
+    """Returns a safe source name for project_files.filename."""
+    normalized = file_path.replace("\\", "/").strip().strip("/")
+    return normalized or os.path.basename(file_path) or uuid.uuid4().hex
+
+
 def _make_signed_url(storage_path: str, supabase: Client) -> str:
     """Generates a 1-hour signed download URL for a stored file."""
     signed = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
@@ -144,6 +156,14 @@ def _upload_bytes(
         "x-upsert": "true",
     }
     supabase.storage.from_(STORAGE_BUCKET).upload(storage_path, content, file_options=file_options)
+
+
+def _build_source_zip(files_dict: dict[str, str]) -> bytes:
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path, source_code in files_dict.items():
+            archive.writestr(file_path.replace("\\", "/").strip().lstrip("/"), source_code)
+    return zip_buffer.getvalue()
 
 
 def _upsert_db_record(
@@ -297,6 +317,50 @@ def list_project_files(
     ]
 
     return ProjectFileListResponse(files=files)
+
+
+def save_scanned_sources_zip(
+    project_id: str,
+    user_id: str,
+    files_dict: dict[str, str],
+    supabase: Client,
+) -> list[dict]:
+    """
+    Store the exact scanned C/C++ sources as a single ZIP object.
+    Each scanned source gets a project_files row with its original extension,
+    and all rows point to the same storage_path.
+    """
+    if not project_id or not files_dict:
+        return []
+
+    _require_project_access(project_id, user_id, supabase)
+    zip_bytes = _build_source_zip(files_dict)
+    storage_path = _scan_zip_storage_path(project_id)
+    _upload_bytes(storage_path, zip_bytes, "application/zip", supabase)
+
+    rows: list[dict] = []
+    used_names: set[str] = set()
+    for file_path in files_dict.keys():
+        filename = _source_filename(file_path)
+        unique_filename = filename
+        duplicate_index = 2
+        while unique_filename in used_names:
+            unique_filename = f"{filename}-{duplicate_index}"
+            duplicate_index += 1
+        used_names.add(unique_filename)
+        rows.append(
+            _upsert_db_record(
+                project_id=project_id,
+                user_id=user_id,
+                filename=unique_filename,
+                storage_path=storage_path,
+                size=len(zip_bytes),
+                content_type="application/zip",
+                source=FILE_SOURCE_LOCAL,
+                supabase=supabase,
+            )
+        )
+    return rows
 
 
 async def upload_project_file(

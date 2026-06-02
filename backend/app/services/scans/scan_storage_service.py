@@ -61,8 +61,8 @@ def create_scan_record(
                     "duration_secs": scan_data.get("duration_secs", 0),
                     "report_storage_path": scan_data.get("report_storage_path"),
                     "report_expires_at": scan_data.get("report_expires_at"),
-                    "corrected_code": scan_data.get("corrected_code"),
-                    "chunk_outputs": scan_data.get("chunk_outputs", []),
+                    "corrected_code": None,
+                    "chunk_outputs": [],
                     "started_at": scan_data.get(
                         "started_at", datetime.now(timezone.utc).isoformat()
                     ),

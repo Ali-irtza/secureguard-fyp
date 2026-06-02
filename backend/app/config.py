@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     security_model_coverage_threshold: float = 80.0
     # Optional Groq fallback
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    groq_model_name: str = "openai/gpt-oss-120b"
+    groq_model_name: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     groq_api_key: str = ""
 
     @property

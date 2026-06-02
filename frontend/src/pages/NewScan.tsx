@@ -89,6 +89,31 @@ const splitSourceLines = (source: string): string[] => {
   return lines.length > 0 ? lines : [""];
 };
 
+const ZIP_NO_SOURCE_MESSAGE =
+  "This ZIP does not contain any C or C++ source files. Please upload a ZIP with .c, .cpp, .h, .hpp, .cc, .cxx, or .hxx files.";
+
+const friendlyScanError = (message: string): string => {
+  if (message.toLowerCase().includes("does not contain any c or c++ source files")) {
+    return ZIP_NO_SOURCE_MESSAGE;
+  }
+  if (message.toLowerCase().includes("suspicious file name found")) {
+    return message;
+  }
+  return message;
+};
+
+const isRenameFileError = (message: string): boolean =>
+  message.toLowerCase().includes("suspicious file name found");
+
+const getChunkReportTitle = (chunks: ChunkOutput[]): string => {
+  const zipFolderName = chunks
+    .map((chunk) => chunk.file_path ?? "")
+    .find((filePath) => filePath.includes("/"))
+    ?.split("/")[0]
+    ?.trim();
+  return zipFolderName || "Source Files";
+};
+
 const parseThinkingStep = (step: string) => {
   const match = step.match(/^\[(\d{2}:\d{2})\]\s+([^:]+):\s+(.*)$/);
   if (!match) {
@@ -171,8 +196,8 @@ const NewScan = () => {
   const [projectFilesError, setProjectFilesError] = useState<string>("");
   // Set of file IDs that are checked for scanning
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
-  // Per-uploaded-file "save to project" toggle: index → boolean
   const [saveToProject, setSaveToProject] = useState<Record<number, boolean>>({});
+  // Per-uploaded-file "save to project" toggle: index → boolean
 
   // Fetch projects for the selector
   const { data: projects = [], refetch: refetchProjects } = useQuery({
@@ -469,7 +494,7 @@ const NewScan = () => {
             scan_id: prev?.scan_id ?? null,
           };
         });
-        addLog(`Chunk ${event.chunk.chunk_index} streamed with ${event.chunk.vulnerabilities.length} issue${event.chunk.vulnerabilities.length === 1 ? "" : "s"}`, event.chunk.vulnerabilities.length ? "warning" : "success");
+        addLog(`${event.chunk.file_path ?? event.file_path}: chunk ${event.chunk.chunk_index} streamed with ${event.chunk.vulnerabilities.length} issue${event.chunk.vulnerabilities.length === 1 ? "" : "s"}`, event.chunk.vulnerabilities.length ? "warning" : "success");
         break;
       case "correction_started":
         addLog(event.message, "info");
@@ -488,13 +513,16 @@ const NewScan = () => {
               : chunk
           ),
         } : prev);
-        addLog(`Corrected code streamed for chunk ${event.chunk_index}`, "success");
+        addLog(`Corrected code streamed for ${event.file_path}: chunk ${event.chunk_index}`, "success");
         break;
       case "scan_result":
         {
           const sanitizedResult = sanitizeScanResultChunkRanges(event.result);
           setScanResult(sanitizedResult);
-          setStreamingChunks(sanitizedResult.chunk_outputs ?? []);
+          const finalChunks = sanitizedResult.chunk_outputs ?? [];
+          if (finalChunks.length > 0) {
+            setStreamingChunks(finalChunks);
+          }
         }
         addLog("Final report assembled", "success");
         break;
@@ -611,7 +639,7 @@ const NewScan = () => {
     // ── UPLOAD MODE ──────────────────────────────────────────────────────────
     if (activeTab === "upload") {
       // Step 1: Upload files marked "save to project" before scanning
-      if (resolvedProjectId && resolvedProjectId !== "__new__") {
+      if (false && resolvedProjectId && resolvedProjectId !== "__new__") {
         for (let i = 0; i < uploadedFiles.length; i++) {
           if (saveToProject[i] !== false) {
             // default is true when a real project is selected
@@ -688,7 +716,14 @@ const NewScan = () => {
       addLog("Collecting static evidence...", "info");
       await new Promise(r => setTimeout(r, 600));
       setCurrentPhase(2);
-      addLog(`Reviewing ${filesToScan.length} file${filesToScan.length > 1 ? "s" : ""} for vulnerabilities...`, "info");
+      const zipUploadCount = uploadedFiles.filter((file) => file.name.toLowerCase().endsWith(".zip")).length;
+      const pendingUploadCount = filesToScan.length + zipUploadCount;
+      addLog(
+        zipUploadCount > 0
+          ? `Reviewing ${pendingUploadCount} upload${pendingUploadCount === 1 ? "" : "s"}; ZIP archives will be filtered on the backend.`
+          : `Reviewing ${filesToScan.length} file${filesToScan.length === 1 ? "" : "s"} for vulnerabilities...`,
+        "info"
+      );
 
       const startTime = Date.now();
       const timerInterval = setInterval(() => {
@@ -773,12 +808,10 @@ const NewScan = () => {
             (chunk) =>
               `Chunk ${chunk.chunk_index}: ${chunk.chunk_name} lines ${chunk.start_line}-${chunk.end_line} reviewed with ${chunk.vulnerabilities.length} issue${chunk.vulnerabilities.length === 1 ? "" : "s"}.`
           ),
-          "Corrected code prepared",
           "Report assembled",
         ]);
         setSelectedVulnerability(combinedResult.vulnerabilities[0] ?? null);
         setCurrentPhase(3);
-        addLog("Secure fix draft prepared", "success");
         setCurrentPhase(4);
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
@@ -793,8 +826,9 @@ const NewScan = () => {
           await deleteProject(resolvedProjectId).catch(() => undefined);
           await refetchProjects();
         }
-        setScanError(err.message || "Scan failed");
-        addLog(`Error: ${err.message}`, "warning");
+        const message = friendlyScanError(err.message || "Scan failed");
+        setScanError(message);
+        addLog(`Error: ${message}`, "warning");
       }
 
       setIsScanning(false);
@@ -852,11 +886,9 @@ const NewScan = () => {
             (chunk) =>
               `Chunk ${chunk.chunk_index}: ${chunk.chunk_name} lines ${chunk.start_line}-${chunk.end_line} reviewed with ${chunk.vulnerabilities.length} issue${chunk.vulnerabilities.length === 1 ? "" : "s"}.`
           ),
-          "Corrected code prepared",
           "Report assembled",
         ]);
         setCurrentPhase(3);
-        addLog("Secure fix draft prepared", "success");
         setCurrentPhase(4);
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
@@ -870,8 +902,9 @@ const NewScan = () => {
           await deleteProject(resolvedProjectId).catch(() => undefined);
           await refetchProjects();
         }
-        setScanError(err.message || "Scan failed");
-        addLog(`Error: ${err.message}`, "warning");
+        const message = friendlyScanError(err.message || "Scan failed");
+        setScanError(message);
+        addLog(`Error: ${message}`, "warning");
       }
 
       setIsScanning(false);
@@ -1348,11 +1381,15 @@ const NewScan = () => {
                         <div className="space-y-2">
                           <h2 className="text-lg font-semibold text-foreground">Analysis could not complete</h2>
                           <p className="text-sm text-muted-foreground">
-                            The security model did not return a valid report, so no analyzer-only findings were shown.
+                            {scanError === ZIP_NO_SOURCE_MESSAGE
+                              ? "Upload a ZIP that includes at least one C or C++ source file. Other file types inside the ZIP are ignored automatically."
+                              : isRenameFileError(scanError)
+                              ? "Rename the flagged file, rebuild the ZIP if needed, and upload it again."
+                              : "The security model did not return a valid report, so no analyzer-only findings were shown."}
                           </p>
-                          <pre className="mt-3 rounded-md bg-background/80 border border-border/50 p-3 text-xs text-destructive overflow-x-auto">
+                          <div className="mt-3 rounded-md bg-background/80 border border-border/50 p-3 text-sm text-foreground">
                             {scanError}
-                          </pre>
+                          </div>
                         </div>
                       </div>
                     </Card>
@@ -1384,7 +1421,9 @@ const NewScan = () => {
                     {((streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? []).length > 0) && (
                       <Card className="bg-card/70 border-border/50 overflow-hidden">
                         <div className="p-4 border-b border-border/50">
-                          <h2 className="text-lg font-semibold text-foreground">Chunk Report</h2>
+                          <h2 className="text-lg font-semibold text-foreground">
+                            {getChunkReportTitle(streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? [])}
+                          </h2>
                           <p className="text-sm text-muted-foreground mt-1">
                             Expand a chunk to review its code, vulnerabilities, and corrected code.
                           </p>
@@ -1394,7 +1433,7 @@ const NewScan = () => {
                             <AccordionItem key={`${chunk.file_path}-${chunk.chunk_index}`} value={`${chunk.file_path}-${chunk.chunk_index}`} className="border-0 px-4">
                               <AccordionTrigger className="hover:no-underline">
                                 <div className="flex flex-wrap items-center gap-2 text-left">
-                                  <Badge variant="outline">Chunk {chunk.chunk_index}</Badge>
+                                  <Badge variant="outline">{chunk.file_path || chunk.chunk_name || `Chunk ${chunk.chunk_index}`}</Badge>
                                   <span className="font-medium text-foreground">
                                     Lines {chunk.start_line} to {chunk.end_line}
                                   </span>
@@ -2035,7 +2074,7 @@ const NewScan = () => {
                 />
 
                 {/* "Save to project" toggles — show whenever a project is selected or being created */}
-                {selectedProjectId &&
+                {false && selectedProjectId &&
                   uploadedFiles.length > 0 && (
                     <div className="mt-4 space-y-2">
                       {uploadedFiles.map((file, index) => {
