@@ -183,6 +183,12 @@ async def process_github_callback(installation_id: int | None, state: str | None
     if not state or not installation_id:
         return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=missing_params")
 
+    # Route project callbacks — state starts with "project:" when initiated
+    # from a personal project's GitHub authorize flow.
+    if state.startswith("project:"):
+        from app.services.projects.project_github_service import process_github_callback as project_callback
+        return await project_callback(installation_id, state, supabase)
+
     try:
         team_id, csrf_token = state.split(":", 1)
     except ValueError:
