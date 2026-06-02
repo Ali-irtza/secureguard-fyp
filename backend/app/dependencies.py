@@ -1,3 +1,6 @@
+import httpx
+import httpcore
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
@@ -13,6 +16,33 @@ from app.config import settings
 # NEVER expose the service_role key to the frontend.
 # ---------------------------------------------------------------------------
 _supabase_client: Client | None = None
+SUPABASE_TRANSPORT_EXCEPTIONS = (
+    httpx.RemoteProtocolError,
+    httpcore.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.TimeoutException,
+)
+
+
+def _create_supabase_client() -> Client:
+    """Create a shared Supabase client with an HTTP/1.1 transport when available.
+
+    This reduces the chance of HTTP/2 stream termination errors from
+    Supabase/PostgREST and keeps one connection pool for the whole app.
+    """
+    try:
+        http_client = httpx.Client(http2=False, timeout=httpx.Timeout(30.0, connect=10.0))
+        return create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key,
+            http_client=http_client,
+        )
+    except TypeError:
+        return create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key,
+        )
 
 def get_supabase() -> Client:
     """
@@ -21,10 +51,7 @@ def get_supabase() -> Client:
     """
     global _supabase_client
     if _supabase_client is None:
-        _supabase_client = create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key,
-        )
+        _supabase_client = _create_supabase_client()
     return _supabase_client
 
 
@@ -70,6 +97,11 @@ async def get_current_user(
 
         return response.user
 
+    except SUPABASE_TRANSPORT_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service temporarily unavailable. Please retry.",
+        ) from exc
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

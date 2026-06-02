@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     security_model_name: str = "quen_fine_tuned"
     security_model_timeout_seconds: int = 300
     security_model_coverage_threshold: float = 80.0
+    # Optional Groq fallback
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model_name: str = "openai/gpt-oss-120b"
+    groq_api_key: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:

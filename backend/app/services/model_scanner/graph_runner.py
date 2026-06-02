@@ -400,8 +400,6 @@ def coverage(findings: str, vulnerabilities: list[dict]) -> tuple[float, list[st
 
 
 def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
-    if not _chat_url():
-        return "", "Security model endpoint is not configured."
     payload = {
         "model": MODEL_NAME,
         "messages": [
@@ -414,19 +412,70 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
         "max_tokens": 2048,
         "stream": False,
     }
-    try:
-        started_at = time.monotonic()
-        response = requests.post(_chat_url(), json=payload, timeout=(10, MODEL_PASS_TIMEOUT_SECONDS))
-        if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
+
+    # Try primary configured model endpoint first
+    primary_url = _chat_url()
+    primary_error = "Security model endpoint is not configured."
+    if primary_url:
+        try:
+            started_at = time.monotonic()
+            response = requests.post(primary_url, json=payload, timeout=(10, MODEL_PASS_TIMEOUT_SECONDS))
+            if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
+                primary_error = "Request timeout exceeded. Please try again."
+                print(f"[model_scanner] primary endpoint timeout: {primary_url}")
+            elif response.status_code != 200:
+                primary_error = f"Model API error: {response.status_code} - {response.text}"
+                print(f"[model_scanner] primary endpoint error: status={response.status_code} url={primary_url}")
+            else:
+                data = response.json()
+                choices = data.get("choices") or []
+                content = choices[0].get("message", {}).get("content", "") if choices else ""
+                if content:
+                    return content, ""
+                primary_error = "Security model returned an empty response."
+                print(f"[model_scanner] primary endpoint empty response: url={primary_url}")
+        except requests.Timeout:
+            primary_error = "Request timeout exceeded. Please try again."
+            print(f"[model_scanner] primary endpoint timeout: {primary_url}")
+        except Exception as exc:
+            primary_error = f"Model request failed: {exc}"
+            print(f"[model_scanner] primary endpoint exception: {exc}")
+
+    # Primary failed — attempt Groq fallback if configured
+    groq_base = getattr(settings, "groq_base_url", "") or ""
+    groq_key = getattr(settings, "groq_api_key", "") or ""
+    if groq_base and groq_key:
+        groq_url = f"{groq_base.rstrip('/')}/chat/completions"
+        groq_model = getattr(settings, "groq_model_name", "openai/gpt-oss-120b") or "openai/gpt-oss-120b"
+        headers = {"Authorization": f"Bearer {groq_key}"}
+        groq_payload = {**payload, "model": groq_model}
+        groq_payload.pop("repeat_penalty", None)
+        try:
+            started_at = time.monotonic()
+            response = requests.post(groq_url, json=groq_payload, timeout=(10, MODEL_PASS_TIMEOUT_SECONDS), headers=headers)
+            if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
+                print(f"[model_scanner] groq timeout: model={groq_model}")
+                return "", "Request timeout exceeded. Please try again."
+            if response.status_code != 200:
+                print(f"[model_scanner] groq error: status={response.status_code} model={groq_model} body={response.text[:300]}")
+                return "", f"GROQ API error: {response.status_code} - {response.text}"
+            data = response.json()
+            choices = data.get("choices") or []
+            content = choices[0].get("message", {}).get("content", "") if choices else ""
+            if content:
+                print(f"[model_scanner] groq success: model={groq_model}")
+                return content, ""
+            print(f"[model_scanner] groq empty response: model={groq_model}")
+            return "", "GROQ API returned an empty response."
+        except requests.Timeout:
+            print(f"[model_scanner] groq timeout: model={groq_model}")
             return "", "Request timeout exceeded. Please try again."
-        if response.status_code != 200:
-            return "", f"Model API error: {response.status_code} - {response.text}"
-        data = response.json()
-        return data["choices"][0]["message"]["content"], ""
-    except requests.Timeout:
-        return "", "Request timeout exceeded. Please try again."
-    except Exception as exc:
-        return "", f"Model request failed: {exc}"
+        except Exception as exc:
+            print(f"[model_scanner] groq exception: {exc}")
+            return "", f"GROQ request failed: {exc}"
+
+    # No fallback available — return primary error
+    return "", primary_error
 
 
 def analyze_chunk_with_model(state: AnalyzerState, chunk: dict, total_chunks: int) -> tuple[list[dict], str]:

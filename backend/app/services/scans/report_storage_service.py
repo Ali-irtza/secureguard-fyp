@@ -2,6 +2,8 @@ import io
 import csv
 import html
 import zipfile
+import random
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -22,10 +24,38 @@ from reportlab.platypus import (
     TableStyle,
 )
 from supabase import Client
+import httpcore
+import httpx
 
 
 REPORT_BUCKET = "scan-reports"
 REPORT_TTL_DAYS = 5
+
+RETRYABLE_SUPABASE_EXCEPTIONS = (
+    httpx.RemoteProtocolError,
+    httpcore.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.TimeoutException,
+)
+
+
+def _retry_supabase_request(operation_name: str, action):
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            return action()
+        except RETRYABLE_SUPABASE_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt == 2:
+                print(f"[reports] {operation_name} failed after retries: {exc}")
+                raise
+            delay = 0.35 * (2 ** attempt) + random.uniform(0.0, 0.15)
+            print(f"[reports] {operation_name} retry {attempt + 1}/3 after {exc.__class__.__name__}")
+            time.sleep(delay)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"{operation_name} failed without raising an exception")
 
 FONT_BODY = "Helvetica"
 FONT_BOLD = "Helvetica-Bold"
@@ -476,17 +506,23 @@ def create_zipped_report(
 
 def cleanup_expired_reports(supabase: Client) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    result = (
-        supabase.table("reports")
-        .select("id,file_path")
-        .lt("expires_at", now)
-        .execute()
+    result = _retry_supabase_request(
+        "cleanup_expired_reports.select_expired",
+        lambda: (
+            supabase.table("reports")
+            .select("id,file_path")
+            .lt("expires_at", now)
+            .execute()
+        ),
     )
     paths = [row["file_path"] for row in result.data or [] if row.get("file_path")]
     if paths:
         supabase.storage.from_(REPORT_BUCKET).remove(paths)
         for row in result.data:
-            supabase.table("reports").update({"file_path": None, "status": "failed"}).eq("id", row["id"]).execute()
+            _retry_supabase_request(
+                "cleanup_expired_reports.update_failed",
+                lambda row_id=row["id"]: supabase.table("reports").update({"file_path": None, "status": "failed"}).eq("id", row_id).execute(),
+            )
 
 
 def load_pdf_from_zip(supabase: Client, storage_path: str) -> bytes:
