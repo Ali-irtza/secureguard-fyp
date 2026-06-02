@@ -173,6 +173,13 @@ def update_project(
         updates["type"] = body.type
     if body.team_id is not None:
         updates["team_id"] = body.team_id
+    if body.github_repo is not None:
+        # Empty string signals a disconnect — store NULL + clear branches
+        if body.github_repo.strip() == "":
+            updates["github_repo"] = None
+            updates["github_branches"] = []
+        else:
+            updates["github_repo"] = body.github_repo
 
     if not updates:
         raise HTTPException(
