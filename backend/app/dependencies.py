@@ -4,6 +4,8 @@ import httpcore
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
+from postgrest import SyncPostgrestClient
+from postgrest.base_request_builder import SyncClient as PostgrestSyncClient
 from app.config import settings
 
 # ---------------------------------------------------------------------------
@@ -25,24 +27,45 @@ SUPABASE_TRANSPORT_EXCEPTIONS = (
 )
 
 
-def _create_supabase_client() -> Client:
-    """Create a shared Supabase client with an HTTP/1.1 transport when available.
+class Http1PostgrestClient(SyncPostgrestClient):
+    """PostgREST client that avoids flaky Supabase HTTP/2 stream resets."""
 
-    This reduces the chance of HTTP/2 stream termination errors from
-    Supabase/PostgREST and keeps one connection pool for the whole app.
+    def create_session(
+        self,
+        base_url: str,
+        headers: dict[str, str],
+        timeout: int | float | httpx.Timeout,
+        verify: bool = True,
+        proxy: str | None = None,
+    ) -> PostgrestSyncClient:
+        return PostgrestSyncClient(
+            base_url=base_url,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            proxy=proxy,
+            follow_redirects=True,
+            http2=False,
+        )
+
+
+def _create_supabase_client() -> Client:
+    """Create a shared Supabase client with an HTTP/1.1 PostgREST transport.
+
+    postgrest-py 0.18 hardcodes http2=True, which can surface as
+    httpx.RemoteProtocolError when Supabase closes an HTTP/2 stream.
     """
-    try:
-        http_client = httpx.Client(http2=False, timeout=httpx.Timeout(30.0, connect=10.0))
-        return create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key,
-            http_client=http_client,
-        )
-    except TypeError:
-        return create_client(
-            settings.supabase_url,
-            settings.supabase_service_role_key,
-        )
+    client = create_client(
+        settings.supabase_url,
+        settings.supabase_service_role_key,
+    )
+    client._postgrest = Http1PostgrestClient(
+        client.rest_url,
+        headers=client.options.headers,
+        schema=client.options.schema,
+        timeout=client.options.postgrest_client_timeout,
+    )
+    return client
 
 def get_supabase() -> Client:
     """
