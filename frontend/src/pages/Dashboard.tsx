@@ -7,6 +7,8 @@ import MetricsRow from "@/components/dashboard/MetricsRow";
 import EmptyState from "@/components/dashboard/EmptyState";
 import RecentScansTable, { Scan } from "@/components/dashboard/RecentScansTable";
 import VulnerabilityChart from "@/components/dashboard/VulnerabilityChart";
+import VulnerabilityBarChart from "@/components/dashboard/VulnerabilityBarChart";
+import VulnerabilityPieChart from "@/components/dashboard/VulnerabilityPieChart";
 import CriticalAlerts from "@/components/dashboard/CriticalAlerts";
 import TeamViewToggle from "@/components/dashboard/TeamViewToggle";
 import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
@@ -254,11 +256,16 @@ const Dashboard = () => {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left Column - 2/3 width */}
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 space-y-6">
               <RecentScansTable
                 scans={getScans()}
                 userRole={isTeamView ? userRole : undefined}
               />
+              {/* Bar Chart and Pie Chart */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <VulnerabilityBarChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
+                <VulnerabilityPieChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
+              </div>
             </div>
 
             {/* Right Column - 1/3 width */}
