@@ -84,7 +84,7 @@ interface CodeLine {
 type ThinkingEventType = "info" | "warning" | "error" | "success";
 
 const splitSourceLines = (source: string): string[] => {
-  const lines = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const lines = source.replace(/\r+\n/g, "\n").replace(/\r/g, "\n").split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") {
     lines.pop();
   }

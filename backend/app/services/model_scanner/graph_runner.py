@@ -96,8 +96,13 @@ def source_slice(source_code: str, start_line: int, end_line: int) -> str:
     return "\n".join(lines[max(0, start_line - 1):end_line])
 
 
+def normalize_source_newlines(source_code: str) -> str:
+    """Normalize newline encodings without turning CR artifacts into blank source lines."""
+    return re.sub(r"\r+\n", "\n", source_code).replace("\r", "\n")
+
+
 def _canonical_source_for_duplicate_check(source_code: str) -> str:
-    normalized = source_code.replace("\r\n", "\n").replace("\r", "\n").strip()
+    normalized = normalize_source_newlines(source_code).strip()
     lines = [" ".join(line.rstrip().split()) for line in normalized.split("\n")]
     return "\n".join(lines).strip()
 
@@ -110,7 +115,7 @@ def deduplicate_repeated_source(source_code: str) -> str:
     when both halves are the same whole source after harmless whitespace
     normalization.
     """
-    normalized = source_code.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalize_source_newlines(source_code)
     if not normalized.strip():
         return source_code
 
@@ -733,7 +738,7 @@ def build_graph():
 
 
 def run_analysis(file_name: str, source_code: str) -> dict:
-    source_code = deduplicate_repeated_source(source_code)
+    source_code = deduplicate_repeated_source(normalize_source_newlines(source_code))
     suffix = Path(file_name).suffix or ".c"
     with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as handle:
         handle.write(source_code)
@@ -822,7 +827,7 @@ def run_analysis(file_name: str, source_code: str) -> dict:
 
 
 def iter_analysis_events(file_name: str, source_code: str):
-    source_code = deduplicate_repeated_source(source_code)
+    source_code = deduplicate_repeated_source(normalize_source_newlines(source_code))
     suffix = Path(file_name).suffix or ".c"
     with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as handle:
         handle.write(source_code)

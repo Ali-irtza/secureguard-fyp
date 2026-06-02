@@ -1,6 +1,8 @@
 import io
 import json
+import io
 import os
+import re
 import time
 import zipfile
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile, status
@@ -32,6 +34,10 @@ NO_SOURCE_FILES_MESSAGE = (
     "This ZIP does not contain any C or C++ source files. "
     "Please upload a ZIP with .c, .cpp, .h, .hpp, .cc, .cxx, or .hxx files."
 )
+
+
+def _normalize_source_newlines(source_code: str) -> str:
+    return re.sub(r"\r+\n", "\n", source_code).replace("\r", "\n")
 
 
 def _suspicious_filename_message(filename: str, *, in_zip: bool = False) -> str:
@@ -98,7 +104,9 @@ async def _extract_upload_files(files: list[UploadFile]) -> dict[str, str]:
                             stem, suffix = os.path.splitext(inner_name)
                             key = f"{stem}-{duplicate_index}{suffix}"
                             duplicate_index += 1
-                        extracted[key] = archive.read(entry).decode("utf-8", errors="replace")
+                        extracted[key] = _normalize_source_newlines(
+                            archive.read(entry).decode("utf-8", errors="replace")
+                        )
             except zipfile.BadZipFile:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -109,7 +117,7 @@ async def _extract_upload_files(files: list[UploadFile]) -> dict[str, str]:
         if ext not in C_CPP_EXTENSIONS:
             rejected.append(filename)
             continue
-        extracted[filename] = content.decode("utf-8", errors="replace")
+        extracted[filename] = _normalize_source_newlines(content.decode("utf-8", errors="replace"))
 
     if not extracted:
         raise HTTPException(

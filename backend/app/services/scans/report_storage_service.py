@@ -5,6 +5,7 @@ import zipfile
 import random
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List
 
 from reportlab.lib import colors
@@ -13,6 +14,8 @@ from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     HRFlowable,
     KeepTogether,
@@ -61,9 +64,38 @@ FONT_BODY = "Helvetica"
 FONT_BOLD = "Helvetica-Bold"
 FONT_MONO = "Courier"
 
+
+def _register_code_font() -> str:
+    candidates: list[tuple[str, Path]] = [
+        ("PseudoFontLigaMono", Path("assets/fonts/PseudoFontLigaMono-Regular.ttf")),
+        ("PseudoFontLigaMono", Path("assets/fonts/PseudoFont-Liga-Mono-Regular.ttf")),
+        ("PseudoFontLigaMono", Path("backend/assets/fonts/PseudoFontLigaMono-Regular.ttf")),
+        ("PseudoFontLigaMono", Path("backend/assets/fonts/PseudoFont-Liga-Mono-Regular.ttf")),
+        ("PseudoFontLigaMono", Path("frontend/src/assets/fonts/PseudoFontLigaMono-Regular.ttf")),
+        ("PseudoFontLigaMono", Path("frontend/src/assets/fonts/PseudoFont-Liga-Mono-Regular.ttf")),
+        ("CascadiaMono", Path("C:/Windows/Fonts/CascadiaMono.ttf")),
+        ("CascadiaMono", Path("C:/Windows/Fonts/CascadiaCode.ttf")),
+        ("Consolas", Path("C:/Windows/Fonts/consola.ttf")),
+    ]
+    for font_name, path in candidates:
+        if path.exists():
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, str(path)))
+                return font_name
+            except Exception:
+                continue
+    return FONT_MONO
+
+
+FONT_CODE = _register_code_font()
+
 COLOR_BG_DARK = HexColor("#0d1117")
-COLOR_BG_CARD = HexColor("#f9fafb")
+COLOR_BG_CARD = HexColor("#f8fafc")
+COLOR_PANEL = HexColor("#f1f5f9")
+COLOR_PANEL_DARK = HexColor("#111827")
 COLOR_ACCENT = HexColor("#ef4444")
+COLOR_ACCENT_BLUE = HexColor("#2563eb")
+COLOR_ACCENT_PURPLE = HexColor("#7c3aed")
 COLOR_SUCCESS = HexColor("#22c55e")
 COLOR_BORDER = HexColor("#e5e7eb")
 COLOR_MUTED = HexColor("#6b7280")
@@ -84,6 +116,7 @@ COLOR_CODE_DARK = HexColor("#0d1117")
 COLOR_CODE_LINE = HexColor("#161b22")
 COLOR_CODE_TEXT = HexColor("#e6edf3")
 COLOR_CODE_NUM = HexColor("#8b949e")
+COLOR_CODE_BORDER = HexColor("#30363d")
 
 
 def _escape(text: object) -> str:
@@ -129,7 +162,7 @@ def _severity_colors(severity: str) -> tuple:
 def _build_code_table(code: str, start_line: int, styles: dict, dark: bool = False) -> Table:
     rows = []
     source_lines = str(code or "No exact source line returned.").splitlines() or [str(code or "")]
-    for offset, line in enumerate(source_lines[:240]):
+    for offset, line in enumerate(source_lines[:220]):
         number = start_line + offset if start_line else offset + 1
         rows.append(
             [
@@ -137,19 +170,23 @@ def _build_code_table(code: str, start_line: int, styles: dict, dark: bool = Fal
                 Paragraph(_escape(line[:160]), styles["code_dark" if dark else "code"]),
             ]
         )
-    table = Table(rows, colWidths=[38, 430], repeatRows=0)
+    table = Table(rows, colWidths=[34, 442], repeatRows=0)
     commands = [
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
         ("ALIGN", (0, 0), (0, -1), "RIGHT"),
     ]
     if dark:
         for idx in range(len(rows)):
             bg = COLOR_CODE_DARK if idx % 2 == 0 else COLOR_CODE_LINE
             commands.extend([("BACKGROUND", (0, idx), (-1, idx), bg)])
+        commands.extend([
+            ("BOX", (0, 0), (-1, -1), 0.8, COLOR_CODE_BORDER),
+            ("LINEAFTER", (0, 0), (0, -1), 0.5, COLOR_CODE_BORDER),
+        ])
     else:
         commands.extend([
             ("BACKGROUND", (0, 0), (-1, -1), HexColor("#f6f8fa")),
@@ -183,6 +220,119 @@ def _affected_code_for_issue(issue: Dict, chunks: List[Dict]) -> str:
             if source_line.strip():
                 return source_line
     return f"Line {line_number or 'N/A'}"
+
+
+def _chunk_issues(chunk: Dict, vulnerabilities: List[Dict]) -> list[Dict]:
+    file_path = chunk.get("file_path") or ""
+    start_line = int(chunk.get("start_line") or 1)
+    end_line = int(chunk.get("end_line") or 0)
+    matched: list[Dict] = []
+    for issue in vulnerabilities:
+        issue_file = issue.get("file_path") or ""
+        line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+        same_file = not file_path or not issue_file or issue_file == file_path
+        in_range = line_number <= 0 or line_number >= start_line and (not end_line or line_number <= end_line)
+        if same_file and in_range:
+            matched.append(issue)
+    return matched
+
+
+def _metric_card(label: str, value: object, color: HexColor, styles: dict) -> Table:
+    value_style = ParagraphStyle(
+        f"metric_{label}",
+        parent=styles["metric_value"],
+        textColor=color,
+    )
+    table = Table(
+        [[Paragraph(label.upper(), styles["metric_label"])], [Paragraph(_escape(value), value_style)]],
+        colWidths=[113],
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.7, HexColor("#dbe3ee")),
+        ("LINEBEFORE", (0, 0), (0, -1), 3, color),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    return table
+
+
+def _section_bar(title: str, subtitle: str, color: HexColor, styles: dict) -> Table:
+    table = Table(
+        [[Paragraph(_escape(title), styles["bar_title"])], [Paragraph(_escape(subtitle), styles["bar_subtitle"])]],
+        colWidths=[476],
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), COLOR_PANEL_DARK),
+        ("LINEBEFORE", (0, 0), (0, -1), 4, color),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return table
+
+
+def _issue_card(issue: Dict, chunk: Dict, index: int, styles: dict) -> list:
+    severity = str(issue.get("severity") or "Medium").title()
+    sev_bg, sev_text, sev_border = _severity_colors(severity)
+    cwe = issue.get("cwe_id") or issue.get("cwe_name") or issue.get("type") or "CWE"
+    line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    affected_code = _affected_code_for_issue(issue, [chunk])
+
+    badge = Table(
+        [[Paragraph(severity.upper(), ParagraphStyle(f"badge_{index}", parent=styles["badge"], textColor=sev_text))]],
+        colWidths=[70],
+    )
+    badge.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), sev_bg),
+        ("BOX", (0, 0), (-1, -1), 0.6, sev_border),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    title = f"Finding {index}: {cwe}"
+    header = Table(
+        [[Paragraph(_escape(title), styles["issue"]), badge]],
+        colWidths=[386, 90],
+    )
+    header.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, -1), HexColor("#f8fafc")),
+        ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
+        ("LEFTPADDING", (0, 0), (-1, -1), 9),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    fix_box = Table(
+        [[Paragraph(_escape(issue.get("fix_suggestion") or "Apply secure coding remediation for this finding."), styles["fix"])]],
+        colWidths=[476],
+    )
+    fix_box.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), COLOR_FIX_BG),
+        ("LINEBEFORE", (0, 0), (0, -1), 2, COLOR_SUCCESS),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    return [
+        header,
+        Spacer(1, 6),
+        Paragraph(f"Line {line_number or 'N/A'}", styles["label"]),
+        Spacer(1, 3),
+        _build_code_table(str(affected_code), line_number or int(chunk.get("start_line") or 1), styles, dark=True),
+        Spacer(1, 6),
+        Paragraph("What is vulnerable", styles["label"]),
+        Spacer(1, 3),
+        Paragraph(_escape(issue.get("description") or "Security issue detected."), styles["body"]),
+        Spacer(1, 6),
+        Paragraph("Recommended fix", styles["label_green"]),
+        Spacer(1, 3),
+        fix_box,
+    ]
 
 
 class NumberedCanvas:
@@ -289,128 +439,100 @@ def _build_simple_pdf(title: str, scan_data: Dict, vulnerabilities: List[Dict]) 
     ]
 
     styles = {
-        "section": ParagraphStyle("section", fontName=FONT_BOLD, fontSize=16, leading=20, textColor=COLOR_DARK, spaceAfter=8),
-        "issue": ParagraphStyle("issue", fontName=FONT_BOLD, fontSize=13, leading=16, textColor=COLOR_DARK),
-        "body": ParagraphStyle("body", fontName=FONT_BODY, fontSize=10.5, leading=15, textColor=COLOR_DARK),
-        "label": ParagraphStyle("label", fontName=FONT_BOLD, fontSize=8.5, leading=11, textColor=COLOR_MUTED),
+        "section": ParagraphStyle("section", fontName=FONT_BOLD, fontSize=17, leading=21, textColor=COLOR_DARK, spaceAfter=8),
+        "issue": ParagraphStyle("issue", fontName=FONT_BOLD, fontSize=12, leading=15, textColor=COLOR_DARK),
+        "body": ParagraphStyle("body", fontName=FONT_BODY, fontSize=9.8, leading=13.5, textColor=COLOR_DARK),
+        "label": ParagraphStyle("label", fontName=FONT_BOLD, fontSize=8.2, leading=10.5, textColor=COLOR_MUTED),
         "label_green": ParagraphStyle("label_green", fontName=FONT_BOLD, fontSize=8.5, leading=11, textColor=COLOR_SUCCESS),
         "meta": ParagraphStyle("meta", fontName=FONT_MONO, fontSize=9, leading=11, textColor=COLOR_MUTED, alignment=TA_RIGHT),
         "chip": ParagraphStyle("chip", fontName=FONT_BOLD, fontSize=9, leading=11, textColor=COLOR_CWE_TEXT),
         "badge": ParagraphStyle("badge", fontName=FONT_BOLD, fontSize=8, leading=10, alignment=TA_CENTER),
-        "code": ParagraphStyle("code", fontName=FONT_MONO, fontSize=8.5, leading=10.5, textColor=COLOR_DARK),
-        "code_num": ParagraphStyle("code_num", fontName=FONT_MONO, fontSize=8, leading=10.5, textColor=COLOR_MUTED, alignment=TA_RIGHT),
-        "code_dark": ParagraphStyle("code_dark", fontName=FONT_MONO, fontSize=8.2, leading=10.2, textColor=COLOR_CODE_TEXT),
-        "code_num_dark": ParagraphStyle("code_num_dark", fontName=FONT_MONO, fontSize=8, leading=10.2, textColor=COLOR_CODE_NUM, alignment=TA_RIGHT),
-        "fix": ParagraphStyle("fix", fontName=FONT_BODY, fontSize=10.5, leading=14, textColor=COLOR_FIX_TEXT),
+        "code": ParagraphStyle("code", fontName=FONT_CODE, fontSize=8.5, leading=10.5, textColor=COLOR_DARK),
+        "code_num": ParagraphStyle("code_num", fontName=FONT_CODE, fontSize=8, leading=10.5, textColor=COLOR_MUTED, alignment=TA_RIGHT),
+        "code_dark": ParagraphStyle("code_dark", fontName=FONT_CODE, fontSize=8.0, leading=9.6, textColor=COLOR_CODE_TEXT),
+        "code_num_dark": ParagraphStyle("code_num_dark", fontName=FONT_CODE, fontSize=7.7, leading=9.6, textColor=COLOR_CODE_NUM, alignment=TA_RIGHT),
+        "fix": ParagraphStyle("fix", fontName=FONT_BODY, fontSize=9.8, leading=13.5, textColor=COLOR_FIX_TEXT),
         "subtle": ParagraphStyle("subtle", fontName=FONT_BODY, fontSize=9, leading=12, textColor=COLOR_MUTED),
+        "metric_label": ParagraphStyle("metric_label", fontName=FONT_BOLD, fontSize=7.6, leading=9.5, textColor=COLOR_MUTED),
+        "metric_value": ParagraphStyle("metric_value", fontName=FONT_BOLD, fontSize=13, leading=16, textColor=COLOR_DARK),
+        "bar_title": ParagraphStyle("bar_title", fontName=FONT_BOLD, fontSize=13.5, leading=16.5, textColor=colors.white),
+        "bar_subtitle": ParagraphStyle("bar_subtitle", fontName=FONT_BODY, fontSize=8.8, leading=11.5, textColor=HexColor("#cbd5e1")),
     }
 
     story = [Spacer(1, 690), PageBreak()]
-    story.append(Paragraph("Executive Summary", styles["section"]))
-    story.append(HRFlowable(width="100%", thickness=1, color=COLOR_BORDER))
+    chunk_outputs = scan_data.get("chunk_outputs") or []
+    story.append(_section_bar("Scan Overview", "Formal security summary for scanned C/C++ source inputs.", COLOR_ACCENT_BLUE, styles))
     story.append(Spacer(1, 10))
+    metrics = Table([[
+        _metric_card("Issues", scan_data.get("total_vulnerabilities") or scan_data.get("total_vulns") or len(vulnerabilities), COLOR_ACCENT, styles),
+        _metric_card("Files", scan_data.get("files_scanned") or scan_data.get("files_analyzed") or 0, COLOR_ACCENT_BLUE, styles),
+        _metric_card("Risk", scan_data.get("overall_risk_level") or scan_data.get("risk_level") or "Unknown", COLOR_ACCENT_PURPLE, styles),
+        _metric_card("Score", scan_data.get("overall_risk_score") or scan_data.get("risk_score") or 0, COLOR_SUCCESS, styles),
+    ]], colWidths=[119, 119, 119, 119])
+    metrics.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    story.extend([metrics, Spacer(1, 14)])
     summary_rows = [
         ["Project", scan_data.get("project_name") or "Project", "Scan Type", scan_data.get("scan_type") or "Unknown"],
-        ["Risk Score", str(scan_data.get("overall_risk_score") or scan_data.get("risk_score") or 0), "Completed", str(scan_data.get("completed_at") or "N/A")[:19]],
+        ["Completed", str(scan_data.get("completed_at") or "N/A")[:19], "Scan ID", scan_data.get("id") or scan_data.get("scan_id") or ""],
     ]
-    summary = Table(summary_rows, colWidths=[82, 166, 82, 166])
+    summary = Table(summary_rows, colWidths=[76, 172, 76, 172])
     summary.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), COLOR_BG_CARD),
-        ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
-        ("INNERGRID", (0, 0), (-1, -1), 0.25, COLOR_BORDER),
+        ("BACKGROUND", (0, 0), (-1, -1), COLOR_PANEL),
+        ("BOX", (0, 0), (-1, -1), 0.5, HexColor("#cbd5e1")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, HexColor("#dbe3ee")),
         ("FONTNAME", (0, 0), (0, -1), FONT_BOLD),
         ("FONTNAME", (2, 0), (2, -1), FONT_BOLD),
         ("TEXTCOLOR", (0, 0), (0, -1), COLOR_MUTED),
         ("TEXTCOLOR", (2, 0), (2, -1), COLOR_MUTED),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
     story.extend([summary, Spacer(1, 18)])
-    chunk_outputs = scan_data.get("chunk_outputs") or []
 
-    if chunk_outputs:
-        story.extend([Paragraph("Input And Corrected Code", styles["section"]), Spacer(1, 6)])
-        for chunk in chunk_outputs:
-            filename = chunk.get("file_path") or chunk.get("chunk_name") or "source"
-            start_line = int(chunk.get("start_line") or 1)
-            story.extend([
-                Paragraph(_escape(filename), styles["issue"]),
-                Paragraph("INPUT CODE", styles["label"]),
-                Spacer(1, 4),
-                _build_code_table(str(chunk.get("code") or ""), start_line, styles, dark=True),
-                Spacer(1, 8),
-                Paragraph("CORRECTED CODE", styles["label_green"]),
-                Spacer(1, 4),
-                _build_code_table(str(chunk.get("corrected_code") or "No corrected code was returned."), start_line, styles, dark=True),
-                Spacer(1, 14),
-            ])
-
-        story.extend([PageBreak()])
-
-    story.append(Paragraph("Vulnerability Findings", styles["section"]))
-
-    if not vulnerabilities:
-        story.append(Paragraph("No vulnerabilities were reported for this scan.", styles["body"]))
-    for index, issue in enumerate(vulnerabilities, start=1):
-        severity = str(issue.get("severity") or "Medium").title()
-        sev_bg, sev_text, sev_border = _severity_colors(severity)
-        cwe = issue.get("cwe_id") or issue.get("cwe_name") or "CWE"
-        line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
-        filename = issue.get("file_path") or scan_data.get("file_name") or "source"
-        affected_code = _affected_code_for_issue(issue, chunk_outputs)
-
-        badge = Table([[Paragraph(severity.upper(), ParagraphStyle("badge_inner", parent=styles["badge"], textColor=sev_text))]], colWidths=[72])
-        badge.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), sev_bg),
-            ("BOX", (0, 0), (-1, -1), 0.5, sev_border),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        header = Table([[Paragraph(f"Issue {index}", styles["issue"]), badge]], colWidths=[390, 86])
-        header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-
-        chip = Table([[Paragraph(_escape(cwe), styles["chip"])]], colWidths=[92])
-        chip.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), COLOR_CWE_BG),
-            ("BOX", (0, 0), (-1, -1), 0.25, HexColor("#bfdbfe")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 7),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        meta = Table([[chip, Paragraph(f"{filename}  line {line_number or 'N/A'}", styles["meta"])]], colWidths=[110, 366])
-        meta.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-
-        fix_box = Table([[Paragraph(_escape(issue.get("fix_suggestion") or "Apply secure coding remediation for this finding."), styles["fix"])]], colWidths=[476])
-        fix_box.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), COLOR_FIX_BG),
-            ("LINEBEFORE", (0, 0), (0, -1), 2, COLOR_SUCCESS),
-            ("LEFTPADDING", (0, 0), (-1, -1), 12),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-            ("TOPPADDING", (0, 0), (-1, -1), 9),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
-        ]))
-
-        card = [
-            header,
-            Spacer(1, 6),
-            meta,
+    if not chunk_outputs:
+        story.append(Paragraph("No source chunks were included in this report.", styles["body"]))
+    for chunk_index, chunk in enumerate(chunk_outputs, start=1):
+        filename = chunk.get("file_path") or chunk.get("chunk_name") or "source"
+        start_line = int(chunk.get("start_line") or 1)
+        end_line = int(chunk.get("end_line") or start_line)
+        issues = _chunk_issues(chunk, vulnerabilities)
+        story.extend([
+            _section_bar(
+                f"Input {chunk_index}: {filename}",
+                f"Lines {start_line} to {end_line} - {len(issues)} CWE finding{'s' if len(issues) != 1 else ''}",
+                COLOR_ACCENT_BLUE,
+                styles,
+            ),
             Spacer(1, 8),
-            HRFlowable(width="100%", thickness=0.5, color=COLOR_BORDER),
-            Spacer(1, 8),
-            Paragraph("PROBLEM", styles["label"]),
-            Spacer(1, 3),
-            Paragraph(_escape(issue.get("description") or "Security issue detected."), styles["body"]),
-            Spacer(1, 9),
-            Paragraph("VULNERABLE CODE", styles["label"]),
+            Paragraph("Input Code", styles["label"]),
             Spacer(1, 4),
-            _build_code_table(str(affected_code), line_number or 1, styles),
-            Spacer(1, 9),
-            Paragraph("RECOMMENDED FIX", styles["label_green"]),
+            _build_code_table(str(chunk.get("code") or ""), start_line, styles, dark=True),
+            Spacer(1, 10),
+            Paragraph("CWE Findings In This Input", styles["label"]),
+            Spacer(1, 5),
+        ])
+        if issues:
+            for issue_index, issue in enumerate(issues, start=1):
+                story.extend([KeepTogether(_issue_card(issue, chunk, issue_index, styles)), Spacer(1, 10)])
+        else:
+            no_issue = Table([[Paragraph("No vulnerabilities were reported for this input block.", styles["body"])]], colWidths=[476])
+            no_issue.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), HexColor("#ecfdf5")),
+                ("BOX", (0, 0), (-1, -1), 0.5, HexColor("#bbf7d0")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]))
+            story.extend([no_issue, Spacer(1, 10)])
+        story.extend([
+            Paragraph("Corrected Code", styles["label_green"]),
             Spacer(1, 4),
-            fix_box,
-        ]
-        story.extend([KeepTogether(card), Spacer(1, 14)])
+            _build_code_table(str(chunk.get("corrected_code") or "No corrected code was returned."), start_line, styles, dark=True),
+            Spacer(1, 16),
+        ])
+        if chunk_index < len(chunk_outputs):
+            story.append(PageBreak())
 
     def canvas_factory(*args, **kwargs):
         from reportlab.pdfgen import canvas as canvas_module
