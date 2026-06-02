@@ -560,74 +560,82 @@ async def import_github_file(
     supabase: Client,
 ) -> ProjectFileResponse:
     """
-    Imports a single file from the team's connected GitHub repository.
+    Imports a single file from the connected GitHub repository.
 
-    Access rules:
-      - Project must be a team project with a connected GitHub repo.
-      - Only admins and developers can import.
-      - Developers may only import from their assigned branches.
-      - File extension must match the project's language.
+    Works for both personal and team projects:
+      - Personal project: uses the project's own github_installation_id.
+        Owner check only — no role/branch restrictions.
+      - Team project: uses the team's github_installation_id.
+        Admin/developer only; developers restricted to assigned branches.
 
-    Flow:
-      1. Validate project access + team membership + branch access.
-      2. Fetch raw file content from GitHub via the installation token.
-      3. Validate extension.
-      4. Write bytes to Supabase Storage.
-      5. Upsert row in project_files table.
+    File extension must match the project's language in both cases.
     """
-    # ── 1. Project access + team context ────────────────────────────────
-    project = _require_project_access(project_id, user_id, supabase)
-
-    team_id = project.get("team_id")
-    if not team_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This project is not linked to a team. GitHub import is only available for team projects.",
-        )
-
-    # ── 2. Role check: admin or developer only ───────────────────────────
-    membership = _require_team_member_role(
-        team_id, user_id, supabase, allowed_roles=["admin", "developer"]
-    )
-
-    # ── 3. Branch access: developers restricted to assigned branches ─────
-    _check_developer_branch_access(membership, body.branch)
-
-    # ── 4. Fetch team's GitHub installation token ────────────────────────
-    team_row = (
-        supabase.table("teams")
-        .select("github_repo, github_installation_id")
-        .eq("id", team_id)
-        .single()
-        .execute()
-    )
-    if not team_row.data or not team_row.data.get("github_repo"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No GitHub repository connected to this team.",
-        )
-
-    installation_id = team_row.data.get("github_installation_id")
-    if not installation_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="GitHub App not installed for this team. Reconnect GitHub first.",
-        )
-
-    # ── 5. Get installation token ────────────────────────────────────────
+    import httpx
     from app.services.teams.github_service import _get_installation_token, _parse_github_owner_repo
 
-    token = await _get_installation_token(installation_id)
+    # ── 1. Project access ────────────────────────────────────────────────
+    project = _require_project_access(project_id, user_id, supabase)
+    team_id = project.get("team_id")
 
-    # ── 6. Validate file extension before hitting GitHub ─────────────────
+    # ── 2. Resolve repo URL + installation token ─────────────────────────
+    if team_id:
+        # ── Team project path (unchanged) ────────────────────────────────
+        membership = _require_team_member_role(
+            team_id, user_id, supabase, allowed_roles=["admin", "developer"]
+        )
+        _check_developer_branch_access(membership, body.branch)
+
+        team_row = (
+            supabase.table("teams")
+            .select("github_repo, github_installation_id")
+            .eq("id", team_id)
+            .single()
+            .execute()
+        )
+        if not team_row.data or not team_row.data.get("github_repo"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No GitHub repository connected to this team.",
+            )
+        installation_id = team_row.data.get("github_installation_id")
+        if not installation_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="GitHub App not installed for this team. Reconnect GitHub first.",
+            )
+        repo_url = team_row.data["github_repo"]
+
+    else:
+        # ── Personal project path ─────────────────────────────────────────
+        # Owner access already verified by _require_project_access above.
+        proj_row = (
+            supabase.table("projects")
+            .select("github_repo, github_installation_id")
+            .eq("id", project_id)
+            .single()
+            .execute()
+        )
+        if not proj_row.data or not proj_row.data.get("github_repo"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No GitHub repository connected to this project.",
+            )
+        installation_id = proj_row.data.get("github_installation_id")
+        if not installation_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="GitHub App not installed for this project. Reconnect GitHub first.",
+            )
+        repo_url = proj_row.data["github_repo"]
+
+    # ── 3. Validate file extension before hitting GitHub ─────────────────
     filename = os.path.basename(body.file_path)
     _validate_extension(filename, project.get("language"))
 
-    # ── 7. Fetch file content from GitHub ────────────────────────────────
-    repo_url = team_row.data["github_repo"]
+    # ── 4. Get installation token + fetch from GitHub ─────────────────────
+    token = await _get_installation_token(installation_id)
     owner, repo = _parse_github_owner_repo(repo_url)
 
-    import httpx
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -668,12 +676,11 @@ async def import_github_file(
             detail=f"File exceeds the 10 MB size limit ({len(content):,} bytes)",
         )
 
-    # ── 8. Write bytes to storage ────────────────────────────────────────
+    # ── 5. Write bytes to storage + persist DB row ────────────────────────
     content_type = "text/plain"
     path = _storage_path(project_id, filename)
     _upload_bytes(path, content, content_type, supabase)
 
-    # ── 9. Persist metadata to DB ────────────────────────────────────────
     row = _upsert_db_record(
         project_id=project_id,
         user_id=user_id,
