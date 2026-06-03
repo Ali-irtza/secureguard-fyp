@@ -12,6 +12,8 @@ interface MetricCardProps {
   sparklineData?: Array<{ value: number }>;
   trend?: number;
   trendLabel?: string;
+  detail: string;
+  backValue?: string | number;
 }
 
 const MetricCard = ({ 
@@ -23,87 +25,113 @@ const MetricCard = ({
   teamLabel,
   sparklineData,
   trend,
-  trendLabel
+  trendLabel,
+  detail,
+  backValue
 }: MetricCardProps) => {
   const variantStyles = {
-    default: "border-cyan-500/30 bg-gradient-to-br from-slate-900/40 to-slate-800/20",
-    critical: "border-red-500/30 bg-gradient-to-br from-red-950/30 to-slate-900/30",
-    warning: "border-yellow-500/30 bg-gradient-to-br from-yellow-950/20 to-slate-900/30",
-    success: "border-emerald-500/30 bg-gradient-to-br from-emerald-950/30 to-slate-900/30",
+    default: "border-cyan-400/45 bg-gradient-to-br from-cyan-200/80 via-sky-100/85 to-white/95 dark:from-cyan-950/45 dark:via-sky-950/25 dark:to-slate-900/80",
+    critical: "border-red-400/45 bg-gradient-to-br from-red-200/80 via-rose-100/85 to-white/95 dark:from-red-950/45 dark:via-rose-950/25 dark:to-slate-900/80",
+    warning: "border-yellow-400/45 bg-gradient-to-br from-yellow-200/80 via-amber-100/85 to-white/95 dark:from-yellow-950/35 dark:via-amber-950/25 dark:to-slate-900/80",
+    success: "border-emerald-400/45 bg-gradient-to-br from-emerald-200/80 via-teal-100/85 to-white/95 dark:from-emerald-950/45 dark:via-teal-950/25 dark:to-slate-900/80",
   };
 
   const valueStyles = {
-    default: "text-cyan-400",
-    critical: "text-red-400",
-    warning: "text-yellow-400",
-    success: "text-emerald-400",
+    default: "text-cyan-500",
+    critical: "text-red-500",
+    warning: "text-yellow-600",
+    success: "text-emerald-500",
   };
 
   const iconBgStyles = {
-    default: "bg-cyan-500/20 text-cyan-400",
-    critical: "bg-red-500/20 text-red-400",
-    warning: "bg-yellow-500/20 text-yellow-400",
-    success: "bg-emerald-500/20 text-emerald-400",
+    default: "bg-cyan-400/25 text-cyan-500 ring-cyan-400/25",
+    critical: "bg-red-400/25 text-red-500 ring-red-400/25",
+    warning: "bg-yellow-400/25 text-yellow-600 ring-yellow-400/25",
+    success: "bg-emerald-400/25 text-emerald-500 ring-emerald-400/25",
+  };
+
+  const backStyles = {
+    default: "from-cyan-500 to-blue-500 shadow-cyan-500/25",
+    critical: "from-red-500 to-rose-500 shadow-red-500/25",
+    warning: "from-yellow-500 to-orange-500 shadow-yellow-500/25",
+    success: "from-emerald-500 to-teal-500 shadow-emerald-500/25",
   };
 
   const trendColor = trend && trend >= 0 ? "text-emerald-400" : "text-red-400";
 
   return (
-    <div className={`glass-card p-6 hover-glow animate-fade-in min-h-[200px] border ${variantStyles[variant]}`}>
-      <div className="flex flex-col h-full">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex-1">
-            <p className="text-sm text-muted-foreground font-medium">{title}</p>
-          </div>
-          <div className={`p-2.5 rounded-lg ${iconBgStyles[variant]}`}>
-            {icon}
-          </div>
-        </div>
+    <div className="metric-card-3d min-h-[200px] animate-fade-in">
+      <div className="metric-card-3d-inner">
+        <div className={`metric-card-face glass-card p-6 min-h-[200px] border ${variantStyles[variant]}`}>
+          <div className="flex flex-col h-full">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex-1">
+                <p className="text-sm text-muted-foreground font-medium">{title}</p>
+              </div>
+              <div className={`p-2.5 rounded-lg ring-1 ${iconBgStyles[variant]}`}>
+                {icon}
+              </div>
+            </div>
 
-        {/* Value Section */}
-        <div className="flex-1">
-          {children || (
-            <p className={`text-4xl font-bold ${valueStyles[variant]} mb-2`}>{value}</p>
-          )}
-          
-          {/* Trend Indicator */}
-          {trend !== undefined && (
-            <div className="flex items-center gap-1.5 mb-4">
-              {trend >= 0 ? (
-                <TrendingUp className={`h-4 w-4 ${trendColor}`} />
-              ) : (
-                <TrendingDown className={`h-4 w-4 ${trendColor}`} />
+            <div className="flex-1">
+              {children || (
+                <p className={`text-4xl font-bold ${valueStyles[variant]} mb-2`}>{value}</p>
               )}
-              <span className={`text-sm font-semibold ${trendColor}`}>
-                {trend >= 0 ? "+" : ""}{trend}%
-              </span>
-              {trendLabel && (
-                <span className="text-xs text-muted-foreground ml-1">{trendLabel}</span>
+
+              {trend !== undefined && (
+                <div className="flex items-center gap-1.5 mb-4">
+                  {trend >= 0 ? (
+                    <TrendingUp className={`h-4 w-4 ${trendColor}`} />
+                  ) : (
+                    <TrendingDown className={`h-4 w-4 ${trendColor}`} />
+                  )}
+                  <span className={`text-sm font-semibold ${trendColor}`}>
+                    {trend >= 0 ? "+" : ""}{trend}%
+                  </span>
+                  {trendLabel && (
+                    <span className="text-xs text-muted-foreground ml-1">{trendLabel}</span>
+                  )}
+                </div>
+              )}
+
+              {teamLabel && (
+                <p className="text-xs text-muted-foreground mb-3">Team</p>
               )}
             </div>
-          )}
 
-          {teamLabel && (
-            <p className="text-xs text-muted-foreground mb-3">Team</p>
-          )}
-        </div>
-
-        {/* Sparkline Chart */}
-        {sparklineData && sparklineData.length > 0 && (
-          <div className="mt-3 -mx-2 -mb-2">
-            <Sparkline 
-              data={sparklineData} 
-              color={
-                variant === "critical" ? "#f87171" :
-                variant === "warning" ? "#facc15" :
-                variant === "success" ? "#10b981" :
-                "#06b6d4"
-              }
-              height={35}
-            />
+            {sparklineData && sparklineData.length > 0 && (
+              <div className="mt-3 -mx-2 -mb-2">
+                <Sparkline
+                  data={sparklineData}
+                  color={
+                    variant === "critical" ? "#f87171" :
+                    variant === "warning" ? "#facc15" :
+                    variant === "success" ? "#10b981" :
+                    "#06b6d4"
+                  }
+                  height={35}
+                />
+              </div>
+            )}
           </div>
-        )}
+        </div>
+        <div className={`metric-card-face metric-card-back min-h-[200px] bg-gradient-to-br ${backStyles[variant]} p-6 text-white shadow-2xl`}>
+          <div className="flex h-full flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold uppercase tracking-normal text-white/85">{title}</span>
+              <div className="rounded-lg bg-white/20 p-2.5 text-white ring-1 ring-white/25">
+                {icon}
+              </div>
+            </div>
+            <div>
+              <p className="text-5xl font-bold leading-none">{backValue ?? value}</p>
+              <p className="mt-3 text-sm font-medium text-white/90">{detail}</p>
+            </div>
+            <div className="h-1.5 rounded-full bg-white/25">
+              <div className="h-full w-2/3 rounded-full bg-white/80" />
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -149,6 +177,7 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, isTeamView }: Metr
           sparklineData={scansSparkline}
           trend={scansTrend}
           trendLabel="vs last 7 days"
+          detail="Recent scan coverage is trending upward across your projects."
         />
       </div>
       <div className="animate-slide-up stagger-2">
@@ -161,6 +190,7 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, isTeamView }: Metr
           sparklineData={criticalSparkline}
           trend={criticalTrend}
           trendLabel="vs last 7 days"
+          detail="Critical findings need attention before the next release."
         />
       </div>
       <div className="animate-slide-up stagger-3">
@@ -173,6 +203,8 @@ const MetricsRow = ({ totalScans, criticalVulns, healthScore, isTeamView }: Metr
           sparklineData={healthSparkline}
           trend={healthTrend}
           trendLabel="vs last 7 days"
+          detail="Overall posture combines scans, critical issues, and recent trends."
+          backValue={`${healthScore}%`}
         >
           <RadialProgress value={healthScore} />
         </MetricCard>

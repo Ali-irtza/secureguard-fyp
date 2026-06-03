@@ -82,42 +82,42 @@ const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
 
   return (
     <div className="glass-card overflow-hidden animate-fade-in border border-cyan-500/20">
-      <div className="p-6 border-b border-cyan-500/20 bg-gradient-to-r from-transparent via-cyan-500/5 to-transparent">
+      <div className="p-6 border-b border-cyan-500/25 bg-gradient-to-r from-cyan-500/15 via-emerald-500/10 to-sky-500/15 dark:from-transparent dark:via-cyan-500/5 dark:to-transparent">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-lg bg-cyan-500/20 border border-cyan-500/40">
             <Shield className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Recent Scans</h3>
-            <p className="text-xs text-cyan-400/70">Overview of your most recent security scans</p>
+            <h3 className="text-lg font-bold text-foreground dark:text-white">Recent Scans</h3>
+            <p className="text-xs font-semibold text-cyan-700 dark:text-cyan-400/70">Overview of your most recent security scans</p>
           </div>
         </div>
       </div>
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
-            <TableRow className="border-cyan-500/20 hover:bg-transparent bg-cyan-500/5">
-              <TableHead className="text-cyan-400 font-semibold">Project</TableHead>
-              <TableHead className="text-cyan-400 font-semibold">Date</TableHead>
-              <TableHead className="text-cyan-400 font-semibold">Status</TableHead>
-              <TableHead className="text-cyan-400 font-semibold">Vulnerabilities</TableHead>
-              <TableHead className="text-cyan-400 font-semibold text-right">Actions</TableHead>
+            <TableRow className="border-cyan-500/30 hover:bg-transparent bg-cyan-500/15 dark:bg-cyan-500/5">
+              <TableHead className="text-cyan-800 dark:text-cyan-400 font-bold">Project</TableHead>
+              <TableHead className="text-cyan-800 dark:text-cyan-400 font-bold">Date</TableHead>
+              <TableHead className="text-cyan-800 dark:text-cyan-400 font-bold">Status</TableHead>
+              <TableHead className="text-cyan-800 dark:text-cyan-400 font-bold">Vulnerabilities</TableHead>
+              <TableHead className="text-cyan-800 dark:text-cyan-400 font-bold text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {scans.map((scan, index) => (
               <TableRow
                 key={scan.id}
-                className={`border-cyan-500/20 transition-all duration-300 hover:bg-cyan-500/10 hover:border-cyan-500/40 animate-slide-up stagger-${Math.min(index + 1, 5)} group cursor-pointer`}
+                className={`border-cyan-500/25 transition-all duration-300 odd:bg-cyan-500/[0.045] even:bg-emerald-500/[0.035] hover:bg-cyan-500/12 hover:border-cyan-500/45 dark:odd:bg-transparent dark:even:bg-transparent dark:hover:bg-cyan-500/10 animate-slide-up stagger-${Math.min(index + 1, 5)} group cursor-pointer`}
                 style={{ animationDelay: `${index * 50}ms` }}
               >
-                <TableCell className="font-semibold text-white group-hover:text-cyan-300 transition-colors duration-200">
+                <TableCell className="font-bold text-slate-900 group-hover:text-cyan-800 dark:text-white dark:group-hover:text-cyan-300 transition-colors duration-200">
                   <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-cyan-400/60 group-hover:text-cyan-400 transition-colors" />
+                    <FileText className="w-4 h-4 text-cyan-600 group-hover:text-cyan-700 dark:text-cyan-400/60 dark:group-hover:text-cyan-400 transition-colors" />
                     {scan.projectName}
                   </div>
                 </TableCell>
-                <TableCell className="text-gray-300 group-hover:text-gray-200 transition-colors duration-200">
+                <TableCell className="font-semibold text-slate-600 group-hover:text-slate-900 dark:text-gray-300 dark:group-hover:text-gray-200 transition-colors duration-200">
                   {formatDate(scan.date)}
                 </TableCell>
                 <TableCell>
@@ -132,7 +132,7 @@ const RecentScansTable = ({ scans, userRole }: RecentScansTableProps) => {
                       <VulnerabilityBadge level="high" count={scan.vulnerabilities.high} />
                     )}
                     {scan.vulnerabilities.critical === 0 && scan.vulnerabilities.high === 0 && (
-                      <span className="text-xs text-gray-400 px-2 py-1">
+                      <span className="text-xs font-semibold text-slate-600 dark:text-gray-400 px-2 py-1">
                         {scan.vulnerabilities.medium + scan.vulnerabilities.low} Issue{scan.vulnerabilities.medium + scan.vulnerabilities.low !== 1 ? "s" : ""}
                       </span>
                     )}
