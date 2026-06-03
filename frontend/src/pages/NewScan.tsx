@@ -178,6 +178,13 @@ const parseThinkingStep = (step: string) => {
   return { time: match[1], type: match[2], message: match[3] };
 };
 
+const formatElapsedClock = (elapsedSeconds: number): string => {
+  const safeSeconds = Math.max(0, Math.floor(elapsedSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+};
+
 const getThinkingStyle = (message: string, type: string) => {
   const text = `${type} ${message}`.toLowerCase();
   if (type.toLowerCase().includes("error")) {
@@ -365,6 +372,7 @@ const NewScan = () => {
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
   const sourceLineCountsRef = useRef<Record<string, number>>({});
+  const scanStartedAtRef = useRef<number | null>(null);
 
   // New scan result state
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -445,8 +453,10 @@ const NewScan = () => {
   const scanLang = effectiveLanguage === "C++" ? "cpp" : "c";
 
   const addLog = useCallback((message: string, type: ThinkingEventType = "info") => {
-    const now = new Date();
-    const timestamp = `${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
+    const elapsedSeconds = scanStartedAtRef.current
+      ? (Date.now() - scanStartedAtRef.current) / 1000
+      : 0;
+    const timestamp = formatElapsedClock(elapsedSeconds);
     const prefix = type === "error" ? "Error" : type === "warning" ? "Warning" : type === "success" ? "Done" : "Working";
     setThinkingSteps((prev) => [...prev, `[${timestamp}] ${prefix}: ${message}`]);
   }, []);
@@ -723,6 +733,7 @@ const NewScan = () => {
   const handleStartScan = async () => {
     const isAutoRescan = searchParams.get("autoStart") === "1";
     scanAbortRef.current = false;
+    scanStartedAtRef.current = Date.now();
     setAutoRescanPreparing(isAutoRescan);
     setIsScanning(true);
     setScanComplete(false);
@@ -1244,6 +1255,7 @@ const NewScan = () => {
     setThinkingSteps([]);
     setStreamingChunks([]);
     sourceLineCountsRef.current = {};
+    scanStartedAtRef.current = null;
     setProjectFiles([]);
     setSelectedFileIds(new Set());
     setSaveToProject({});
