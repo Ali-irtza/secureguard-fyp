@@ -387,17 +387,34 @@ export async function deleteReport(reportId: string): Promise<void> {
   return apiFetch<void>(`/reports/${reportId}`, { method: "DELETE" });
 }
 
-export async function downloadReport(report: ReportItem, format: "pdf" | "csv"): Promise<void> {
+async function fetchDownload(path: string): Promise<Response> {
   const { supabase } = await import("@/lib/supabase");
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) throw new Error("Not authenticated");
-
   const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-  const response = await fetch(`${API_BASE}/reports/${report.id}/download?format=${format}`, {
-    headers: { Authorization: `Bearer ${session.access_token}` },
+  const getSessionToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) return session.access_token;
+    const refreshed = await supabase.auth.refreshSession();
+    return refreshed.data.session?.access_token ?? null;
+  };
+  const request = (accessToken: string) => fetch(`${API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
+
+  let accessToken = await getSessionToken();
+  if (!accessToken) throw new Error("Not authenticated");
+  let response = await request(accessToken);
+  if (response.status === 401) {
+    const refreshed = await supabase.auth.refreshSession();
+    accessToken = refreshed.data.session?.access_token ?? "";
+    if (!accessToken) throw new Error("Not authenticated");
+    response = await request(accessToken);
+  }
+  return response;
+}
+
+export async function downloadReport(report: ReportItem, format: "pdf" | "csv"): Promise<void> {
+  const response = await fetchDownload(`/reports/${report.id}/download?format=${format}`);
+
   if (!response.ok) {
     const json = await response.json().catch(() => ({}));
     throw new Error(json.detail ?? `Report download failed: ${response.status}`);
@@ -416,16 +433,8 @@ export async function downloadReport(report: ReportItem, format: "pdf" | "csv"):
 }
 
 export async function downloadReportCode(report: ReportItem): Promise<void> {
-  const { supabase } = await import("@/lib/supabase");
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) throw new Error("Not authenticated");
+  const response = await fetchDownload(`/reports/${report.id}/download-code`);
 
-  const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-  const response = await fetch(`${API_BASE}/reports/${report.id}/download-code`, {
-    headers: { Authorization: `Bearer ${session.access_token}` },
-  });
   if (!response.ok) {
     const json = await response.json().catch(() => ({}));
     throw new Error(json.detail ?? `Code download failed: ${response.status}`);

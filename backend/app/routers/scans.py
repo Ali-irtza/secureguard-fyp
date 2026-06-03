@@ -25,7 +25,13 @@ from app.services.scans.scan_storage_service import (
     delete_report_scan_for_user,
     build_code_zip_for_report,
 )
-from app.services.scans.report_storage_service import build_pdf_report, build_vulnerability_csv, load_pdf_from_zip, load_report_from_zip
+from app.services.scans.report_storage_service import (
+    build_pdf_report,
+    build_vulnerability_csv,
+    load_pdf_from_zip,
+    load_report_from_zip,
+    load_source_files_from_report_artifact,
+)
 from app.services.project_files.file_service import save_scanned_sources_zip
 
 router = APIRouter()
@@ -478,7 +484,14 @@ async def download_report(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         if report_format == "csv":
-            content = build_vulnerability_csv(detail["scan"], detail.get("vulnerabilities") or [])
+            source_files = detail.get("source_files") or []
+            if not source_files:
+                source_files = load_source_files_from_report_artifact(supabase, report.get("file_path"))
+            content = build_vulnerability_csv(
+                detail["scan"],
+                detail.get("vulnerabilities") or [],
+                source_files,
+            )
             media_type = "text/csv; charset=utf-8"
         else:
             content = build_pdf_report(detail["scan"], detail.get("vulnerabilities") or [])
