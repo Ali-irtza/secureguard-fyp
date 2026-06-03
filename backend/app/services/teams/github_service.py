@@ -1,4 +1,5 @@
 import httpx
+import asyncio
 import time
 import jwt
 import secrets
@@ -14,6 +15,26 @@ from app.services.teams.team_service import require_admin, require_member, fetch
 GITHUB_API = "https://api.github.com"
 FRONTEND_TEAM_URL = "http://localhost:8080/team"
 GITHUB_APP_SLUG = "secureguard-pro"
+
+
+def _github_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _sync_post(url: str, headers: dict) -> httpx.Response:
+    """Synchronous POST — runs in a thread so it doesn't block the event loop."""
+    with httpx.Client(timeout=20.0) as client:
+        return client.post(url, headers=headers)
+
+
+def _sync_get(url: str, headers: dict, params: dict | None = None) -> httpx.Response:
+    """Synchronous GET — runs in a thread so it doesn't block the event loop."""
+    with httpx.Client(timeout=20.0) as client:
+        return client.get(url, headers=headers, params=params or {})
 
 def _load_private_key() -> str:
     pem_path = Path(settings.github_private_key_path)
@@ -36,19 +57,19 @@ def _make_github_app_jwt() -> str:
 
 async def _get_installation_token(installation_id: int) -> str:
     app_jwt = _make_github_app_jwt()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            f"{GITHUB_API}/app/installations/{installation_id}/access_tokens",
-            headers={
-                "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+    url = f"{GITHUB_API}/app/installations/{installation_id}/access_tokens"
+    headers = _github_headers(app_jwt)
+    try:
+        resp = await asyncio.to_thread(_sync_post, url, headers)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Network error reaching GitHub API: {exc}",
         )
     if resp.status_code != 201:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to get GitHub installation token: {resp.status_code}",
+            detail=f"Failed to get GitHub installation token: {resp.status_code} — {resp.text[:300]}",
         )
     return resp.json()["token"]
 
@@ -72,42 +93,43 @@ async def connect_github_repo(team_id: str, repo_url: str, pat: str, user_id: st
     require_admin(team_id, user_id, supabase)
 
     owner, repo = _parse_github_owner_repo(repo_url)
+    headers = _github_headers(pat)
 
-    headers = {
-        "Authorization": f"Bearer {pat}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    try:
+        repo_resp = await asyncio.to_thread(_sync_get, f"{GITHUB_API}/repos/{owner}/{repo}", headers)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"GitHub API unreachable: {exc}")
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        repo_resp = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=headers)
+    if repo_resp.status_code == 401:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Personal Access Token.")
+    if repo_resp.status_code == 403:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied. Check PAT scopes.")
+    if repo_resp.status_code == 404:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found.")
+    if repo_resp.status_code != 200:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"GitHub API error: {repo_resp.status_code}")
 
-        if repo_resp.status_code == 401:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Personal Access Token.")
-        if repo_resp.status_code == 403:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied. Check PAT scopes.")
-        if repo_resp.status_code == 404:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found.")
-        if repo_resp.status_code != 200:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"GitHub API error: {repo_resp.status_code}")
-
-        branches: list[str] = []
-        page = 1
-        while True:
-            branch_resp = await client.get(
+    branches: list[str] = []
+    page = 1
+    while True:
+        try:
+            branch_resp = await asyncio.to_thread(
+                _sync_get,
                 f"{GITHUB_API}/repos/{owner}/{repo}/branches",
-                headers=headers,
-                params={"per_page": 100, "page": page},
+                headers,
+                {"per_page": 100, "page": page},
             )
-            if branch_resp.status_code != 200:
-                break
-            batch = branch_resp.json()
-            if not batch:
-                break
-            branches.extend(b["name"] for b in batch)
-            if len(batch) < 100:
-                break
-            page += 1
+        except Exception:
+            break
+        if branch_resp.status_code != 200:
+            break
+        batch = branch_resp.json()
+        if not batch:
+            break
+        branches.extend(b["name"] for b in batch)
+        if len(batch) < 100:
+            break
+        page += 1
 
     team_result = (
         supabase.table("teams")
@@ -135,33 +157,30 @@ async def sync_branches(team_id: str, user_id: str, supabase: Client) -> TeamRes
     repo_full_name, installation_id = _get_repo_full_name(team_id, supabase)
     token = await _get_installation_token(installation_id)
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
     branches: list[str] = []
     page = 1
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        while True:
-            resp = await client.get(
+    while True:
+        try:
+            resp = await asyncio.to_thread(
+                _sync_get,
                 f"{GITHUB_API}/repos/{repo_full_name}/branches",
-                headers=headers,
-                params={"per_page": 100, "page": page},
+                _github_headers(token),
+                {"per_page": 100, "page": page},
             )
-            if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"GitHub API error while fetching branches: {resp.status_code}",
-                )
-            batch = resp.json()
-            if not batch:
-                break
-            branches.extend(b["name"] for b in batch)
-            if len(batch) < 100:
-                break
-            page += 1
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"GitHub API unreachable: {exc}")
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"GitHub API error while fetching branches: {resp.status_code}",
+            )
+        batch = resp.json()
+        if not batch:
+            break
+        branches.extend(b["name"] for b in batch)
+        if len(batch) < 100:
+            break
+        page += 1
 
     team_result = (
         supabase.table("teams")
@@ -241,32 +260,33 @@ async def fetch_installation_repos(team_id: str, user_id: str, supabase: Client)
             detail="GitHub App is not installed for this team. Click 'Connect with GitHub' first.",
         )
 
+    import logging
+    logging.getLogger(__name__).info(f"[github] fetch_installation_repos team={team_id} installation_id={installation_id}")
+
     token = await _get_installation_token(installation_id)
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
 
     repos = []
     page = 1
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        while True:
-            resp = await client.get(
+    while True:
+        try:
+            resp = await asyncio.to_thread(
+                _sync_get,
                 f"{GITHUB_API}/installation/repositories",
-                headers=headers,
-                params={"per_page": 100, "page": page},
+                _github_headers(token),
+                {"per_page": 100, "page": page},
             )
-            if resp.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="GitHub API error")
-            data = resp.json()
-            batch = data.get("repositories", [])
-            if not batch:
-                break
-            repos.extend({"full_name": r["full_name"], "private": r["private"], "url": r["html_url"]} for r in batch)
-            if len(batch) < 100:
-                break
-            page += 1
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"GitHub API unreachable: {exc}")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"GitHub API error {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        batch = data.get("repositories", [])
+        if not batch:
+            break
+        repos.extend({"full_name": r["full_name"], "private": r["private"], "url": r["html_url"]} for r in batch)
+        if len(batch) < 100:
+            break
+        page += 1
 
     return {"repos": repos}
 
@@ -343,30 +363,28 @@ async def select_installation_repo(team_id: str, repo_full_name: str, repo_url: 
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub App not installed. Connect first.")
 
     token = await _get_installation_token(installation_id)
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
 
     branches: list[str] = []
     page = 1
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        while True:
-            resp = await client.get(
+    while True:
+        try:
+            resp = await asyncio.to_thread(
+                _sync_get,
                 f"{GITHUB_API}/repos/{repo_full_name}/branches",
-                headers=headers,
-                params={"per_page": 100, "page": page},
+                _github_headers(token),
+                {"per_page": 100, "page": page},
             )
-            if resp.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch branches")
-            batch = resp.json()
-            if not batch:
-                break
-            branches.extend(b["name"] for b in batch)
-            if len(batch) < 100:
-                break
-            page += 1
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"GitHub API unreachable: {exc}")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch branches")
+        batch = resp.json()
+        if not batch:
+            break
+        branches.extend(b["name"] for b in batch)
+        if len(batch) < 100:
+            break
+        page += 1
 
     team_upd = supabase.table("teams").update({
         "github_repo":     repo_url or f"https://github.com/{repo_full_name}",
@@ -453,18 +471,15 @@ async def fetch_branch_files(
     repo_full_name, installation_id = _get_repo_full_name(team_id, supabase)
     token = await _get_installation_token(installation_id)
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
+    try:
+        resp = await asyncio.to_thread(
+            _sync_get,
             f"{GITHUB_API}/repos/{repo_full_name}/git/trees/{branch}",
-            headers=headers,
-            params={"recursive": "1"},
+            _github_headers(token),
+            {"recursive": "1"},
         )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"GitHub API unreachable: {exc}")
 
     if resp.status_code == 404:
         raise HTTPException(
@@ -499,18 +514,15 @@ async def fetch_file_content(
     repo_full_name, installation_id = _get_repo_full_name(team_id, supabase)
     token = await _get_installation_token(installation_id)
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
+    try:
+        resp = await asyncio.to_thread(
+            _sync_get,
             f"{GITHUB_API}/repos/{repo_full_name}/contents/{file_path}",
-            headers=headers,
-            params={"ref": branch},
+            _github_headers(token),
+            {"ref": branch},
         )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"GitHub API unreachable: {exc}")
 
     if resp.status_code == 404:
         raise HTTPException(

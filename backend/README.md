@@ -97,6 +97,7 @@ docker compose up --build
 
 ```bash
 uvicorn app.main:app --reload
+venv\Scripts\activate && uvicorn app.main:app --reload
 ```
 
 API docs available at: `http://localhost:8000/docs` (development only — disabled in production)
