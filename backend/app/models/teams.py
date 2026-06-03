@@ -214,3 +214,56 @@ class FileContentResponse(BaseModel):
     content:  str           # decoded file content (UTF-8 text)
     size:     int           # size in bytes
     encoding: str = "utf-8"
+
+
+class TeamDashboardMetrics(BaseModel):
+    totalScans: int
+    criticalVulns: int
+    healthScore: int
+
+
+class TeamDashboardMember(BaseModel):
+    userId: str
+    name: str
+    initials: str
+    role: TeamRole
+    branches: List[str]
+    branch: str
+    healthScore: Optional[int] = None
+    lastScanAt: Optional[datetime] = None
+
+
+class TeamDashboardScan(BaseModel):
+    id: str
+    projectName: str
+    date: datetime
+    status: str
+    branch: Optional[str] = None
+    memberId: Optional[str] = None
+    memberName: Optional[str] = None
+    vulnerabilities: dict[str, int]
+
+
+class TeamDashboardTrendPoint(BaseModel):
+    date: str
+    critical: int
+    high: int
+    medium: int
+
+
+class TeamDashboardCriticalAlert(BaseModel):
+    id: str
+    title: str
+    project: str
+    timeAgo: str
+    createdAt: datetime
+    memberName: Optional[str] = None
+    branch: Optional[str] = None
+
+
+class TeamDashboardResponse(BaseModel):
+    metrics: TeamDashboardMetrics
+    members: List[TeamDashboardMember]
+    recentScans: List[TeamDashboardScan]
+    vulnerabilityTrend: List[TeamDashboardTrendPoint]
+    criticalAlerts: List[TeamDashboardCriticalAlert]

@@ -35,6 +35,64 @@ export interface Team {
   members: TeamMember[];
 }
 
+export interface TeamDashboardMetrics {
+  totalScans: number;
+  criticalVulns: number;
+  healthScore: number;
+}
+
+export interface TeamDashboardMember {
+  userId: string;
+  name: string;
+  initials: string;
+  role: TeamRole;
+  branches: string[];
+  branch: string;
+  healthScore: number | null;
+  lastScanAt: string | null;
+}
+
+export interface TeamDashboardScan {
+  id: string;
+  projectName: string;
+  date: string;
+  status: string;
+  branch: string | null;
+  memberId: string | null;
+  memberName: string | null;
+  vulnerabilities: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+}
+
+export interface TeamDashboardTrendPoint {
+  date: string;
+  critical: number;
+  high: number;
+  medium: number;
+}
+
+export interface TeamDashboardCriticalAlert {
+  id: string;
+  title: string;
+  project: string;
+  timeAgo: string;
+  createdAt: string;
+  memberName: string | null;
+  branch: string | null;
+}
+
+export interface TeamDashboardData {
+  metrics: TeamDashboardMetrics;
+  members: TeamDashboardMember[];
+  recentScans: TeamDashboardScan[];
+  vulnerabilityTrend: TeamDashboardTrendPoint[];
+  criticalAlerts: TeamDashboardCriticalAlert[];
+}
+
 // ---------------------------------------------------------------------------
 // Base fetch helper
 // ---------------------------------------------------------------------------
@@ -164,6 +222,11 @@ export async function createTeam(name: string): Promise<Team> {
 /** GET /teams/:id — single team */
 export async function getTeam(teamId: string): Promise<Team> {
   return apiFetch<Team>(`/teams/${teamId}`);
+}
+
+/** GET /teams/:id/dashboard - selected team's dashboard aggregates */
+export async function getTeamDashboard(teamId: string): Promise<TeamDashboardData> {
+  return apiFetch<TeamDashboardData>(`/teams/${teamId}/dashboard`);
 }
 
 /** PATCH /teams/:id — rename and/or connect GitHub repo */

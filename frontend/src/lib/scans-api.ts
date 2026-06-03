@@ -402,3 +402,31 @@ export async function downloadReport(report: ReportItem): Promise<void> {
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+export async function downloadReportCode(report: ReportItem): Promise<void> {
+  const { supabase } = await import("@/lib/supabase");
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) throw new Error("Not authenticated");
+
+  const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+  const response = await fetch(`${API_BASE}/reports/${report.id}/download-code`, {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+  if (!response.ok) {
+    const json = await response.json().catch(() => ({}));
+    throw new Error(json.detail ?? `Code download failed: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const safeName = `${report.name || "secureguard-report"}-${report.id}-code.zip`.replace(/[\\/:*?"<>|]/g, "-");
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = safeName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

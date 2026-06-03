@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, Calendar, Download, Trash2, Plus, FileBarChart, CheckCircle2, Users, Loader2, RefreshCw } from "lucide-react";
+import { FileText, Calendar, Download, Trash2, Plus, FileBarChart, CheckCircle2, Users, Loader2, RefreshCw, Code2 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import GenerateReportDialog from "@/components/dashboard/GenerateReportDialog";
 import { toast } from "sonner";
-import { deleteReport, downloadReport, listReports, ReportItem } from "@/lib/scans-api";
+import { deleteReport, downloadReport, downloadReportCode, listReports, ReportItem } from "@/lib/scans-api";
 
 const formatDate = (value?: string | null) => {
   if (!value) return "Unknown";
@@ -67,6 +67,18 @@ const Reports = () => {
       toast.success(`${report.format.toUpperCase()} download started`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Download failed");
+    } finally {
+      setBusyReportId(null);
+    }
+  };
+
+  const handleDownloadCode = async (report: ReportItem) => {
+    setBusyReportId(report.id);
+    try {
+      await downloadReportCode(report);
+      toast.success("Code ZIP download started");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Code download failed");
     } finally {
       setBusyReportId(null);
     }
@@ -183,7 +195,8 @@ const Reports = () => {
                     <TableHead>Date</TableHead>
                     <TableHead>Format</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-center">Download</TableHead>
+                    <TableHead className="text-center">Report</TableHead>
+                    <TableHead className="text-center">Code</TableHead>
                     <TableHead className="text-center">Rescan</TableHead>
                     <TableHead className="text-center">Delete</TableHead>
                   </TableRow>
@@ -225,6 +238,18 @@ const Reports = () => {
                             title="Download report"
                           >
                             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDownloadCode(report)}
+                            disabled={busy || !report.scan_id}
+                            className="h-8 w-8"
+                            title="Download input and corrected code ZIP"
+                          >
+                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
                           </Button>
                         </TableCell>
                         <TableCell className="text-center">
