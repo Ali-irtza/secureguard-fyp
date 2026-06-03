@@ -222,9 +222,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
             <DropdownMenuItem className="cursor-pointer" onClick={() => navigate("/settings?tab=profile")}>
               Profile Settings
             </DropdownMenuItem>
-            <DropdownMenuItem className="cursor-pointer" onClick={() => navigate("/settings?tab=api-keys")}>
-              API Keys
-            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive cursor-pointer" onClick={handleLogout}>
               Log out

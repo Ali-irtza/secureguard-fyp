@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useTheme } from "next-themes";
 import {
-  User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera,
+  User, Bell, Eye, EyeOff, Camera,
   Palette, Sun, Moon, Monitor, Users, Crown, Trash2, Github, ArrowRight,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -116,19 +116,12 @@ const Settings = () => {
   // Sync active tab from URL query param (?tab=profile)
   useEffect(() => {
     const tab = searchParams.get("tab");
-    const validTabs = ["profile", "api-keys", "notifications", "team-permissions", "appearance"];
+    const validTabs = ["profile", "notifications", "team-permissions", "appearance"];
     if (tab && validTabs.includes(tab)) {
       if (tab === "team-permissions" && !hasTeams) return;
       setActiveTab(tab);
     }
   }, [searchParams, hasTeams]);
-
-  // ---------------------------------------------------------------------------
-  // API Key state (placeholder until backend API key feature is built)
-  // ---------------------------------------------------------------------------
-  const [apiKey] = useState("sg_live_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456");
-  const [showKey, setShowKey] = useState(false);
-  const maskedKey = `${"•".repeat(32)}${apiKey.slice(-8)}`;
 
   // ---------------------------------------------------------------------------
   // Notification state (local for now — will be persisted to DB later)
@@ -223,15 +216,6 @@ const Settings = () => {
     setIsSavingPassword(false);
   };
 
-  const handleCopyKey = () => {
-    navigator.clipboard.writeText(apiKey);
-    toast.success("API key copied to clipboard");
-  };
-
-  const handleRegenerateKey = () => {
-    toast.success("New API key generated successfully");
-  };
-
   const handleSaveNotificationPreferences = () => {
     saveNotificationPreferences(notifications);
     toast.success("Notification preferences saved");
@@ -274,9 +258,6 @@ const Settings = () => {
           <TabsList className="flex lg:flex-col h-auto bg-card/50 backdrop-blur-sm border border-border/50 p-2 rounded-lg lg:w-56 shrink-0">
             <TabsTrigger value="profile" className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
               <User className="h-4 w-4" /> Profile
-            </TabsTrigger>
-            <TabsTrigger value="api-keys" className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
-              <Key className="h-4 w-4" /> API Keys
             </TabsTrigger>
             <TabsTrigger value="notifications" className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
               <Bell className="h-4 w-4" /> Notifications
@@ -446,72 +427,6 @@ const Settings = () => {
                       </Button>
                     </div>
                   )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* ----------------------------------------------------------------
-                API KEYS TAB
-            ---------------------------------------------------------------- */}
-            <TabsContent value="api-keys" className="mt-0">
-              <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-                <CardHeader>
-                  <CardTitle>Personal Access Token</CardTitle>
-                  <CardDescription>
-                    Use this token to authenticate API requests from external tools and scripts
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="space-y-3">
-                    <Label>Your API Key</Label>
-                    <div className="flex gap-2">
-                      <div className="flex-1 relative">
-                        <Input
-                          value={showKey ? apiKey : maskedKey}
-                          readOnly
-                          className="bg-background/50 border-border/50 font-mono text-sm pr-10"
-                        />
-                        <button
-                          onClick={() => setShowKey(!showKey)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                      <Button variant="outline" size="icon" onClick={handleCopyKey}>
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/20">
-                    <p className="text-sm text-destructive">
-                      <strong>Keep your API key secure.</strong> Do not share it publicly or commit it to version control.
-                      If compromised, regenerate it immediately.
-                    </p>
-                  </div>
-
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" className="gap-2">
-                        <RefreshCw className="h-4 w-4" /> Regenerate Token
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Regenerate API Token?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This will invalidate your current token immediately. Any applications using the old token will stop working.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleRegenerateKey} className="bg-destructive hover:bg-destructive/90">
-                          Regenerate
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </CardContent>
               </Card>
             </TabsContent>
