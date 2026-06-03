@@ -80,6 +80,7 @@ import { CodeViewer } from "@/components/scan/CodeViewer";
 import { ScanningProgress } from "@/components/scan/ScanningProgress";
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
 import { toast } from "sonner";
+import { addLocalNotification, getNotificationPreferences } from "@/lib/notifications";
 
 interface CodeLine {
   lineNumber: number;
@@ -450,6 +451,46 @@ const NewScan = () => {
     setThinkingSteps((prev) => [...prev, `[${timestamp}] ${prefix}: ${message}`]);
   }, []);
 
+  const notifyScanFinished = useCallback((projectLabel: string, result: ScanResult) => {
+    const preferences = getNotificationPreferences();
+    if (preferences.scanCompleted) {
+      toast.success("Scan completed", {
+        description: `${projectLabel} finished with ${result.total_vulnerabilities} issue${result.total_vulnerabilities === 1 ? "" : "s"}.`,
+      });
+      addLocalNotification({
+        title: "Scan completed",
+        description: `${projectLabel} finished`,
+        type: result.total_vulnerabilities > 0 ? "warning" : "success",
+      });
+    }
+    if (preferences.criticalAlerts) {
+      const criticalCount = result.vulnerabilities.filter((vulnerability) =>
+        String(vulnerability.severity || "").toLowerCase() === "critical"
+      ).length;
+      if (criticalCount > 0) {
+        toast.error("Critical vulnerability found", {
+          description: `${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} in ${projectLabel}.`,
+        });
+        addLocalNotification({
+          title: "Critical vulnerability found",
+          description: `${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} in ${projectLabel}`,
+          type: "critical",
+        });
+      }
+    }
+    if (scanMode === "team" && preferences.teamMemberScanned) {
+      const memberName = currentUser?.user_metadata?.full_name || currentUser?.email || "A team member";
+      toast.info("Team scan finished", {
+        description: `${memberName} finished scan for ${projectLabel}.`,
+      });
+      addLocalNotification({
+        title: "Team scan finished",
+        description: `${memberName} finished scan for ${projectLabel}`,
+        type: "info",
+      });
+    }
+  }, [currentUser?.email, currentUser?.user_metadata?.full_name, scanMode]);
+
   const upsertStreamingChunk = useCallback((incoming: ChunkOutput) => {
     setStreamingChunks((prev) => {
       const key = `${incoming.file_path ?? ""}-${incoming.chunk_index}`;
@@ -714,6 +755,14 @@ const NewScan = () => {
         resolvedProjectId = created.id;
         resolvedProjectName = created.name;
         createdProjectDuringScan = true;
+        if (getNotificationPreferences().newProject) {
+          toast.info("New project added", { description: `${created.name} was created.` });
+          addLocalNotification({
+            title: "New project added",
+            description: `${created.name} was created`,
+            type: "info",
+          });
+        }
         await refetchProjects();
       } catch (err: any) {
         setScanError(err.message || "Failed to create project");
@@ -902,6 +951,7 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
+        notifyScanFinished(resolvedProjectName || primaryFile?.name || "Security scan", combinedResult);
         addLog(`Found ${combinedResult.total_vulnerabilities} vulnerabilities — Risk: ${combinedResult.overall_risk_level}`, combinedResult.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -983,6 +1033,7 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
+        notifyScanFinished(resolvedProjectName || selectedProject?.name || "Security scan", result);
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -1059,6 +1110,7 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
+        notifyScanFinished(resolvedProjectName || selectedApiTeam?.name || "Team scan", result);
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 

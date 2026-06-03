@@ -42,6 +42,7 @@ import {
   type ProjectRecord, shouldApplyCdcEvent,
   applyOptimisticInsert, applyOptimisticUpdate, applyOptimisticDelete,
 } from "@/types/realtime";
+import { addLocalNotification, getNotificationPreferences } from "@/lib/notifications";
 
 type SortField = "name" | "language" | "updated_at" | "health_score";
 type SortDirection = "asc" | "desc";
@@ -335,6 +336,13 @@ const Projects = () => {
       const created = await Promise.race([createProject(payload), timeout]);
       setProjects((prev) => prev.map((p) => (p.id === optimisticId ? created : p)));
       toast({ title: "Project Created", description: `"${created.name}" has been created.` });
+      if (getNotificationPreferences().newProject) {
+        addLocalNotification({
+          title: "New project added",
+          description: `${created.name} was created`,
+          type: "info",
+        });
+      }
       navigate(`/projects/${created.id}`);
     } catch (err) {
       setProjects(snapshot);

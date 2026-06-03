@@ -1,6 +1,7 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Bell } from "lucide-react";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -14,27 +15,101 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 import { supabase } from "@/lib/supabase";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { getScanHistory } from "@/lib/scans-api";
+import { listProjects } from "@/lib/projects-api";
+import { getTeamDashboard, listTeams } from "@/lib/teams-api";
+import {
+  buildNotifications,
+  formatTimeAgo,
+  getLocalNotifications,
+  getNotificationPreferences,
+  type AppNotification,
+} from "@/lib/notifications";
 
 interface DashboardTopBarProps {
   hasNotifications?: boolean;
 }
 
+const notificationDotClass = (type: string) => {
+  if (type === "critical") return "bg-destructive";
+  if (type === "warning") return "bg-yellow-500";
+  if (type === "success") return "bg-primary";
+  return "bg-blue-500";
+};
+
 const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
-  const { displayName, email, avatarUrl, initials } = useCurrentUser();
+  const [preferences, setPreferences] = useState(getNotificationPreferences);
+  const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(getLocalNotifications);
+  const knownNotificationIdsRef = useRef<Set<string>>(new Set());
+  const initializedNotificationsRef = useRef(false);
+  const { user, displayName, email, avatarUrl, initials } = useCurrentUser();
 
-  // Determine primary role (highest privilege across all teams)
-  const primaryRole = useMemo(() => {
-    const userTeams = mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID));
-    if (userTeams.some(t => t.currentUserRole === "admin")) return "admin";
-    if (userTeams.some(t => t.currentUserRole === "developer")) return "developer";
-    if (userTeams.length > 0) return "viewer";
-    return null;
+  const { data: scans = [] } = useQuery({ queryKey: ["scan-history"], queryFn: getScanHistory });
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const { data: teams = [] } = useQuery({ queryKey: ["teams"], queryFn: listTeams });
+  const teamDashboardQueries = useQueries({
+    queries: teams.map((team) => ({
+      queryKey: ["team-dashboard", team.id],
+      queryFn: () => getTeamDashboard(team.id),
+      enabled: preferences.teamMemberScanned,
+      refetchInterval: preferences.teamMemberScanned ? 15_000 : false,
+    })),
+  });
+
+  useEffect(() => {
+    const syncNotifications = () => {
+      setPreferences(getNotificationPreferences());
+      setLocalNotifications(getLocalNotifications());
+    };
+    window.addEventListener("secureguard:notification-preferences", syncNotifications);
+    window.addEventListener("secureguard:notifications", syncNotifications);
+    window.addEventListener("storage", syncNotifications);
+    return () => {
+      window.removeEventListener("secureguard:notification-preferences", syncNotifications);
+      window.removeEventListener("secureguard:notifications", syncNotifications);
+      window.removeEventListener("storage", syncNotifications);
+    };
   }, []);
+
+  const notifications = useMemo(
+    () => buildNotifications({
+      scans,
+      projects,
+      teams,
+      preferences,
+      localNotifications,
+      currentUserId: user?.id,
+      teamScans: teamDashboardQueries.flatMap((query) => query.data?.recentScans ?? []),
+    }),
+    [localNotifications, preferences, projects, scans, teamDashboardQueries, teams, user?.id]
+  );
+
+  const primaryRole = useMemo(() => {
+    if (teams.some((team) => team.current_user_role === "admin")) return "admin";
+    if (teams.some((team) => team.current_user_role === "developer")) return "developer";
+    if (teams.length > 0) return "viewer";
+    return null;
+  }, [teams]);
+
+  useEffect(() => {
+    if (!initializedNotificationsRef.current) {
+      knownNotificationIdsRef.current = new Set(notifications.map((notification) => notification.id));
+      initializedNotificationsRef.current = true;
+      return;
+    }
+
+    const newest = notifications.find((notification) => !knownNotificationIdsRef.current.has(notification.id));
+    knownNotificationIdsRef.current = new Set(notifications.map((notification) => notification.id));
+    if (!newest) return;
+    if (!newest.id.startsWith("team-scan-")) return;
+
+    const toastFn = newest.type === "critical" ? toast.error : newest.type === "success" ? toast.success : toast.info;
+    toastFn(newest.title, { description: newest.description });
+  }, [notifications]);
 
   const getRoleBadgeClasses = (role: string) => {
     switch (role) {
@@ -61,8 +136,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
     <header className="h-16 border-b border-border/50 bg-card/30 backdrop-blur-xl flex items-center justify-between px-4 lg:px-6">
       <div className="flex items-center gap-4">
         <SidebarTrigger />
-        
-        {/* Global Search */}
         <div className="relative hidden sm:block">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -77,12 +150,11 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
       </div>
 
       <div className="flex items-center gap-4">
-        {/* Notification Bell */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="relative p-2 rounded-xl hover:bg-muted/50 transition-colors">
+            <button className="relative p-2 rounded-xl hover:bg-muted/50 transition-colors" aria-label="Notifications">
               <Bell className="h-5 w-5 text-muted-foreground" />
-              {hasNotifications && (
+              {hasNotifications && notifications.length > 0 && (
                 <span className="absolute top-1.5 right-1.5 h-2.5 w-2.5 bg-destructive rounded-full animate-pulse" />
               )}
             </button>
@@ -90,22 +162,25 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
           <DropdownMenuContent align="end" className="w-80 glass-card border-border/50">
             <DropdownMenuLabel>Notifications</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="flex flex-col items-start gap-1 py-3">
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 bg-destructive rounded-full" />
-                <span className="font-medium">Critical vulnerability found</span>
-              </div>
-              <span className="text-xs text-muted-foreground">SQL Injection in auth-service • 2m ago</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem className="flex flex-col items-start gap-1 py-3">
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 bg-yellow-500 rounded-full" />
-                <span className="font-medium">Scan completed</span>
-              </div>
-              <span className="text-xs text-muted-foreground">frontend-app scan finished • 15m ago</span>
-            </DropdownMenuItem>
+            {notifications.length === 0 ? (
+              <DropdownMenuItem className="py-3 text-sm text-muted-foreground">
+                No notifications yet
+              </DropdownMenuItem>
+            ) : (
+              notifications.slice(0, 5).map((notification) => (
+                <DropdownMenuItem key={notification.id} className="flex flex-col items-start gap-1 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${notificationDotClass(notification.type)}`} />
+                    <span className="font-medium">{notification.title}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {notification.description} - {formatTimeAgo(notification.createdAt)}
+                  </span>
+                </DropdownMenuItem>
+              ))
+            )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem 
+            <DropdownMenuItem
               className="text-center text-primary justify-center cursor-pointer"
               onClick={() => navigate("/notifications")}
             >
@@ -114,7 +189,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* User Profile */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-3 p-1.5 rounded-xl hover:bg-muted/50 transition-colors">
@@ -129,7 +203,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56 glass-card border-border/50">
-            {/* Profile Header */}
             <div className="px-3 py-3 flex items-center gap-3">
               <Avatar className="h-10 w-10">
                 <AvatarImage src={avatarUrl} />
@@ -146,23 +219,14 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
               </div>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem 
-              className="cursor-pointer"
-              onClick={() => navigate("/settings?tab=profile")}
-            >
+            <DropdownMenuItem className="cursor-pointer" onClick={() => navigate("/settings?tab=profile")}>
               Profile Settings
             </DropdownMenuItem>
-            <DropdownMenuItem 
-              className="cursor-pointer"
-              onClick={() => navigate("/settings?tab=api-keys")}
-            >
+            <DropdownMenuItem className="cursor-pointer" onClick={() => navigate("/settings?tab=api-keys")}>
               API Keys
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem 
-              className="text-destructive cursor-pointer"
-              onClick={handleLogout}
-            >
+            <DropdownMenuItem className="text-destructive cursor-pointer" onClick={handleLogout}>
               Log out
             </DropdownMenuItem>
           </DropdownMenuContent>

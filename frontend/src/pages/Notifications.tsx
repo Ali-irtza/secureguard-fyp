@@ -1,35 +1,72 @@
-import { useState } from "react";
-import { Bell, CheckCircle, AlertTriangle, Info, Filter } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueries } from "@tanstack/react-query";
+import { Bell, CheckCircle, AlertTriangle, Info } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-
-interface Notification {
-  id: string;
-  title: string;
-  description: string;
-  type: "critical" | "warning" | "info" | "success";
-  timeAgo: string;
-  read: boolean;
-}
-
-const mockNotifications: Notification[] = [
-  { id: "1", title: "Critical vulnerability found", description: "SQL Injection detected in auth-service", type: "critical", timeAgo: "2 minutes ago", read: false },
-  { id: "2", title: "Scan completed", description: "frontend-app scan finished successfully", type: "success", timeAgo: "15 minutes ago", read: false },
-  { id: "3", title: "New project added", description: "api-gateway was added to your workspace", type: "info", timeAgo: "1 hour ago", read: true },
-  { id: "4", title: "Medium severity issue", description: "Outdated dependency in payment-service", type: "warning", timeAgo: "2 hours ago", read: true },
-  { id: "5", title: "Weekly summary ready", description: "Your weekly security report is available", type: "info", timeAgo: "1 day ago", read: true },
-  { id: "6", title: "XSS vulnerability patched", description: "Issue resolved in user-dashboard", type: "success", timeAgo: "2 days ago", read: true },
-];
+import { getScanHistory } from "@/lib/scans-api";
+import { listProjects } from "@/lib/projects-api";
+import { getTeamDashboard, listTeams } from "@/lib/teams-api";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import {
+  buildNotifications,
+  formatTimeAgo,
+  getLocalNotifications,
+  getNotificationPreferences,
+  type AppNotification,
+  type NotificationType,
+} from "@/lib/notifications";
 
 const Notifications = () => {
   const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [preferences, setPreferences] = useState(getNotificationPreferences);
+  const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(getLocalNotifications);
+  const { user } = useCurrentUser();
 
-  const filteredNotifications = filter === "unread" 
-    ? mockNotifications.filter(n => !n.read)
-    : mockNotifications;
+  const { data: scans = [] } = useQuery({ queryKey: ["scan-history"], queryFn: getScanHistory });
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const { data: teams = [] } = useQuery({ queryKey: ["teams"], queryFn: listTeams });
+  const teamDashboardQueries = useQueries({
+    queries: teams.map((team) => ({
+      queryKey: ["team-dashboard", team.id],
+      queryFn: () => getTeamDashboard(team.id),
+      enabled: preferences.teamMemberScanned,
+    })),
+  });
 
-  const getTypeIcon = (type: Notification["type"]) => {
+  useEffect(() => {
+    const sync = () => {
+      setPreferences(getNotificationPreferences());
+      setLocalNotifications(getLocalNotifications());
+    };
+    window.addEventListener("secureguard:notification-preferences", sync);
+    window.addEventListener("secureguard:notifications", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("secureguard:notification-preferences", sync);
+      window.removeEventListener("secureguard:notifications", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  const notifications = useMemo(
+    () => buildNotifications({
+      scans,
+      projects,
+      teams,
+      preferences,
+      localNotifications,
+      currentUserId: user?.id,
+      teamScans: teamDashboardQueries.flatMap((query) => query.data?.recentScans ?? []),
+    }),
+    [localNotifications, preferences, projects, scans, teamDashboardQueries, teams, user?.id]
+  );
+
+  const filteredNotifications = filter === "unread"
+    ? notifications.filter((notification) => !notification.read)
+    : notifications;
+
+  const getTypeIcon = (type: NotificationType) => {
     switch (type) {
       case "critical": return <AlertTriangle className="h-5 w-5 text-destructive" />;
       case "warning": return <AlertTriangle className="h-5 w-5 text-yellow-500" />;
@@ -38,8 +75,8 @@ const Notifications = () => {
     }
   };
 
-  const getTypeBadge = (type: Notification["type"]) => {
-    const variants: Record<Notification["type"], string> = {
+  const getTypeBadge = (type: NotificationType) => {
+    const variants: Record<NotificationType, string> = {
       critical: "bg-destructive/20 text-destructive",
       warning: "bg-yellow-500/20 text-yellow-500",
       success: "bg-primary/20 text-primary",
@@ -51,7 +88,6 @@ const Notifications = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground flex items-center gap-3">
@@ -63,24 +99,15 @@ const Notifications = () => {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant={filter === "all" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFilter("all")}
-            >
+            <Button variant={filter === "all" ? "default" : "outline"} size="sm" onClick={() => setFilter("all")}>
               All
             </Button>
-            <Button
-              variant={filter === "unread" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFilter("unread")}
-            >
-              Unread ({mockNotifications.filter(n => !n.read).length})
+            <Button variant={filter === "unread" ? "default" : "outline"} size="sm" onClick={() => setFilter("unread")}>
+              Unread ({notifications.filter((notification) => !notification.read).length})
             </Button>
           </div>
         </div>
 
-        {/* Notifications List */}
         <div className="glass-card overflow-hidden">
           {filteredNotifications.length === 0 ? (
             <div className="p-12 text-center">
@@ -91,7 +118,7 @@ const Notifications = () => {
             filteredNotifications.map((notification) => (
               <div
                 key={notification.id}
-                className={`p-4 border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${
+                className={`p-4 border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors ${
                   !notification.read ? "bg-primary/5" : ""
                 }`}
               >
@@ -100,16 +127,12 @@ const Notifications = () => {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <p className="font-medium text-foreground">{notification.title}</p>
-                      {!notification.read && (
-                        <span className="h-2 w-2 bg-primary rounded-full" />
-                      )}
+                      {!notification.read && <span className="h-2 w-2 bg-primary rounded-full" />}
                     </div>
                     <p className="text-sm text-muted-foreground">{notification.description}</p>
                     <div className="flex items-center gap-3 mt-2">
-                      <Badge className={getTypeBadge(notification.type)}>
-                        {notification.type}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">{notification.timeAgo}</span>
+                      <Badge className={getTypeBadge(notification.type)}>{notification.type}</Badge>
+                      <span className="text-xs text-muted-foreground">{formatTimeAgo(notification.createdAt)}</span>
                     </div>
                   </div>
                 </div>

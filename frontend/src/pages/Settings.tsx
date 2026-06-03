@@ -5,6 +5,7 @@ import {
   User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera,
   Palette, Sun, Moon, Monitor, Users, Crown, Trash2, Github, ArrowRight,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,8 +22,14 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
   AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 import { useCurrentUser, type UpdateProfilePayload } from "@/hooks/use-current-user";
+import { listTeams, type Team } from "@/lib/teams-api";
+import { listProjects } from "@/lib/projects-api";
+import {
+  defaultNotificationPreferences,
+  getNotificationPreferences,
+  saveNotificationPreferences,
+} from "@/lib/notifications";
 
 const Settings = () => {
   const [searchParams] = useSearchParams();
@@ -34,7 +41,7 @@ const Settings = () => {
   // Real user data — single source of truth via our hook (DRY)
   // ---------------------------------------------------------------------------
   const {
-    profile, displayName, email, avatarUrl, initials,
+    user, profile, displayName, email, avatarUrl, initials,
     isOAuthUser, hasEmailIdentity, updateProfile, updatePassword,
   } = useCurrentUser();
 
@@ -102,13 +109,8 @@ const Settings = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSavingPassword, setIsSavingPassword] = useState(false);
 
-  // ---------------------------------------------------------------------------
-  // Team data (still from mock until teams feature is built)
-  // ---------------------------------------------------------------------------
-  const userTeams = useMemo(
-    () => mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID)),
-    []
-  );
+  const { data: userTeams = [] } = useQuery({ queryKey: ["teams"], queryFn: listTeams });
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const hasTeams = userTeams.length > 0;
 
   // Sync active tab from URL query param (?tab=profile)
@@ -131,12 +133,11 @@ const Settings = () => {
   // ---------------------------------------------------------------------------
   // Notification state (local for now — will be persisted to DB later)
   // ---------------------------------------------------------------------------
-  const [notifications, setNotifications] = useState({
-    criticalAlerts: true,
-    scanCompleted: false,
-    newProject: false,
-    teamMemberScanned: false,
-  });
+  const [notifications, setNotifications] = useState(defaultNotificationPreferences);
+
+  useEffect(() => {
+    setNotifications(getNotificationPreferences());
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -231,12 +232,28 @@ const Settings = () => {
     toast.success("New API key generated successfully");
   };
 
+  const handleSaveNotificationPreferences = () => {
+    saveNotificationPreferences(notifications);
+    toast.success("Notification preferences saved");
+  };
+
   const getRoleBadgeClasses = (role: string) => {
     switch (role) {
       case "admin":     return "bg-primary/15 text-primary border-primary/30";
       case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
       default:          return "bg-muted text-muted-foreground border-border/50";
     }
+  };
+
+  const getTeamProjectNames = (teamId: string) => {
+    const teamProjects = projects.filter((project) => project.team_id === teamId);
+    return teamProjects.length > 0
+      ? teamProjects.map((project) => project.name).join(", ")
+      : "No team projects yet";
+  };
+
+  const getCurrentMember = (team: Team) => {
+    return team.members.find((member) => member.user_id === user?.id);
   };
 
   // ---------------------------------------------------------------------------
@@ -530,7 +547,7 @@ const Settings = () => {
                     </div>
                   ))}
 
-                  <Button onClick={() => toast.success("Notification preferences saved")} className="bg-primary hover:bg-primary/90">
+                  <Button onClick={handleSaveNotificationPreferences} className="bg-primary hover:bg-primary/90">
                     Save Preferences
                   </Button>
                 </CardContent>
@@ -549,8 +566,10 @@ const Settings = () => {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {userTeams.map((team) => {
-                      const isTeamAdmin = team.currentUserRole === "admin";
-                      const repoName = team.githubRepo?.replace("https://github.com/", "") ?? null;
+                      const isTeamAdmin = team.current_user_role === "admin";
+                      const repoName = team.github_repo?.replace("https://github.com/", "") ?? null;
+                      const currentMember = getCurrentMember(team);
+                      const assignedBranches = currentMember?.branches ?? [];
 
                       return (
                         <div key={team.id} className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
@@ -563,17 +582,23 @@ const Settings = () => {
                             <div className="space-y-1">
                               <div className="flex items-center gap-2">
                                 <span className="font-medium text-foreground">{team.name}</span>
-                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.currentUserRole)}`}>
-                                  {team.currentUserRole}
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.current_user_role)}`}>
+                                  {team.current_user_role}
                                 </Badge>
                               </div>
-                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                <span>{team.members.length} members</span>
+                              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                                <span>{team.member_count} members</span>
                                 {repoName && (
                                   <span className="flex items-center gap-1">
                                     <Github className="h-3 w-3" /> {repoName}
                                   </span>
                                 )}
+                                <span>Projects: {getTeamProjectNames(team.id)}</span>
+                                <span>
+                                  Branches: {isTeamAdmin
+                                    ? (team.github_branches.length ? team.github_branches.join(", ") : "All")
+                                    : (assignedBranches.length ? assignedBranches.join(", ") : "None assigned")}
+                                </span>
                               </div>
                             </div>
                           </div>
