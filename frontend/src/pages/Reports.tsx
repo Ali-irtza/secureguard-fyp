@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, Calendar, Download, Trash2, Plus, FileBarChart, CheckCircle2, Users, Loader2, RefreshCw, Code2 } from "lucide-react";
+import { FileText, Calendar, Download, Trash2, FileBarChart, CheckCircle2, Users, Loader2, RefreshCw, Code2 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import GenerateReportDialog from "@/components/dashboard/GenerateReportDialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { toast } from "sonner";
 import { deleteReport, downloadReport, downloadReportCode, listReports, ReportItem } from "@/lib/scans-api";
+
+const REPORTS_PER_PAGE = 10;
 
 const formatDate = (value?: string | null) => {
   if (!value) return "Unknown";
@@ -25,11 +27,13 @@ const isThisMonth = (value?: string | null) => {
 
 const Reports = () => {
   const navigate = useNavigate();
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [reportTypeFilter, setReportTypeFilter] = useState<"all" | "personal" | "team">("all");
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyReportId, setBusyReportId] = useState<string | null>(null);
+  const [busyReportDownloadId, setBusyReportDownloadId] = useState<string | null>(null);
+  const [busyCodeDownloadId, setBusyCodeDownloadId] = useState<string | null>(null);
+  const [busyDeleteId, setBusyDeleteId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const loadReports = async () => {
     setLoading(true);
@@ -51,6 +55,20 @@ const Reports = () => {
     return reports;
   }, [reports, reportTypeFilter]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredReports.length / REPORTS_PER_PAGE));
+  const paginatedReports = useMemo(() => {
+    const start = (currentPage - 1) * REPORTS_PER_PAGE;
+    return filteredReports.slice(start, start + REPORTS_PER_PAGE);
+  }, [currentPage, filteredReports]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [reportTypeFilter]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
   const stats = useMemo(() => {
     return [
       { label: "Total Reports", value: String(filteredReports.length), icon: FileText },
@@ -60,27 +78,27 @@ const Reports = () => {
     ];
   }, [filteredReports]);
 
-  const handleDownload = async (report: ReportItem) => {
-    setBusyReportId(report.id);
+  const handleDownload = async (report: ReportItem, format: "pdf" | "csv") => {
+    setBusyReportDownloadId(report.id);
     try {
-      await downloadReport(report);
-      toast.success(`${report.format.toUpperCase()} download started`);
+      await downloadReport(report, format);
+      toast.success(`${format.toUpperCase()} download started`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Download failed");
     } finally {
-      setBusyReportId(null);
+      setBusyReportDownloadId(null);
     }
   };
 
   const handleDownloadCode = async (report: ReportItem) => {
-    setBusyReportId(report.id);
+    setBusyCodeDownloadId(report.id);
     try {
       await downloadReportCode(report);
       toast.success("Code ZIP download started");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Code download failed");
     } finally {
-      setBusyReportId(null);
+      setBusyCodeDownloadId(null);
     }
   };
 
@@ -89,7 +107,7 @@ const Reports = () => {
       `Delete "${report.name}"? This also removes its linked scan from Scan History and Dashboard.`
     );
     if (!confirmed) return;
-    setBusyReportId(report.id);
+    setBusyDeleteId(report.id);
     try {
       await deleteReport(report.id);
       setReports((current) =>
@@ -101,7 +119,7 @@ const Reports = () => {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Delete failed");
     } finally {
-      setBusyReportId(null);
+      setBusyDeleteId(null);
     }
   };
 
@@ -122,10 +140,6 @@ const Reports = () => {
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground">Reports</h1>
             <p className="text-muted-foreground mt-1">Generate and manage security reports</p>
           </div>
-          <Button onClick={() => setDialogOpen(true)} className="gap-2 glow-emerald">
-            <Plus className="h-4 w-4" />
-            Generate Report
-          </Button>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -179,12 +193,6 @@ const Reports = () => {
                     ? "Team report generation is disabled until teams are configured."
                     : "Complete a scan or generate a report from an existing project."}
                 </p>
-                {reportTypeFilter !== "team" && (
-                  <Button onClick={() => setDialogOpen(true)} className="gap-2">
-                    <Plus className="h-4 w-4" />
-                    Generate Report
-                  </Button>
-                )}
               </div>
             ) : (
               <Table>
@@ -193,7 +201,6 @@ const Reports = () => {
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead>Format</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-center">Report</TableHead>
                     <TableHead className="text-center">Code</TableHead>
@@ -202,9 +209,11 @@ const Reports = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredReports.map((report) => {
+                  {paginatedReports.map((report) => {
                     const scan = report.scans;
-                    const busy = busyReportId === report.id;
+                    const reportBusy = busyReportDownloadId === report.id;
+                    const codeBusy = busyCodeDownloadId === report.id;
+                    const deleteBusy = busyDeleteId === report.id;
                     return (
                       <TableRow key={report.id}>
                         <TableCell>
@@ -218,38 +227,44 @@ const Reports = () => {
                         <TableCell className="text-muted-foreground">Full Scan Report</TableCell>
                         <TableCell className="text-muted-foreground">{formatDate(report.created_at)}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="font-mono text-xs">
-                            {report.format.toUpperCase()}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
                           <div className="flex items-center gap-2 text-primary">
                             <CheckCircle2 className="h-4 w-4" />
                             <span className="text-sm capitalize">{report.status}</span>
                           </div>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDownload(report)}
-                            disabled={busy || !report.file_path}
-                            className="h-8 w-8"
-                            title="Download report"
-                          >
-                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                disabled={reportBusy || (!report.file_path && !report.scan_id)}
+                                className="h-8 w-8"
+                                title="Download report"
+                              >
+                                {reportBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="center">
+                              <DropdownMenuItem onClick={() => handleDownload(report, "pdf")}>
+                                Download PDF
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleDownload(report, "csv")}>
+                                Download CSV
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                         <TableCell className="text-center">
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => handleDownloadCode(report)}
-                            disabled={busy || !report.scan_id}
+                            disabled={codeBusy || !report.scan_id}
                             className="h-8 w-8"
                             title="Download input and corrected code ZIP"
                           >
-                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
+                            {codeBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
                           </Button>
                         </TableCell>
                         <TableCell className="text-center">
@@ -257,7 +272,7 @@ const Reports = () => {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleRescan(report)}
-                            disabled={busy || !report.scans?.project_id}
+                            disabled={!report.scans?.project_id}
                             className="h-8 w-8"
                             title="Rescan project"
                           >
@@ -269,11 +284,11 @@ const Reports = () => {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleDelete(report)}
-                            disabled={busy}
+                            disabled={deleteBusy}
                             className="h-8 w-8 text-destructive hover:text-destructive"
                             title="Delete report and linked scan"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            {deleteBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -282,17 +297,45 @@ const Reports = () => {
                 </TableBody>
               </Table>
             )}
+            {!loading && filteredReports.length > REPORTS_PER_PAGE && (
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Showing {(currentPage - 1) * REPORTS_PER_PAGE + 1}-{Math.min(currentPage * REPORTS_PER_PAGE, filteredReports.length)} of {filteredReports.length}
+                </p>
+                <Pagination className="mx-0 w-auto justify-start sm:justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                        disabled={currentPage === 1}
+                      >
+                        Previous
+                      </Button>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <span className="px-3 text-sm text-muted-foreground">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                        disabled={currentPage === totalPages}
+                      >
+                        Next
+                      </Button>
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
-
-      <GenerateReportDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        scanTypeFilter={reportTypeFilter}
-        selectedTeamId=""
-        onGenerated={loadReports}
-      />
     </DashboardLayout>
   );
 };

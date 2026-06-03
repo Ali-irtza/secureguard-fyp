@@ -209,18 +209,27 @@ def _chunk_line(chunk: Dict, line_number: int) -> str:
     return lines[line_number - start_line] if 0 <= line_number - start_line < len(lines) else ""
 
 
+def _looks_like_line_marker(value: str) -> bool:
+    normalized = value.strip()
+    return bool(re.fullmatch(r"(?:line\s*)?\d+|line\s+\d+\s*:?", normalized, re.IGNORECASE))
+
+
 def _affected_code_for_issue(issue: Dict, chunks: List[Dict]) -> str:
     direct = str(issue.get("affected_code") or issue.get("code_snippet") or "").strip()
-    if direct:
-        return direct
     file_path = issue.get("file_path") or ""
     line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    if direct and not _looks_like_line_marker(direct):
+        return direct
     for chunk in chunks:
         if (chunk.get("file_path") or "") == file_path:
             source_line = _chunk_line(chunk, line_number)
             if source_line.strip():
                 return source_line
-    return f"Line {line_number or 'N/A'}"
+    for chunk in chunks:
+        source_line = _chunk_line(chunk, line_number)
+        if source_line.strip():
+            return source_line
+    return direct if direct and not _looks_like_line_marker(direct) else ""
 
 
 def _chunk_issues(chunk: Dict, vulnerabilities: List[Dict]) -> list[Dict]:
@@ -543,57 +552,28 @@ def _build_simple_pdf(title: str, scan_data: Dict, vulnerabilities: List[Dict]) 
     return buffer.getvalue()
 
 
+def build_pdf_report(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
+    scan_id = scan_data.get("id") or scan_data.get("scan_id") or "scan"
+    title = f"SecureGuard Scan Report - {scan_data.get('project_name') or scan_id}"
+    return _build_simple_pdf(title, scan_data, vulnerabilities)
+
+
 def _build_csv(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["SecureGuard Full Scan Report"])
-    writer.writerow([])
-    writer.writerow(["Project", scan_data.get("project_name") or "Project"])
-    writer.writerow(["Scan ID", scan_data.get("id") or scan_data.get("scan_id") or ""])
-    writer.writerow(["Scan Type", scan_data.get("scan_type") or "Unknown"])
-    writer.writerow(["Risk Level", scan_data.get("overall_risk_level") or scan_data.get("risk_level") or "Unknown"])
-    writer.writerow(["Risk Score", scan_data.get("overall_risk_score") or scan_data.get("risk_score") or 0])
-    writer.writerow(["Files Scanned", scan_data.get("files_scanned") or scan_data.get("files_analyzed") or 0])
-    writer.writerow(["Total Vulnerabilities", scan_data.get("total_vulnerabilities") or scan_data.get("total_vulns") or len(vulnerabilities)])
-    writer.writerow([])
-    writer.writerow(["Input And Corrected Code"])
-    writer.writerow(["File", "Start Line", "End Line", "Input Code", "Corrected Code"])
-    for chunk in scan_data.get("chunk_outputs") or []:
-        writer.writerow([
-            chunk.get("file_path") or "",
-            chunk.get("start_line") or "",
-            chunk.get("end_line") or "",
-            chunk.get("code") or "",
-            chunk.get("corrected_code") or "",
-        ])
-    writer.writerow([])
-    writer.writerow(["Vulnerability Details"])
-    writer.writerow([
-        "Severity",
-        "CWE ID",
-        "CWE Name",
-        "File",
-        "Line",
-        "Vulnerable Code",
-        "Explanation",
-        "Fix Suggestion",
-        "Function",
-        "Location",
-    ])
+    writer.writerow(["Line Number", "CWE ID", "Code Line", "Explanation"])
     for vuln in vulnerabilities:
         writer.writerow([
-            str(vuln.get("severity") or "").upper(),
-            vuln.get("cwe_id") or "",
-            vuln.get("cwe_name") or vuln.get("type") or "",
-            vuln.get("file_path") or "",
             vuln.get("line_number") or vuln.get("absolute_line") or "",
+            vuln.get("cwe_id") or "",
             _affected_code_for_issue(vuln, scan_data.get("chunk_outputs") or []),
             vuln.get("description") or "",
-            vuln.get("fix_suggestion") or "",
-            vuln.get("function_name") or "",
-            vuln.get("location") or "",
         ])
     return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def build_vulnerability_csv(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
+    return _build_csv(scan_data, vulnerabilities)
 
 
 def _upload_zip(supabase: Client, path: str, files: dict[str, bytes]) -> None:

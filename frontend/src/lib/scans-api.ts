@@ -387,7 +387,7 @@ export async function deleteReport(reportId: string): Promise<void> {
   return apiFetch<void>(`/reports/${reportId}`, { method: "DELETE" });
 }
 
-export async function downloadReport(report: ReportItem): Promise<void> {
+export async function downloadReport(report: ReportItem, format: "pdf" | "csv"): Promise<void> {
   const { supabase } = await import("@/lib/supabase");
   const {
     data: { session },
@@ -395,7 +395,7 @@ export async function downloadReport(report: ReportItem): Promise<void> {
   if (!session) throw new Error("Not authenticated");
 
   const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-  const response = await fetch(`${API_BASE}/reports/${report.id}/download`, {
+  const response = await fetch(`${API_BASE}/reports/${report.id}/download?format=${format}`, {
     headers: { Authorization: `Bearer ${session.access_token}` },
   });
   if (!response.ok) {
@@ -403,7 +403,7 @@ export async function downloadReport(report: ReportItem): Promise<void> {
     throw new Error(json.detail ?? `Report download failed: ${response.status}`);
   }
   const blob = await response.blob();
-  const extension = report.format === "csv" ? "csv" : "pdf";
+  const extension = format;
   const safeName = `${report.name || "secureguard-report"}-${report.id}.${extension}`.replace(/[\\/:*?"<>|]/g, "-");
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
