@@ -1,12 +1,111 @@
 from fastapi import HTTPException, status
 from supabase import Client
+from datetime import datetime
 from app.models.teams import (
     TeamResponse,
     TeamListResponse,
     TeamMemberResponse,
     MemberProfile,
     TeamRole,
+    TeamDashboardResponse,
+    TeamDashboardMetrics,
+    TeamDashboardMember,
+    TeamDashboardScan,
+    TeamDashboardTrendPoint,
+    TeamDashboardCriticalAlert,
 )
+
+
+EMPTY_SEVERITY_COUNTS = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+
+def _calculate_health_score(counts: dict[str, int]) -> int:
+    raw_score = (
+        100
+        - counts.get("critical", 0) * 2.0
+        - counts.get("high", 0) * 1.0
+        - counts.get("medium", 0) * 0.5
+        - counts.get("low", 0) * 0.25
+    )
+    clamped = max(0, min(100, raw_score))
+    return int(clamped + 0.5)
+
+
+def _initials(name: str) -> str:
+    parts = [part for part in name.replace("@", " ").split() if part]
+    if not parts:
+        return "U"
+    return "".join(part[0] for part in parts).upper()[:2]
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _display_date(value: str | None) -> str:
+    parsed = _parse_datetime(value)
+    if not parsed:
+        return "Unknown"
+    return f"{parsed.strftime('%b')} {parsed.day}"
+
+
+def _scan_date(scan: dict) -> str:
+    return scan.get("completed_at") or scan.get("started_at") or scan.get("created_at")
+
+
+def _project_name(scan: dict, projects_by_id: dict[str, dict]) -> str:
+    project = projects_by_id.get(scan.get("project_id") or "")
+    return (
+        scan.get("project_name")
+        or (project.get("name") if project else None)
+        or scan.get("file_name")
+        or scan.get("branch")
+        or "Project"
+    )
+
+
+def _title_for_critical(vuln: dict) -> str:
+    label = vuln.get("cwe_id") or vuln.get("type") or vuln.get("cwe_name") or "Critical Issue"
+    line = vuln.get("line_number")
+    return f"{label} at line {line}" if line else label
+
+
+def _fetch_vulnerabilities_for_scans(scan_ids: list[str], supabase: Client) -> list[dict]:
+    if not scan_ids:
+        return []
+    result = (
+        supabase.table("vulnerabilities")
+        .select("id,scan_id,severity,cwe_id,cwe_name,type,line_number,file_path,description,created_at")
+        .in_("scan_id", scan_ids)
+        .execute()
+    )
+    return result.data or []
+
+
+def _counts_by_scan(vulnerabilities: list[dict]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for vuln in vulnerabilities:
+        scan_id = vuln.get("scan_id")
+        if not scan_id:
+            continue
+        severity = str(vuln.get("severity") or "low").lower()
+        safe_severity = severity if severity in EMPTY_SEVERITY_COUNTS else "low"
+        counts.setdefault(scan_id, EMPTY_SEVERITY_COUNTS.copy())
+        counts[scan_id][safe_severity] += 1
+    return counts
+
+
+def _sum_counts(vulnerabilities: list[dict]) -> dict[str, int]:
+    counts = EMPTY_SEVERITY_COUNTS.copy()
+    for vuln in vulnerabilities:
+        severity = str(vuln.get("severity") or "low").lower()
+        counts[severity if severity in counts else "low"] += 1
+    return counts
 
 def require_admin(team_id: str, user_id: str, supabase: Client) -> None:
     """Raises 403 if the user is not a team admin."""
@@ -259,3 +358,169 @@ def delete_team_by_id(team_id: str, user_id: str, supabase: Client) -> None:
     """Permanently deletes a team."""
     require_admin(team_id, user_id, supabase)
     supabase.table("teams").delete().eq("id", team_id).execute()
+
+
+def get_team_dashboard(team_id: str, user_id: str, supabase: Client) -> TeamDashboardResponse:
+    """Returns all dashboard data for one team, scoped through team projects."""
+    require_member(team_id, user_id, supabase)
+
+    members = fetch_members_for_team(team_id, supabase)
+    member_user_ids = [member["user_id"] for member in members]
+
+    projects_result = (
+        supabase.table("projects")
+        .select("id,name")
+        .eq("team_id", team_id)
+        .eq("type", "team")
+        .execute()
+    )
+    projects = projects_result.data or []
+    project_ids = [project["id"] for project in projects]
+    projects_by_id = {project["id"]: project for project in projects}
+
+    scans: list[dict] = []
+    if project_ids:
+        scans_result = (
+            supabase.table("scans")
+            .select("*")
+            .in_("project_id", project_ids)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        scans = scans_result.data or []
+
+    completed_scans = [scan for scan in scans if scan.get("status") == "completed"]
+    completed_scan_ids = [scan["id"] for scan in completed_scans]
+    all_scan_ids = [scan["id"] for scan in scans]
+    completed_vulnerabilities = _fetch_vulnerabilities_for_scans(completed_scan_ids, supabase)
+    all_vulnerabilities = _fetch_vulnerabilities_for_scans(all_scan_ids, supabase)
+    severity_by_scan = _counts_by_scan(all_vulnerabilities)
+    completed_counts = _sum_counts(completed_vulnerabilities)
+
+    profile_names = {
+        member["user_id"]: (
+            member.get("profiles", {}).get("full_name")
+            if member.get("profiles")
+            else None
+        )
+        for member in members
+    }
+
+    scans_by_user: dict[str, list[dict]] = {member_id: [] for member_id in member_user_ids}
+    for scan in scans:
+        scan_user_id = scan.get("user_id")
+        if scan_user_id in scans_by_user:
+            scans_by_user[scan_user_id].append(scan)
+
+    dashboard_members: list[TeamDashboardMember] = []
+    for member in members:
+        member_id = member["user_id"]
+        assigned_branches = member.get("branches") or member.get("branch") or []
+        if isinstance(assigned_branches, str):
+            assigned_branches = [assigned_branches]
+        member_scans = scans_by_user.get(member_id, [])
+        latest_scan = member_scans[0] if member_scans else None
+        member_completed_scan_ids = {
+            scan["id"] for scan in member_scans if scan.get("status") == "completed"
+        }
+        member_vulnerabilities = [
+            vuln for vuln in all_vulnerabilities if vuln.get("scan_id") in member_completed_scan_ids
+        ]
+        member_counts = _sum_counts(member_vulnerabilities)
+        display_name = profile_names.get(member_id) or member.get("email") or "Team Member"
+        branch_label = ", ".join(assigned_branches) if assigned_branches else (latest_scan or {}).get("branch") or "Unassigned"
+        dashboard_members.append(
+            TeamDashboardMember(
+                userId=member_id,
+                name=display_name,
+                initials=_initials(display_name),
+                role=TeamRole(member["role"]),
+                branches=assigned_branches,
+                branch=branch_label,
+                healthScore=_calculate_health_score(member_counts) if member_completed_scan_ids else None,
+                lastScanAt=_parse_datetime(_scan_date(latest_scan)) if latest_scan else None,
+            )
+        )
+
+    recent_scans = [
+        TeamDashboardScan(
+            id=scan["id"],
+            projectName=_project_name(scan, projects_by_id),
+            date=_parse_datetime(_scan_date(scan)) or _parse_datetime(scan.get("created_at")),
+            status=scan.get("status") or "failed",
+            branch=scan.get("branch"),
+            memberId=scan.get("user_id"),
+            memberName=profile_names.get(scan.get("user_id")) or "Team Member",
+            vulnerabilities=severity_by_scan.get(scan["id"], EMPTY_SEVERITY_COUNTS.copy()),
+        )
+        for scan in scans[:50]
+        if _parse_datetime(_scan_date(scan)) or _parse_datetime(scan.get("created_at"))
+    ]
+
+    trend_by_date: dict[str, dict[str, int]] = {}
+    trend_order: dict[str, datetime] = {}
+    completed_scan_map = {scan["id"]: scan for scan in completed_scans}
+    for vuln in completed_vulnerabilities:
+        severity = str(vuln.get("severity") or "low").lower()
+        if severity not in {"critical", "high", "medium"}:
+            continue
+        scan = completed_scan_map.get(vuln.get("scan_id"))
+        if not scan:
+            continue
+        date_label = _display_date(_scan_date(scan))
+        trend_by_date.setdefault(date_label, {"critical": 0, "high": 0, "medium": 0})
+        trend_by_date[date_label][severity] += 1
+        parsed_scan_date = _parse_datetime(_scan_date(scan))
+        if parsed_scan_date and date_label not in trend_order:
+            trend_order[date_label] = parsed_scan_date
+
+    sorted_dates = sorted(
+        trend_by_date.keys(),
+        key=lambda label: trend_order[label].isoformat() if label in trend_order else "",
+    )
+    vulnerability_trend = [
+        TeamDashboardTrendPoint(
+            date=date,
+            critical=trend_by_date[date]["critical"],
+            high=trend_by_date[date]["high"],
+            medium=trend_by_date[date]["medium"],
+        )
+        for date in sorted_dates[-7:]
+    ]
+
+    critical_alerts: list[TeamDashboardCriticalAlert] = []
+    scan_lookup = {scan["id"]: scan for scan in scans}
+    for vuln in sorted(
+        [v for v in all_vulnerabilities if str(v.get("severity") or "").lower() == "critical"],
+        key=lambda item: item.get("created_at") or "",
+        reverse=True,
+    ):
+        scan = scan_lookup.get(vuln.get("scan_id"))
+        if not scan:
+            continue
+        created_at = _parse_datetime(vuln.get("created_at")) or _parse_datetime(_scan_date(scan))
+        if not created_at:
+            continue
+        critical_alerts.append(
+            TeamDashboardCriticalAlert(
+                id=vuln["id"],
+                title=_title_for_critical(vuln),
+                project=_project_name(scan, projects_by_id),
+                timeAgo=created_at.isoformat(),
+                createdAt=created_at,
+                memberName=profile_names.get(scan.get("user_id")) or "Team Member",
+                branch=scan.get("branch"),
+            )
+        )
+
+    return TeamDashboardResponse(
+        metrics=TeamDashboardMetrics(
+            totalScans=len(completed_scans),
+            criticalVulns=completed_counts["critical"],
+            healthScore=_calculate_health_score(completed_counts),
+        ),
+        members=dashboard_members,
+        recentScans=recent_scans,
+        vulnerabilityTrend=vulnerability_trend,
+        criticalAlerts=critical_alerts,
+    )

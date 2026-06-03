@@ -23,6 +23,7 @@ from app.services.scans.scan_storage_service import (
     create_manual_report,
     get_report_for_user,
     delete_report_scan_for_user,
+    build_code_zip_for_report,
 )
 from app.services.scans.report_storage_service import load_pdf_from_zip, load_report_from_zip
 from app.services.project_files.file_service import save_scanned_sources_zip
@@ -158,6 +159,7 @@ async def start_scan(
         current_user.id,
         supabase
     )
+    save_scanned_sources_zip(body.project_id, current_user.id, files_dict, supabase)
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
     except HTTPException as exc:
@@ -478,6 +480,30 @@ async def download_report(
     )
 
 
+@router.get("/reports/{report_id}/download-code")
+async def download_report_code(
+    report_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Download original scanned code and corrected code as a ZIP."""
+    try:
+        report = get_report_for_user(supabase, report_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        content, filename = build_code_zip_for_report(supabase, report, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.delete("/reports/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_report(
     report_id: str,
@@ -501,7 +527,10 @@ async def get_scan_detail(
     """
     Returns a single scan with its full vulnerability list.
     """
-    scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
+    try:
+        scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     return scan
 
 
@@ -511,7 +540,10 @@ async def get_scan_report_pdf(
     current_user=Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)["scan"]
+    try:
+        scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)["scan"]
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     storage_path = scan.get("report_storage_path")
     if not storage_path:
         raise HTTPException(status_code=404, detail="Report artifact is not available or has expired.")

@@ -1,6 +1,7 @@
 import io
 import csv
 import html
+import os
 import zipfile
 import random
 import time
@@ -612,6 +613,57 @@ def _upload_zip(supabase: Client, path: str, files: dict[str, bytes]) -> None:
     )
 
 
+def _safe_zip_path(path: str) -> str:
+    normalized = (path or "source.c").replace("\\", "/").strip().lstrip("/")
+    parts = [part for part in normalized.split("/") if part and part not in {".", ".."}]
+    return "/".join(parts) or "source.c"
+
+
+def _corrected_name_for(path: str) -> str:
+    safe_path = _safe_zip_path(path)
+    directory = os.path.dirname(safe_path).replace("\\", "/")
+    basename = os.path.basename(safe_path)
+    stem, ext = os.path.splitext(basename)
+    corrected = f"{stem or 'source'}_corrected{ext or '.txt'}"
+    return f"{directory}/{corrected}" if directory else corrected
+
+
+def _normalized_chunk_outputs(scan_data: Dict) -> list[dict]:
+    chunks = scan_data.get("chunk_outputs") or []
+    if chunks:
+        return chunks
+
+    normalized: list[dict] = []
+    for file_item in scan_data.get("files") or []:
+        file_path = file_item.get("filename") or file_item.get("file_path") or scan_data.get("file_name") or "source.c"
+        for chunk in file_item.get("chunk_outputs") or []:
+            normalized.append({**chunk, "file_path": chunk.get("file_path") or file_path})
+    return normalized
+
+
+def _code_entries_from_chunks(scan_data: Dict) -> dict[str, bytes]:
+    grouped: dict[str, list[dict]] = {}
+    for chunk in _normalized_chunk_outputs(scan_data):
+        file_path = chunk.get("file_path") or chunk.get("chunk_name") or "source.c"
+        grouped.setdefault(file_path, []).append(chunk)
+
+    files: dict[str, bytes] = {}
+    for file_path, chunks in grouped.items():
+        safe_path = _safe_zip_path(file_path)
+        sorted_chunks = sorted(chunks, key=lambda chunk: int(chunk.get("chunk_index") or 0))
+        input_code = "\n\n".join(str(chunk.get("code") or "") for chunk in sorted_chunks if chunk.get("code")).strip()
+        corrected_code = "\n\n".join(
+            str(chunk.get("corrected_code") or "")
+            for chunk in sorted_chunks
+            if chunk.get("corrected_code") and chunk.get("corrected_code") not in {"None", "Pending..."}
+        ).strip()
+        if input_code:
+            files[f"code/input/{safe_path}"] = input_code.encode("utf-8")
+        if corrected_code:
+            files[f"code/corrected/{_corrected_name_for(safe_path)}"] = corrected_code.encode("utf-8")
+    return files
+
+
 def create_zipped_pdf_report(
     supabase: Client,
     user_id: str,
@@ -624,7 +676,7 @@ def create_zipped_pdf_report(
     pdf_bytes = _build_simple_pdf(title, scan_data, vulnerabilities)
 
     path = f"{user_id}/{scan_id}/report.zip"
-    _upload_zip(supabase, path, {"report.pdf": pdf_bytes})
+    _upload_zip(supabase, path, {"report.pdf": pdf_bytes, **_code_entries_from_chunks(scan_data)})
     return {"path": path, "expires_at": expires_at.isoformat()}
 
 
@@ -647,7 +699,7 @@ def create_zipped_report(
         content = _build_simple_pdf(title, scan_data, vulnerabilities)
 
     path = f"{user_id}/{scan_id}/{safe_format}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}.zip"
-    _upload_zip(supabase, path, {filename: content})
+    _upload_zip(supabase, path, {filename: content, **_code_entries_from_chunks(scan_data)})
     return {"path": path, "expires_at": expires_at.isoformat(), "filename": filename, "format": safe_format}
 
 
