@@ -31,3 +31,5 @@ requests==2.34.2
 flawfinder==2.0.20
 cppcheck==1.5.1
 reportlab==4.2.5
+#email-validator - used by gotrue for validating email addresses during contact form submission and user registration
+email-validator>=2.0.0

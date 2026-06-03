@@ -15,8 +15,8 @@ const features = [
   },
   {
     icon: GitBranch,
-    title: "GitHub Integration",
-    description: "Connect your repositories and scan on every push automatically. Seamless CI/CD pipeline integration.",
+    title: "Team WorkSpaces",
+    description: "Seamlessly invite developers and security auditors to shared projects. Manage repository access and track vulnerability resolutions across your entire organization",
   },
 ];
 

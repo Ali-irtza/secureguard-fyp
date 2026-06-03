@@ -1,34 +1,10 @@
 import { useState } from "react";
-import { Search, Book, MessageSquare, MessagesSquare, Keyboard, ChevronRight, ExternalLink } from "lucide-react";
+import { Search } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import ContactForm from "@/components/contact/ContactForm";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { toast } from "sonner";
-
-const quickActions = [
-  {
-    icon: Book,
-    title: "Documentation",
-    description: "Browse our comprehensive guides and API reference",
-    href: "#docs",
-  },
-  {
-    icon: MessageSquare,
-    title: "Contact Support",
-    description: "Get help from our security experts",
-    href: "#contact",
-  },
-  {
-    icon: MessagesSquare,
-    title: "Community",
-    description: "Join our Discord community for discussions",
-    href: "#community",
-  },
-];
 
 const faqs = [
   {
@@ -46,35 +22,11 @@ const faqs = [
   {
     question: "How do I generate and use API keys?",
     answer: "Go to Settings > API Keys to view your personal access token. Use this token to authenticate API requests from external tools and CI/CD pipelines. Keep your key secure and regenerate it if compromised.",
-  },
-  {
-    question: "What scan types are available?",
-    answer: "Quick Scan (~5 min) - Fast check for common vulnerabilities. Full Audit (~30 min) - Comprehensive security analysis. Dependency Check (~2 min) - Scans your package dependencies for known vulnerabilities.",
-  },
-];
-
-const shortcuts = [
-  { keys: ["Ctrl", "K"], action: "Open command palette" },
-  { keys: ["Ctrl", "N"], action: "Start new scan" },
-  { keys: ["Ctrl", "S"], action: "Save current settings" },
-  { keys: ["Ctrl", "/"], action: "Toggle sidebar" },
-  { keys: ["Esc"], action: "Close modal/dialog" },
+  }
 ];
 
 const Help = () => {
   const [searchQuery, setSearchQuery] = useState("");
-  const [contactForm, setContactForm] = useState({
-    name: "",
-    email: "",
-    subject: "",
-    message: "",
-  });
-
-  const handleSubmitContact = (e: React.FormEvent) => {
-    e.preventDefault();
-    toast.success("Support request submitted! We'll get back to you within 24 hours.");
-    setContactForm({ name: "", email: "", subject: "", message: "" });
-  };
 
   const filteredFaqs = faqs.filter(
     (faq) =>
@@ -107,31 +59,6 @@ const Help = () => {
           />
         </div>
 
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {quickActions.map((action) => (
-            <Card
-              key={action.title}
-              className="bg-card/50 backdrop-blur-sm border-border/50 hover:border-primary/50 transition-all cursor-pointer group"
-            >
-              <CardContent className="p-6 flex items-start gap-4">
-                <div className="p-3 rounded-lg bg-primary/10 text-primary group-hover:glow-emerald transition-all">
-                  <action.icon className="h-6 w-6" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
-                    {action.title}
-                    <ChevronRight className="h-4 w-4 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
-                  </h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {action.description}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
         {/* FAQ Section */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
@@ -159,39 +86,6 @@ const Help = () => {
           </CardContent>
         </Card>
 
-        {/* Keyboard Shortcuts */}
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Keyboard className="h-5 w-5" />
-              Keyboard Shortcuts
-            </CardTitle>
-            <CardDescription>Speed up your workflow with these shortcuts</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {shortcuts.map((shortcut, index) => (
-                <div
-                  key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/30"
-                >
-                  <span className="text-muted-foreground">{shortcut.action}</span>
-                  <div className="flex gap-1">
-                    {shortcut.keys.map((key, i) => (
-                      <kbd
-                        key={i}
-                        className="px-2 py-1 text-xs font-mono bg-muted rounded border border-border"
-                      >
-                        {key}
-                      </kbd>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Contact Form */}
         <Card id="contact" className="bg-card/50 backdrop-blur-sm border-border/50">
           <CardHeader>
@@ -201,55 +95,7 @@ const Help = () => {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmitContact} className="space-y-4 max-w-2xl">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Name</Label>
-                  <Input
-                    id="name"
-                    value={contactForm.name}
-                    onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
-                    required
-                    className="bg-background/50"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={contactForm.email}
-                    onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
-                    required
-                    className="bg-background/50"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="subject">Subject</Label>
-                <Input
-                  id="subject"
-                  value={contactForm.subject}
-                  onChange={(e) => setContactForm({ ...contactForm, subject: e.target.value })}
-                  required
-                  className="bg-background/50"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="message">Message</Label>
-                <Textarea
-                  id="message"
-                  rows={5}
-                  value={contactForm.message}
-                  onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
-                  required
-                  className="bg-background/50 resize-none"
-                />
-              </div>
-              <Button type="submit" className="gap-2">
-                Send Message <ExternalLink className="h-4 w-4" />
-              </Button>
-            </form>
+            <ContactForm />
           </CardContent>
         </Card>
       </div>
