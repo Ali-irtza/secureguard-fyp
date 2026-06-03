@@ -92,7 +92,7 @@ type ThinkingEventType = "info" | "warning" | "error" | "success";
 
 const splitSourceLines = (source: string): string[] => {
   const lines = source.replace(/\r+\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") {
+  while (lines.length > 1 && lines[lines.length - 1] === "") {
     lines.pop();
   }
   return lines.length > 0 ? lines : [""];

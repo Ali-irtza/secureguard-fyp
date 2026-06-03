@@ -104,6 +104,18 @@ export interface ScanHistoryItem {
     description: string;
     created_at: string;
   }>;
+  alert_findings?: Array<{
+    id: string;
+    scan_id: string;
+    severity: string;
+    cwe_id: string | null;
+    cwe_name: string | null;
+    type: string | null;
+    line_number: number | null;
+    file_path: string | null;
+    description: string;
+    created_at: string;
+  }>;
 }
 
 export interface StoredVulnerability {

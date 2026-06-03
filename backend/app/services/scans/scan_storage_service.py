@@ -245,17 +245,21 @@ def get_scans_for_user(
     )
     severity_counts: dict[str, dict[str, int]] = {}
     critical_findings: dict[str, list[dict]] = {}
+    alert_findings: dict[str, list[dict]] = {}
     for vuln in vulns_result.data or []:
         scan_id = vuln["scan_id"]
         severity = str(vuln.get("severity") or "low").lower()
         severity_counts.setdefault(scan_id, {"critical": 0, "high": 0, "medium": 0, "low": 0})
         severity_counts[scan_id][severity if severity in severity_counts[scan_id] else "low"] += 1
+        if severity in {"critical", "high", "medium"}:
+            alert_findings.setdefault(scan_id, []).append(vuln)
         if severity == "critical":
             critical_findings.setdefault(scan_id, []).append(vuln)
 
     for scan in scans:
         scan["severity_counts"] = severity_counts.get(scan["id"], {"critical": 0, "high": 0, "medium": 0, "low": 0})
         scan["critical_findings"] = critical_findings.get(scan["id"], [])
+        scan["alert_findings"] = alert_findings.get(scan["id"], [])
     return scans
 
 

@@ -77,9 +77,16 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
     );
   }, [stats.elapsedTime]);
 
-  const progressPercentage = stats.totalLines > 0
-    ? Math.min(100, Math.round((stats.linesScanned / stats.totalLines) * 100))
+  const safeTotalLines = Math.max(0, stats.totalLines);
+  const safeLinesScanned = safeTotalLines > 0
+    ? Math.min(Math.max(0, stats.linesScanned), safeTotalLines)
+    : Math.max(0, stats.linesScanned);
+  const rawProgressPercentage = safeTotalLines > 0
+    ? Math.round((safeLinesScanned / safeTotalLines) * 100)
     : 0;
+  const progressPercentage = isComplete
+    ? Math.min(100, rawProgressPercentage)
+    : Math.min(95, rawProgressPercentage);
 
   return (
     <div className="h-full flex flex-col p-3 bg-gradient-to-b from-[#0b121d] via-[#0b1019] to-[#080d15]">
@@ -90,7 +97,7 @@ export const ScanningProgress = ({ currentPhase, stats, isComplete }: ScanningPr
             Lines
           </div>
           <p className="mt-1 font-mono text-sm font-semibold text-cyan-50">
-            {stats.linesScanned}<span className="text-cyan-200/50">/{stats.totalLines}</span>
+            {safeLinesScanned}<span className="text-cyan-200/50">/{safeTotalLines}</span>
           </p>
         </div>
         <div className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-2 py-2 shadow-inner shadow-violet-950/20">
