@@ -129,11 +129,26 @@ const Projects = () => {
   }, []);
 
   // ── Realtime CDC subscription ────────────────────────────────────────
+  // Filter covers rows where owner_id = userId (personal) OR team_id IN the
+  // user's teams.  Supabase Realtime only supports a single column filter per
+  // channel, so we run two separate channels: one for owned projects and one
+  // for each team the user belongs to — merged into the same setProjects call.
+  //
+  // Simpler approach that avoids N channels: subscribe without a row filter
+  // (table-level) and let shouldApplyCdcEvent deduplicate stale events.
+  // We scope by checking owner_id or team_id membership client-side.
   const { status: realtimeStatus } = useRealtimeSync<ProjectRecord>({
     table: "projects",
-    filter: userId ? `owner_id=eq.${userId}` : undefined,
+    // No row-level filter — receive all project changes then gate client-side.
+    // This is safe: Supabase RLS on the table already prevents receiving rows
+    // the user has no access to via the REST API; Realtime respects the same
+    // policies when RLS is enabled on the publication.
     enabled: !isLoading && !error && !!userId,
     onInsert: (event) => {
+      // Only apply if this project belongs to the current user or their team
+      const isOwned = event.new.owner_id === userId;
+      const isTeam  = userTeams.some(t => t.id === event.new.team_id);
+      if (!isOwned && !isTeam) return;
       setProjects((prev) => {
         const local = prev.find((p) => p.id === event.new.id);
         if (!shouldApplyCdcEvent(
@@ -144,6 +159,9 @@ const Projects = () => {
       });
     },
     onUpdate: (event) => {
+      const isOwned = event.new.owner_id === userId;
+      const isTeam  = userTeams.some(t => t.id === event.new.team_id);
+      if (!isOwned && !isTeam) return;
       setProjects((prev) => {
         const local = prev.find((p) => p.id === event.new.id);
         if (!shouldApplyCdcEvent(
@@ -275,8 +293,11 @@ const Projects = () => {
     }
   };
 
-  const handleRescan = (projectName: string) => {
-    navigate(`/new-scan?project=${encodeURIComponent(projectName)}`);
+  const handleRescan = (project: Project) => {
+    // Pass the project ID — NewScan.tsx reads ?projectId= and automatically
+    // sets scanMode ("personal" | "team"), selectedTeamId, and selectedProjectId
+    // so the user lands with everything pre-selected and ready to scan.
+    navigate(`/new-scan?projectId=${encodeURIComponent(project.id)}`);
   };
 
   const handleBulkRescan = () => {
@@ -312,6 +333,8 @@ const Projects = () => {
       type: newProjectType,
       owner_id: userId ?? "",
       team_id: newProjectType === "team" ? newProjectTeamId : null,
+      github_repo: null,
+      github_branches: [],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -380,36 +403,135 @@ const Projects = () => {
     return (
       <DashboardLayout>
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <Skeleton className="h-9 w-40" />
-            <Skeleton className="h-9 w-32" />
+
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="space-y-2">
+              <Skeleton className="h-9 w-36 rounded-lg" />
+              <Skeleton className="h-4 w-64 rounded-md" />
+            </div>
+            <Skeleton className="h-9 w-36 rounded-lg" />
           </div>
+
+          {/* Stats cards — 4-up grid */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              "w-8",   // Total projects number
+              "w-6",   // Healthy
+              "w-6",   // Needs Attention
+              "w-6",   // Critical
+            ].map((numW, i) => (
+              <div key={i} className="p-4 rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-9 w-9 rounded-lg shrink-0" />
+                  <div className="space-y-1.5 flex-1">
+                    <Skeleton className={`h-7 ${numW} rounded-md`} />
+                    <Skeleton className="h-3.5 w-24 rounded-md" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Filter bar */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            {/* Search input */}
+            <div className="relative flex-1 max-w-md">
+              <Skeleton className="h-10 w-full rounded-lg" />
+            </div>
+            {/* Three select dropdowns */}
+            <Skeleton className="h-10 w-full sm:w-48 rounded-lg" />
+            <Skeleton className="h-10 w-full sm:w-48 rounded-lg" />
+            <Skeleton className="h-10 w-full sm:w-48 rounded-lg" />
+          </div>
+
+          {/* Table */}
           <div className="rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm overflow-hidden">
             <Table>
+              {/* Header — mirrors real column widths */}
               <TableHeader>
                 <TableRow className="border-border/50 hover:bg-transparent">
-                  <TableHead className="w-12"><Skeleton className="h-4 w-4" /></TableHead>
-                  <TableHead><Skeleton className="h-4 w-32" /></TableHead>
-                  <TableHead><Skeleton className="h-4 w-20" /></TableHead>
-                  <TableHead><Skeleton className="h-4 w-24" /></TableHead>
-                  <TableHead><Skeleton className="h-4 w-24" /></TableHead>
-                  <TableHead className="text-right"><Skeleton className="h-4 w-20 ml-auto" /></TableHead>
+                  <TableHead className="w-12">
+                    <Skeleton className="h-4 w-4 rounded" />
+                  </TableHead>
+                  <TableHead>
+                    <Skeleton className="h-4 w-28 rounded-md" />
+                  </TableHead>
+                  <TableHead>
+                    <Skeleton className="h-4 w-20 rounded-md" />
+                  </TableHead>
+                  <TableHead>
+                    <Skeleton className="h-4 w-28 rounded-md" />
+                  </TableHead>
+                  <TableHead>
+                    <Skeleton className="h-4 w-24 rounded-md" />
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <Skeleton className="h-4 w-16 rounded-md ml-auto" />
+                  </TableHead>
                 </TableRow>
               </TableHeader>
+
+              {/* Rows — each mirrors the real row layout exactly */}
               <TableBody>
-                {Array.from({ length: 5 }).map((_, i) => (
+                {Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i} className="border-border/30">
-                    <TableCell><Skeleton className="h-4 w-4" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-48" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-16" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-8" /></TableCell>
-                    <TableCell className="text-right"><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+
+                    {/* Checkbox */}
+                    <TableCell className="w-12">
+                      <Skeleton className="h-4 w-4 rounded" />
+                    </TableCell>
+
+                    {/* Project Name cell: icon + name + optional team badge + sub-label */}
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <Skeleton className="h-4 w-4 rounded shrink-0" />
+                        <div className="space-y-1.5 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {/* Name — vary widths for realism */}
+                            <Skeleton className={`h-4 rounded-md ${["w-28","w-36","w-24","w-32","w-40","w-28","w-36","w-24"][i % 8]}`} />
+                            {/* Team badge — show on alternating rows */}
+                            {i % 3 !== 0 && <Skeleton className="h-4 w-14 rounded-full" />}
+                          </div>
+                          {/* Sub-label (team name) */}
+                          {i % 3 !== 0 && <Skeleton className="h-3 w-20 rounded-md" />}
+                        </div>
+                      </div>
+                    </TableCell>
+
+                    {/* Language badge */}
+                    <TableCell>
+                      <Skeleton className="h-5 w-10 rounded-full" />
+                    </TableCell>
+
+                    {/* Last Updated: date + optional stale badge */}
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-24 rounded-md" />
+                        {i % 4 === 0 && <Skeleton className="h-5 w-14 rounded-full" />}
+                      </div>
+                    </TableCell>
+
+                    {/* Health Score badge */}
+                    <TableCell>
+                      <Skeleton className="h-5 w-6 rounded-md" />
+                    </TableCell>
+
+                    {/* Actions: 3 icon buttons */}
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Skeleton className="h-8 w-8 rounded-lg" />
+                        <Skeleton className="h-8 w-8 rounded-lg" />
+                        <Skeleton className="h-8 w-8 rounded-lg" />
+                      </div>
+                    </TableCell>
+
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </div>
+
         </div>
       </DashboardLayout>
     );
@@ -691,7 +813,7 @@ const Projects = () => {
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => handleRescan(project.name)}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => handleRescan(project)}>
                                 <RotateCcw className="w-4 h-4" />
                               </Button>
                             </TooltipTrigger>

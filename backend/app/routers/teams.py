@@ -131,6 +131,26 @@ async def select_github_repo(
         supabase
     )
 
+@router.post("/{team_id}/github/connect-repo", response_model=TeamResponse)
+async def connect_repo_instant(
+    team_id: str,
+    body: dict,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Fast-connect: saves the repo URL immediately with an empty branch list
+    and returns. The client should follow up with /sync-branches to populate
+    branches in the background while showing a skeleton loader.
+    """
+    return await github_service.connect_repo_instant(
+        team_id,
+        body.get("repo_full_name", "").strip(),
+        body.get("repo_url", "").strip(),
+        current_user.id,
+        supabase,
+    )
+
 @router.post("/{team_id}/members", response_model=TeamMemberResponse, status_code=status.HTTP_201_CREATED)
 async def invite_member(
     team_id: str,

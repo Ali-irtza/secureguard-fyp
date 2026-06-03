@@ -230,12 +230,30 @@ def get_team_by_id(team_id: str, user_id: str, supabase: Client) -> TeamResponse
     return build_team_response(team_result.data, members, user_id)
 
 def update_team_details(team_id: str, user_id: str, name: str | None, github_repo: str | None, supabase: Client) -> TeamResponse:
-    """Partial update for a team."""
+    """
+    Partial update for a team.
+
+    Disconnect semantics:
+    When github_repo is set to "" (empty string) the caller is disconnecting
+    the repository.  In that case we also:
+      1. Clear github_branches on the team row.
+      2. Bulk-clear the branches column on every team_members row so that no
+         developer retains stale branch assignments that no longer exist.
+    Both side-effects run in the same request before the response is returned.
+    """
     require_admin(team_id, user_id, supabase)
 
-    updates = {}
-    if name is not None: updates["name"] = name
-    if github_repo is not None: updates["github_repo"] = github_repo
+    updates: dict = {}
+    is_disconnecting = github_repo == ""
+
+    if name is not None:
+        updates["name"] = name
+
+    if github_repo is not None:
+        updates["github_repo"] = github_repo
+        if is_disconnecting:
+            # Clear the branch list from the team row at the same time.
+            updates["github_branches"] = []
 
     if not updates:
         raise HTTPException(
@@ -251,6 +269,11 @@ def update_team_details(team_id: str, user_id: str, name: str | None, github_rep
     )
     if not team_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    # Remove all branch assignments from every member so developers don't
+    # retain references to branches that no longer exist on this team.
+    if is_disconnecting:
+        supabase.table("team_members").update({"branches": []}).eq("team_id", team_id).execute()
 
     members = fetch_members_for_team(team_id, supabase)
     return build_team_response(team_result.data[0], members, user_id)

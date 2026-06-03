@@ -247,6 +247,24 @@ export async function selectGithubRepo(
   });
 }
 
+/**
+ * POST /teams/:id/github/connect-repo
+ * Fast-connect: saves the repo URL immediately with an empty branch list and
+ * returns without waiting for the branch fetch.  Follow up with syncBranches()
+ * in the background to populate branches while showing a skeleton loader.
+ */
+export async function connectRepoInstant(
+  teamId: string,
+  repoFullName: string,
+  repoUrl: string
+): Promise<Team> {
+  invalidateTeamsCache();
+  return apiFetch<Team>(`/teams/${teamId}/github/connect-repo`, {
+    method: "POST",
+    body: JSON.stringify({ repo_full_name: repoFullName, repo_url: repoUrl }),
+  });
+}
+
 /** POST /teams/:id/members — invite by email */
 export async function inviteMember(
   teamId: string,

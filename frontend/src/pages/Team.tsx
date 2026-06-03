@@ -4,6 +4,7 @@ import {
   Info, Eye, EyeOff, UserPlus, ExternalLink,
   RefreshCw, Plus, Loader2, GitBranch, Check, ChevronsUpDown,
 } from "lucide-react";
+import { useGithubOAuthCallback } from "@/hooks/use-github-oauth-callback";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
@@ -28,7 +29,7 @@ import {
 import {
   listTeams, createTeam, updateTeam, deleteTeam,
   connectGithub, refreshGithubBranches,
-  getGithubAuthorizeUrl, listGithubRepos, selectGithubRepo,
+  getGithubAuthorizeUrl, listGithubRepos, selectGithubRepo, connectRepoInstant,
   syncBranches,
   inviteMember, updateMember, removeMember,
   type Team, type TeamRole, type TeamMember,
@@ -187,6 +188,13 @@ const Team = () => {
   const [repoPicker, setRepoPicker]             = useState(false);
   const [githubRepos, setGithubRepos]           = useState<{ full_name: string; private: boolean; url: string }[]>([]);
   const [reposLoading, setReposLoading]         = useState(false);
+  /** full_name of the repo currently being connected, or null when idle */
+  const [connectingRepo, setConnectingRepo]     = useState<string | null>(null);
+  /**
+   * True while branch sync is running in the background after a fast-connect.
+   * Drives the skeleton loader in the branches area of the GitHub card.
+   */
+  const [branchesSyncing, setBranchesSyncing]   = useState(false);
 
   // ── UI state ───────────────────────────────────────────────────────────────
 
@@ -334,7 +342,9 @@ const Team = () => {
     setActionLoading(true);
     try {
       const url = await getGithubAuthorizeUrl(selectedTeam.id);
-      // Redirect the browser to GitHub's authorization page
+      // Redirect the browser to GitHub's authorization page.
+      // actionLoading is intentionally NOT reset here — the page will
+      // unload immediately and all state is destroyed anyway.
       window.location.href = url;
     } catch (err: any) {
       toast.error(err.message ?? "Failed to start GitHub authorization");
@@ -342,88 +352,107 @@ const Team = () => {
     }
   };
 
+  /**
+   * Fetches repos for `teamId` after the OAuth redirect returns.
+   * Auto-connects when exactly one repo is available; opens the picker
+   * otherwise. Kept stable with useCallback so the hook below can capture
+   * it in a ref without stale-closure risk.
+   */
   const handleOAuthCallback = useCallback(async (teamId: string) => {
-    // Called when user returns from GitHub OAuth — load their repos
+    if (!teamId) return;
+    // Pre-select the team the user just connected so the UI updates
+    // before the picker opens.
+    setSelectedTeamId(teamId);
     setReposLoading(true);
     try {
       const repos = await listGithubRepos(teamId);
-      
       if (repos.length === 1) {
-        // Auto-connect if exactly one repository is selected
-        setActionLoading(true);
+        // Auto-connect when exactly one repo was installed — same two-step
+        // flow as the manual picker: fast-connect first, sync in background.
         try {
-          const updated = await selectGithubRepo(teamId, repos[0].full_name, repos[0].url);
-          setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
-          toast.success(`Connected ${repos[0].full_name} — ${updated.github_branches.length} branches synced`);
+          const connected = await connectRepoInstant(teamId, repos[0].full_name, repos[0].url);
+          setTeams(prev => prev.map(t => t.id === connected.id ? connected : t));
+          setBranchesSyncing(true);
+          try {
+            const synced = await syncBranches(teamId);
+            setTeams(prev => prev.map(t => t.id === synced.id ? synced : t));
+            toast.success(
+              `Connected ${repos[0].full_name} — ${synced.github_branches.length} branch${synced.github_branches.length === 1 ? "" : "es"} synced`
+            );
+          } catch {
+            toast.error("Repository connected but branch sync failed — click Refresh Branches to retry");
+          } finally {
+            setBranchesSyncing(false);
+          }
         } catch (err: any) {
           toast.error(err.message ?? "Failed to connect repository");
-        } finally {
-          setActionLoading(false);
         }
       } else {
-        // Multiple repos selected, show the picker modal
+        // Multiple repos — let the user pick.
         setGithubRepos(repos);
         setRepoPicker(true);
       }
     } catch (err: any) {
       toast.error(err.message ?? "Failed to load repositories");
-      setRepoPicker(false);
     } finally {
       setReposLoading(false);
     }
-  }, []);
+  }, []); // no deps — stable reference; captures state setters which are stable by React guarantee
 
   const handleSelectRepo = async (repoFullName: string, repoUrl: string) => {
-    if (!selectedTeam) return;
-    setActionLoading(true);
+    if (!selectedTeam || connectingRepo) return;
+    setConnectingRepo(repoFullName);
+
     try {
-      const updated = await selectGithubRepo(selectedTeam.id, repoFullName, repoUrl);
-      setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
-      toast.success(`Connected ${repoFullName} — ${updated.github_branches.length} branches synced`);
+      // Step 1 — Fast connect: save repo URL immediately, returns with branches: [].
+      // This closes the picker and flips the GitHub card to "Connected" at once.
+      const connected = await connectRepoInstant(selectedTeam.id, repoFullName, repoUrl);
+      setTeams(prev => prev.map(t => t.id === connected.id ? connected : t));
       setRepoPicker(false);
       setGithubRepos([]);
+      setConnectingRepo(null);
+
+      // Step 2 — Background branch sync: runs after the picker is gone.
+      // The GitHub card is already visible and shows a skeleton in the
+      // branches area (branchesSyncing = true) while this finishes.
+      setBranchesSyncing(true);
+      try {
+        const synced = await syncBranches(selectedTeam.id);
+        setTeams(prev => prev.map(t => t.id === synced.id ? synced : t));
+        toast.success(
+          `Connected ${repoFullName} — ${synced.github_branches.length} branch${synced.github_branches.length === 1 ? "" : "es"} synced`
+        );
+      } catch (syncErr: any) {
+        // Non-fatal: repo is connected but branches weren't fetched.
+        // User can manually refresh with the "Refresh Branches" button.
+        toast.error("Repository connected but branch sync failed — click Refresh Branches to retry");
+      } finally {
+        setBranchesSyncing(false);
+      }
     } catch (err: any) {
       toast.error(err.message ?? "Failed to connect repository");
-    } finally {
-      setActionLoading(false);
+      setConnectingRepo(null);
     }
   };
 
-  // Handle OAuth redirect back from GitHub
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const githubConnected = params.get("github_connected");
-    const teamId          = params.get("team_id");
-    const githubError     = params.get("github_error");
-
-    if (githubError) {
-      toast.error(`GitHub connection failed: ${githubError.replace(/_/g, " ")}`);
-      // Clean URL
-      window.history.replaceState({}, "", window.location.pathname);
-      return;
-    }
-
-    if (githubConnected === "true" && teamId) {
-      // Clean URL first
-      window.history.replaceState({}, "", window.location.pathname);
-      // Select the team that just connected
-      setSelectedTeamId(teamId);
-      // Load repo picker
-      handleOAuthCallback(teamId);
-    }
-  }, [handleOAuthCallback]);
+  // Detects ?github_connected / ?github_error on page load (runs once),
+  // cleans the URL, guards against double-fire, and exposes `isConnecting`
+  // so we can render a visible loading banner during the repo-fetch gap.
+  const { isConnecting: githubCallbackConnecting } = useGithubOAuthCallback({
+    paramKey:  "team_id",
+    onSuccess: handleOAuthCallback,
+    onError:   (msg) => toast.error(`GitHub connection failed: ${msg}`),
+  });
 
   const handleDisconnectGithub = async () => {
     if (!selectedTeam) return;
     setActionLoading(true);
     try {
+      // The backend clears github_branches on the team AND wipes branch
+      // assignments from every member in the same request.  Use the returned
+      // object directly so local state stays in sync without any manual spread.
       const updated = await updateTeam(selectedTeam.id, { github_repo: "" });
-      // Also clear branches locally
-      setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...updated, github_branches: [] }
-          : t
-      ));
+      setTeams(prev => prev.map(t => t.id === selectedTeam.id ? updated : t));
       toast.success("Repository disconnected");
     } catch (err: any) {
       toast.error(err.message ?? "Failed to disconnect repository");
@@ -699,9 +728,9 @@ const Team = () => {
 
             {isAdmin && (
               <div className="flex items-center gap-3 ml-auto">
-                <Button variant="outline" onClick={handleGithubOAuth} disabled={actionLoading} className="gap-2">
-                  <Github className="h-4 w-4" />
-                  {selectedTeam.github_repo ? "Reconnect GitHub" : "Connect with GitHub"}
+                <Button variant="outline" onClick={handleGithubOAuth} disabled={actionLoading || githubCallbackConnecting} className="gap-2">
+                  {(actionLoading || githubCallbackConnecting) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                  {githubCallbackConnecting ? "Connecting…" : selectedTeam.github_repo ? "Reconnect GitHub" : "Connect with GitHub"}
                 </Button>
                 <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
                   <UserPlus className="h-4 w-4" />
@@ -717,6 +746,17 @@ const Team = () => {
           <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/30 border border-border/30">
             <Info className="h-4 w-4 text-muted-foreground shrink-0" />
             <p className="text-sm text-muted-foreground">Only the team Admin can manage members and roles.</p>
+          </div>
+        )}
+
+        {/* GitHub OAuth return banner — visible between redirect-back and repo picker opening */}
+        {githubCallbackConnecting && (
+          <div className="flex items-center gap-3 p-4 rounded-lg bg-primary/10 border border-primary/20 animate-in fade-in slide-in-from-top-2">
+            <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-foreground">Connecting your GitHub repository…</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Fetching your repositories from GitHub. This only takes a moment.</p>
+            </div>
           </div>
         )}
 
@@ -929,19 +969,43 @@ const Team = () => {
                   </a>
                   <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
                 </div>
-                <div className="flex flex-col gap-2">
-                  <span className="text-sm text-muted-foreground">{selectedTeam.github_branches.length} branches synced</span>
-                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-2">
-                    {selectedTeam.github_branches.map(branch => (
-                      <Badge key={branch} variant="secondary" className="text-[10px] font-normal bg-muted/50 hover:bg-muted/80">
-                        {branch}
-                      </Badge>
-                    ))}
+
+                {/* Branches area — skeleton while syncing, real list when ready */}
+                {branchesSyncing ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                      <span>Fetching branches from GitHub…</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Array.from({ length: 6 }).map((_, i) => (
+                        <Skeleton key={i} className="h-5 rounded-full" style={{ width: `${48 + (i % 3) * 20}px` }} />
+                      ))}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-sm text-muted-foreground">
+                      {selectedTeam.github_branches.length === 0
+                        ? "No branches synced yet — click Refresh Branches"
+                        : `${selectedTeam.github_branches.length} branch${selectedTeam.github_branches.length === 1 ? "" : "es"} synced`
+                      }
+                    </span>
+                    {selectedTeam.github_branches.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-2">
+                        {selectedTeam.github_branches.map(branch => (
+                          <Badge key={branch} variant="secondary" className="text-[10px] font-normal bg-muted/50 hover:bg-muted/80">
+                            {branch}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {isAdmin && (
                   <div className="flex items-center gap-3">
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing}>
+                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing || branchesSyncing}>
                       {refreshing
                         ? <Loader2 className="h-4 w-4 animate-spin" />
                         : <RefreshCw className="h-4 w-4" />
@@ -951,7 +1015,7 @@ const Team = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={actionLoading}
+                      disabled={actionLoading || branchesSyncing}
                       className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
                       onClick={handleDisconnectGithub}
                     >
@@ -970,9 +1034,9 @@ const Team = () => {
                   </p>
                 </div>
                 {isAdmin && (
-                  <Button onClick={handleGithubOAuth} disabled={actionLoading} className="bg-primary hover:bg-primary/90 gap-2">
-                    {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                    Connect with GitHub
+                  <Button onClick={handleGithubOAuth} disabled={actionLoading || githubCallbackConnecting} className="bg-primary hover:bg-primary/90 gap-2">
+                    {(actionLoading || githubCallbackConnecting) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                    {githubCallbackConnecting ? "Connecting…" : "Connect with GitHub"}
                   </Button>
                 )}
               </div>
@@ -1140,7 +1204,14 @@ const Team = () => {
       </Dialog>
 
       {/* GitHub Repo Picker — shown after OAuth callback */}
-      <Dialog open={repoPicker} onOpenChange={open => { if (!open) { setRepoPicker(false); setGithubRepos([]); } }}>
+      <Dialog
+        open={repoPicker}
+        onOpenChange={open => {
+          // Prevent closing while a connection is in progress
+          if (!open && connectingRepo) return;
+          if (!open) { setRepoPicker(false); setGithubRepos([]); }
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Select a Repository</DialogTitle>
@@ -1157,32 +1228,77 @@ const Team = () => {
               <p className="text-sm text-muted-foreground text-center py-8">No repositories found.</p>
             ) : (
               <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
-                {githubRepos.map(repo => (
-                  <button
-                    key={repo.full_name}
-                    onClick={() => handleSelectRepo(repo.full_name, repo.url)}
-                    disabled={actionLoading}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-muted/50 transition-colors text-left group"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Github className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="text-sm font-medium truncate">{repo.full_name}</span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                      {repo.private && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Private</Badge>
-                      )}
-                      <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                        Connect →
-                      </span>
-                    </div>
-                  </button>
-                ))}
+                {githubRepos.map(repo => {
+                  const isThisConnecting = connectingRepo === repo.full_name;
+                  const isAnyConnecting  = connectingRepo !== null;
+                  const isOtherConnecting = isAnyConnecting && !isThisConnecting;
+
+                  return (
+                    <button
+                      key={repo.full_name}
+                      onClick={() => handleSelectRepo(repo.full_name, repo.url)}
+                      disabled={isAnyConnecting}
+                      className={[
+                        "w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all duration-150 text-left",
+                        isThisConnecting
+                          ? "bg-primary/10 border border-primary/30 cursor-wait"
+                          : isOtherConnecting
+                          ? "opacity-40 cursor-not-allowed"
+                          : "hover:bg-muted/50 cursor-pointer group",
+                      ].join(" ")}
+                    >
+                      {/* Left: icon + name */}
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {isThisConnecting ? (
+                          <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
+                        ) : (
+                          <Github className={[
+                            "h-4 w-4 shrink-0 transition-colors",
+                            isOtherConnecting ? "text-muted-foreground/50" : "text-muted-foreground",
+                          ].join(" ")} />
+                        )}
+                        <span className={[
+                          "text-sm font-medium truncate",
+                          isThisConnecting  ? "text-primary" : "",
+                          isOtherConnecting ? "text-muted-foreground/50" : "",
+                        ].join(" ")}>
+                          {repo.full_name}
+                        </span>
+                      </div>
+
+                      {/* Right: badges + status label */}
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        {repo.private && (
+                          <Badge
+                            variant="outline"
+                            className={[
+                              "text-[10px] px-1.5 py-0 h-4",
+                              isOtherConnecting ? "opacity-40" : "",
+                            ].join(" ")}
+                          >
+                            Private
+                          </Badge>
+                        )}
+                        {isThisConnecting ? (
+                          <span className="text-xs text-primary font-medium">Connecting…</span>
+                        ) : (
+                          <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                            Connect →
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => { setRepoPicker(false); setGithubRepos([]); }}>
+            <Button
+              variant="ghost"
+              disabled={!!connectingRepo}
+              onClick={() => { setRepoPicker(false); setGithubRepos([]); }}
+            >
               Cancel
             </Button>
           </DialogFooter>

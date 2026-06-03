@@ -376,6 +376,16 @@ const NewScan = () => {
   // Panel visibility state
   const [showPanel, setShowPanel] = useState(true);
 
+  // Reset branch when the selected team changes so we don't hold a stale/
+  // inaccessible branch from a previous team selection.
+  useEffect(() => {
+    if (visibleTeamBranches.length > 0) {
+      setBranch((prev) =>
+        visibleTeamBranches.includes(prev) ? prev : visibleTeamBranches[0]
+      );
+    }
+  }, [selectedTeamId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-select first scannable team when switching to team mode
   useEffect(() => {
     if (scanMode === "team" && allTeams.length > 0 && !selectedTeamId) {
@@ -1206,7 +1216,7 @@ const NewScan = () => {
   // For GitHub tab: valid when there's a team with a connected repo + branch selected,
   // or a personal project with a directly-connected github_repo + branch selected.
   const githubReady = isTeamMode
-    ? !!(selectedApiTeam?.github_repo && branch)
+    ? !!(selectedApiTeam?.github_repo && branch && visibleTeamBranches.includes(branch))
     : selectedProject?.team_id
       ? !!(projectTeam?.github_repo && branch)
       : !!(selectedProject?.github_repo && branch);
@@ -1225,7 +1235,7 @@ const NewScan = () => {
   const canStartScan =
     !isViewer &&
     (isTeamMode
-      ? !!(selectedTeamId && canScanInTeam) && (activeTab === "upload" ? uploadedFiles.length > 0 : githubReady)
+      ? !!(selectedTeamId && canScanInTeam) && (activeTab === "upload" ? hasFilesToScan : githubReady)
       : activeTab === "github"
         // GitHub tab (personal): need a real project with a connected repo + branch
         ? !!(selectedProjectId && selectedProjectId !== "__new__" && githubReady)
@@ -1269,13 +1279,21 @@ const NewScan = () => {
           </div>
           <div className="space-y-2">
             <Label htmlFor="branch" className="text-sm font-medium">Branch</Label>
-            {selectedApiTeam.github_branches.length > 0 ? (
+            {/* Developer with no assigned branches */}
+            {userTeamRole === "developer" && visibleTeamBranches.length === 0 ? (
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-300">
+                  No branches assigned to you. Ask your team admin to assign branches before scanning.
+                </p>
+              </div>
+            ) : visibleTeamBranches.length > 0 ? (
               <Select value={branch} onValueChange={setBranch}>
                 <SelectTrigger id="branch">
                   <SelectValue placeholder="Select a branch" />
                 </SelectTrigger>
                 <SelectContent>
-                  {selectedApiTeam.github_branches.map((b) => (
+                  {visibleTeamBranches.map((b) => (
                     <SelectItem key={b} value={b}>{b}</SelectItem>
                   ))}
                 </SelectContent>

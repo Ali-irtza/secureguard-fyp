@@ -20,6 +20,37 @@ RETRYABLE_SUPABASE_EXCEPTIONS = (
     httpx.TimeoutException,
 )
 
+# ---------------------------------------------------------------------------
+# Risk-level → health-score mapping
+# ---------------------------------------------------------------------------
+# The scanner returns an overall_risk_level string.  We derive a letter-grade
+# health score from it and write it back to the projects table so the Projects
+# page stats and row badges stay accurate without an extra API call.
+
+_RISK_TO_HEALTH: dict[str, str] = {
+    # Canonical scanner values
+    "none":     "A",
+    "low":      "B",
+    "medium":   "C",
+    "high":     "D",
+    "critical": "F",
+    # Aliases that sometimes appear in scan results
+    "minimal":  "A",
+    "moderate": "C",
+    "severe":   "F",
+}
+
+
+def _derive_health_score(overall_risk_level: str) -> str | None:
+    """Map an overall_risk_level string to a letter-grade health score.
+
+    Returns None for unrecognised or empty values so we never overwrite a
+    previously-set score with garbage data.
+    """
+    if not overall_risk_level:
+        return None
+    return _RISK_TO_HEALTH.get(overall_risk_level.strip().lower())
+
 
 def _retry_supabase_request(operation_name: str, action):
     last_exc: Exception | None = None
@@ -42,7 +73,11 @@ def _retry_supabase_request(operation_name: str, action):
 def create_scan_record(
     supabase: Client, user_id: str, project_id: str, scan_data: dict
 ) -> str:
-    """Insert a new row into the scans table and return the new scan's id."""
+    """Insert a new row into the scans table and return the new scan's id.
+
+    Also updates the parent project's health_score so the Projects page
+    stats cards and row badges reflect the latest scan outcome in real time.
+    """
     result = _retry_supabase_request(
         "create_scan_record",
         lambda: (
@@ -75,7 +110,30 @@ def create_scan_record(
             .execute()
         ),
     )
-    return result.data[0]["id"]
+    scan_id: str = result.data[0]["id"]
+
+    # Derive a letter-grade health score from the scan result and write it
+    # back to the project row.  This is what drives the stats cards and the
+    # Health Score column on the Projects page.
+    if project_id:
+        health_score = _derive_health_score(scan_data.get("overall_risk_level", ""))
+        if health_score:
+            try:
+                _retry_supabase_request(
+                    "create_scan_record.update_project_health",
+                    lambda: (
+                        supabase.table("projects")
+                        .update({"health_score": health_score})
+                        .eq("id", project_id)
+                        .execute()
+                    ),
+                )
+            except Exception as exc:
+                # Non-fatal: the scan is already saved; the health score will
+                # be correct the next time the project is explicitly updated.
+                print(f"[scan_storage] Failed to update project health_score: {exc}")
+
+    return scan_id
 
 
 def create_failed_scan_record(

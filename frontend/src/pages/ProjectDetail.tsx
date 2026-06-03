@@ -25,6 +25,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useGithubOAuthCallback } from "@/hooks/use-github-oauth-callback";
 import {
   listProjectFiles, uploadProjectFile, deleteProjectFile, importGithubFile,
   getAcceptString, isFileAllowed,
@@ -147,12 +148,15 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
   const [repoPicker,    setRepoPicker]    = useState(false);
   const [githubRepos,   setGithubRepos]   = useState<{ full_name: string; private: boolean; url: string }[]>([]);
   const [reposLoading,  setReposLoading]  = useState(false);
+  /** full_name of the repo currently being connected, or null when idle */
+  const [connectingRepo, setConnectingRepo] = useState<string | null>(null);
 
   // ── OAuth: start GitHub App install flow ──────────────────────────────────
   const handleGithubOAuth = async () => {
     setActionLoading(true);
     try {
       const url = await getProjectGithubAuthorizeUrl(project.id);
+      // actionLoading is intentionally not reset — the page unloads immediately.
       window.location.href = url;
     } catch (err: any) {
       toast({ title: "GitHub error", description: err.message ?? "Failed to start GitHub authorization", variant: "destructive" });
@@ -161,12 +165,15 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
   };
 
   // ── OAuth: load repos after callback ──────────────────────────────────────
+  // Kept stable so the hook below can capture it in a ref without
+  // stale-closure risk. State setters from useState are guaranteed stable.
   const handleOAuthCallback = useCallback(async () => {
     if (!project?.id) return;
     setReposLoading(true);
     try {
       const repos = await listProjectGithubRepos(project.id);
       if (repos.length === 1) {
+        // Auto-connect when exactly one repo was installed.
         setActionLoading(true);
         try {
           const updated = await selectProjectGithubRepo(project.id, repos[0].full_name, repos[0].url);
@@ -188,25 +195,17 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
     }
   }, [project?.id, onProjectUpdated, toast]);
 
-  // ── OAuth: detect ?github_connected=true on this page ────────────────────
-  useEffect(() => {
-    if (!project) return;
-    const params = new URLSearchParams(window.location.search);
-    const connected = params.get("github_connected");
-    const error     = params.get("github_error");
-    if (error) {
-      toast({ title: "GitHub connection failed", description: error.replace(/_/g, " "), variant: "destructive" });
-      window.history.replaceState({}, "", window.location.pathname);
-      return;
-    }
-    if (connected === "true") {
-      window.history.replaceState({}, "", window.location.pathname);
-      handleOAuthCallback();
-    }
-  }, [project, handleOAuthCallback, toast]);
+  // Detects ?github_connected / ?github_error on page load (runs once),
+  // cleans the URL, guards against double-fire, and exposes `isConnecting`.
+  const { isConnecting: githubCallbackConnecting } = useGithubOAuthCallback({
+    onSuccess: handleOAuthCallback,
+    onError:   (msg) => toast({ title: "GitHub connection failed", description: msg, variant: "destructive" }),
+    // No paramKey — the project callback URL does not include a separate param.
+  });
 
   const handleSelectRepo = async (repoFullName: string, repoUrl: string) => {
-    setActionLoading(true);
+    if (connectingRepo) return;
+    setConnectingRepo(repoFullName);
     try {
       const updated = await selectProjectGithubRepo(project.id, repoFullName, repoUrl);
       onProjectUpdated(updated);
@@ -216,7 +215,7 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
     } catch (err: any) {
       toast({ title: "Connect failed", description: err.message ?? "Failed to connect repository", variant: "destructive" });
     } finally {
-      setActionLoading(false);
+      setConnectingRepo(null);
     }
   };
 
@@ -251,6 +250,16 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
       <Card className="bg-card/50 backdrop-blur-sm border-border/50">
         <CardHeader><CardTitle>GitHub Repository</CardTitle></CardHeader>
         <CardContent>
+          {/* Post-OAuth return banner — visible while repos are being fetched */}
+          {githubCallbackConnecting && (
+            <div className="flex items-center gap-3 p-3 mb-4 rounded-lg bg-primary/10 border border-primary/20 animate-in fade-in">
+              <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-foreground">Connecting your GitHub repository…</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Fetching your repositories from GitHub.</p>
+              </div>
+            </div>
+          )}
           {project.github_repo ? (
             <div className="space-y-4">
               <div className="flex items-center gap-3 flex-wrap">
@@ -305,9 +314,9 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
                 <p className="font-medium">No repository connected</p>
                 <p className="text-sm text-muted-foreground">Connect a GitHub repository to enable branch-based scanning for this project</p>
               </div>
-              <Button onClick={handleGithubOAuth} disabled={actionLoading} className="bg-primary hover:bg-primary/90 gap-2">
-                {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                Connect with GitHub
+              <Button onClick={handleGithubOAuth} disabled={actionLoading || githubCallbackConnecting} className="bg-primary hover:bg-primary/90 gap-2">
+                {(actionLoading || githubCallbackConnecting) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                {githubCallbackConnecting ? "Connecting…" : "Connect with GitHub"}
               </Button>
             </div>
           )}
@@ -315,7 +324,14 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
       </Card>
 
       {/* Repo Picker — shown after OAuth callback when multiple repos are available */}
-      <Dialog open={repoPicker} onOpenChange={(open) => { if (!open) { setRepoPicker(false); setGithubRepos([]); } }}>
+      <Dialog
+        open={repoPicker}
+        onOpenChange={(open) => {
+          // Prevent closing while a connection is in progress
+          if (!open && connectingRepo) return;
+          if (!open) { setRepoPicker(false); setGithubRepos([]); }
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Select a Repository</DialogTitle>
@@ -328,25 +344,77 @@ const ProjectGithubCard = ({ project, onProjectUpdated }: ProjectGithubCardProps
               <p className="text-sm text-muted-foreground text-center py-8">No repositories found.</p>
             ) : (
               <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
-                {githubRepos.map((repo) => (
-                  <button key={repo.full_name} onClick={() => handleSelectRepo(repo.full_name, repo.url)}
-                    disabled={actionLoading}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-muted/50 transition-colors text-left group">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Github className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="text-sm font-medium truncate">{repo.full_name}</span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                      {repo.private && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Private</Badge>}
-                      <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Connect →</span>
-                    </div>
-                  </button>
-                ))}
+                {githubRepos.map((repo) => {
+                  const isThisConnecting  = connectingRepo === repo.full_name;
+                  const isAnyConnecting   = connectingRepo !== null;
+                  const isOtherConnecting = isAnyConnecting && !isThisConnecting;
+
+                  return (
+                    <button
+                      key={repo.full_name}
+                      onClick={() => handleSelectRepo(repo.full_name, repo.url)}
+                      disabled={isAnyConnecting}
+                      className={[
+                        "w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all duration-150 text-left",
+                        isThisConnecting
+                          ? "bg-primary/10 border border-primary/30 cursor-wait"
+                          : isOtherConnecting
+                          ? "opacity-40 cursor-not-allowed"
+                          : "hover:bg-muted/50 cursor-pointer group",
+                      ].join(" ")}
+                    >
+                      {/* Left: icon + name */}
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {isThisConnecting ? (
+                          <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
+                        ) : (
+                          <Github className={[
+                            "h-4 w-4 shrink-0 transition-colors",
+                            isOtherConnecting ? "text-muted-foreground/50" : "text-muted-foreground",
+                          ].join(" ")} />
+                        )}
+                        <span className={[
+                          "text-sm font-medium truncate",
+                          isThisConnecting  ? "text-primary" : "",
+                          isOtherConnecting ? "text-muted-foreground/50" : "",
+                        ].join(" ")}>
+                          {repo.full_name}
+                        </span>
+                      </div>
+
+                      {/* Right: badges + status label */}
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        {repo.private && (
+                          <Badge
+                            variant="outline"
+                            className={[
+                              "text-[10px] px-1.5 py-0 h-4",
+                              isOtherConnecting ? "opacity-40" : "",
+                            ].join(" ")}
+                          >
+                            Private
+                          </Badge>
+                        )}
+                        {isThisConnecting ? (
+                          <span className="text-xs text-primary font-medium">Connecting…</span>
+                        ) : (
+                          <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">Connect →</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => { setRepoPicker(false); setGithubRepos([]); }}>Cancel</Button>
+            <Button
+              variant="ghost"
+              disabled={!!connectingRepo}
+              onClick={() => { setRepoPicker(false); setGithubRepos([]); }}
+            >
+              Cancel
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

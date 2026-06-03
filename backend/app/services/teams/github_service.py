@@ -270,6 +270,66 @@ async def fetch_installation_repos(team_id: str, user_id: str, supabase: Client)
 
     return {"repos": repos}
 
+async def connect_repo_instant(
+    team_id: str,
+    repo_full_name: str,
+    repo_url: str,
+    user_id: str,
+    supabase: Client,
+) -> TeamResponse:
+    """
+    Step 4a — Fast path: saves the selected repository URL immediately and
+    returns without waiting for the branch list.
+
+    The caller is expected to follow up with sync_branches() in a separate
+    request so the UI can show a skeleton loader in the branches area while
+    the branch fetch runs in the background.
+
+    This keeps the perceived latency low: the card flips to "Connected" the
+    moment the user clicks a repo, instead of after a multi-second paginated
+    GitHub API call.
+    """
+    require_admin(team_id, user_id, supabase)
+
+    if not repo_full_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="repo_full_name is required",
+        )
+
+    # Verify the installation exists before committing anything.
+    team_result = (
+        supabase.table("teams")
+        .select("github_installation_id")
+        .eq("id", team_id)
+        .single()
+        .execute()
+    )
+    installation_id = team_result.data.get("github_installation_id") if team_result.data else None
+    if not installation_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub App not installed. Connect first.",
+        )
+
+    effective_url = repo_url or f"https://github.com/{repo_full_name}"
+
+    team_upd = (
+        supabase.table("teams")
+        .update({
+            "github_repo":     effective_url,
+            "github_branches": [],   # branches will be populated by sync_branches
+        })
+        .eq("id", team_id)
+        .execute()
+    )
+    if not team_upd.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    members = fetch_members_for_team(team_id, supabase)
+    return build_team_response(team_upd.data[0], members, user_id)
+
+
 async def select_installation_repo(team_id: str, repo_full_name: str, repo_url: str, user_id: str, supabase: Client) -> TeamResponse:
     require_admin(team_id, user_id, supabase)
 
