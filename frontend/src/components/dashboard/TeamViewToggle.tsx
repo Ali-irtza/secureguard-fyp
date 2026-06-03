@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Team, TeamRole } from "@/lib/team-data";
+import type { Team, TeamRole } from "@/lib/teams-api";
 
 interface TeamViewToggleProps {
   viewMode: "personal" | "team";
@@ -63,15 +63,15 @@ const TeamViewToggle = ({
             {teams.map((team) => (
               <SelectItem key={team.id} value={team.id}>
                 <span className="flex items-center gap-2">
-                  {team.currentUserRole === "admin" && (
+                  {team.current_user_role === "admin" && (
                     <Crown className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />
                   )}
                   <span className="truncate">{team.name}</span>
                   <Badge
                     variant="outline"
-                    className={`text-[10px] px-1.5 py-0 h-4 capitalize ${roleBadgeStyles[team.currentUserRole]}`}
+                    className={`text-[10px] px-1.5 py-0 h-4 capitalize ${roleBadgeStyles[team.current_user_role]}`}
                   >
-                    {team.currentUserRole}
+                    {team.current_user_role}
                   </Badge>
                 </span>
               </SelectItem>

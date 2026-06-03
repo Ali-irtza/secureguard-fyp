@@ -17,7 +17,7 @@ import {
 
 const mainNavItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "New Scan", url: "/new-scan", icon: Plus, isPrimary: true },
+  { title: "New Scan", url: "/new-scan", icon: Plus },
   { title: "Projects", url: "/projects", icon: FolderKanban },
   { title: "Team", url: "/team", icon: Users },
   { title: "Scan History", url: "/scan-history", icon: FileBarChart },
@@ -62,12 +62,8 @@ const DashboardSidebar = () => {
                   <SidebarMenuButton asChild>
                     <NavLink
                       to={item.url}
-                      className={`group flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
-                        item.isPrimary
-                          ? "bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 glow-emerald"
-                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50 hover:pl-5"
-                      }`}
-                      activeClassName="bg-primary/20 text-primary border-primary/50"
+                      className="group flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/50 hover:pl-5 transition-all duration-200"
+                      activeClassName="bg-primary/20 text-primary border border-primary/50 hover:text-primary hover:bg-primary/20 hover:pl-4"
                     >
                       <item.icon className="h-5 w-5 transition-transform duration-200 group-hover:scale-110" />
                       <span className="font-medium">{item.title}</span>

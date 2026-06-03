@@ -80,6 +80,7 @@ import { CodeViewer } from "@/components/scan/CodeViewer";
 import { ScanningProgress } from "@/components/scan/ScanningProgress";
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
 import { toast } from "sonner";
+import { addLocalNotification, getNotificationPreferences } from "@/lib/notifications";
 
 interface CodeLine {
   lineNumber: number;
@@ -92,7 +93,7 @@ type ThinkingEventType = "info" | "warning" | "error" | "success";
 
 const splitSourceLines = (source: string): string[] => {
   const lines = source.replace(/\r+\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") {
+  while (lines.length > 1 && lines[lines.length - 1] === "") {
     lines.pop();
   }
   return lines.length > 0 ? lines : [""];
@@ -175,6 +176,13 @@ const parseThinkingStep = (step: string) => {
     return { time: "", type: "Working", message: step };
   }
   return { time: match[1], type: match[2], message: match[3] };
+};
+
+const formatElapsedClock = (elapsedSeconds: number): string => {
+  const safeSeconds = Math.max(0, Math.floor(elapsedSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 };
 
 const getThinkingStyle = (message: string, type: string) => {
@@ -364,6 +372,7 @@ const NewScan = () => {
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
   const sourceLineCountsRef = useRef<Record<string, number>>({});
+  const scanStartedAtRef = useRef<number | null>(null);
 
   // New scan result state
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -454,11 +463,53 @@ const NewScan = () => {
   const scanLang = effectiveLanguage === "C++" ? "cpp" : "c";
 
   const addLog = useCallback((message: string, type: ThinkingEventType = "info") => {
-    const now = new Date();
-    const timestamp = `${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
+    const elapsedSeconds = scanStartedAtRef.current
+      ? (Date.now() - scanStartedAtRef.current) / 1000
+      : 0;
+    const timestamp = formatElapsedClock(elapsedSeconds);
     const prefix = type === "error" ? "Error" : type === "warning" ? "Warning" : type === "success" ? "Done" : "Working";
     setThinkingSteps((prev) => [...prev, `[${timestamp}] ${prefix}: ${message}`]);
   }, []);
+
+  const notifyScanFinished = useCallback((projectLabel: string, result: ScanResult) => {
+    const preferences = getNotificationPreferences();
+    if (preferences.scanCompleted) {
+      toast.success("Scan completed", {
+        description: `${projectLabel} finished with ${result.total_vulnerabilities} issue${result.total_vulnerabilities === 1 ? "" : "s"}.`,
+      });
+      addLocalNotification({
+        title: "Scan completed",
+        description: `${projectLabel} finished`,
+        type: result.total_vulnerabilities > 0 ? "warning" : "success",
+      });
+    }
+    if (preferences.criticalAlerts) {
+      const criticalCount = result.vulnerabilities.filter((vulnerability) =>
+        String(vulnerability.severity || "").toLowerCase() === "critical"
+      ).length;
+      if (criticalCount > 0) {
+        toast.error("Critical vulnerability found", {
+          description: `${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} in ${projectLabel}.`,
+        });
+        addLocalNotification({
+          title: "Critical vulnerability found",
+          description: `${criticalCount} critical issue${criticalCount === 1 ? "" : "s"} in ${projectLabel}`,
+          type: "critical",
+        });
+      }
+    }
+    if (scanMode === "team" && preferences.teamMemberScanned) {
+      const memberName = currentUser?.user_metadata?.full_name || currentUser?.email || "A team member";
+      toast.info("Team scan finished", {
+        description: `${memberName} finished scan for ${projectLabel}.`,
+      });
+      addLocalNotification({
+        title: "Team scan finished",
+        description: `${memberName} finished scan for ${projectLabel}`,
+        type: "info",
+      });
+    }
+  }, [currentUser?.email, currentUser?.user_metadata?.full_name, scanMode]);
 
   const upsertStreamingChunk = useCallback((incoming: ChunkOutput) => {
     setStreamingChunks((prev) => {
@@ -692,6 +743,7 @@ const NewScan = () => {
   const handleStartScan = async () => {
     const isAutoRescan = searchParams.get("autoStart") === "1";
     scanAbortRef.current = false;
+    scanStartedAtRef.current = Date.now();
     setAutoRescanPreparing(isAutoRescan);
     setIsScanning(true);
     setScanComplete(false);
@@ -724,6 +776,14 @@ const NewScan = () => {
         resolvedProjectId = created.id;
         resolvedProjectName = created.name;
         createdProjectDuringScan = true;
+        if (getNotificationPreferences().newProject) {
+          toast.info("New project added", { description: `${created.name} was created.` });
+          addLocalNotification({
+            title: "New project added",
+            description: `${created.name} was created`,
+            type: "info",
+          });
+        }
         await refetchProjects();
       } catch (err: any) {
         setScanError(err.message || "Failed to create project");
@@ -912,6 +972,7 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
+        notifyScanFinished(resolvedProjectName || primaryFile?.name || "Security scan", combinedResult);
         addLog(`Found ${combinedResult.total_vulnerabilities} vulnerabilities — Risk: ${combinedResult.overall_risk_level}`, combinedResult.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -993,6 +1054,7 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
+        notifyScanFinished(resolvedProjectName || selectedProject?.name || "Security scan", result);
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -1069,6 +1131,7 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
+        notifyScanFinished(resolvedProjectName || selectedApiTeam?.name || "Team scan", result);
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -1202,6 +1265,7 @@ const NewScan = () => {
     setThinkingSteps([]);
     setStreamingChunks([]);
     sourceLineCountsRef.current = {};
+    scanStartedAtRef.current = null;
     setProjectFiles([]);
     setSelectedFileIds(new Set());
     setSaveToProject({});

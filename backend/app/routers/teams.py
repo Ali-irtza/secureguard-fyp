@@ -15,6 +15,7 @@ from app.models.teams import (
     GithubAuthorizeResponse,
     BranchFilesResponse,
     FileContentResponse,
+    TeamDashboardResponse,
 )
 from app.services.teams import team_service, member_service, github_service
 
@@ -42,6 +43,14 @@ async def get_team(
     supabase: Client = Depends(get_supabase),
 ):
     return team_service.get_team_by_id(team_id, current_user.id, supabase)
+
+@router.get("/{team_id}/dashboard", response_model=TeamDashboardResponse)
+async def get_team_dashboard(
+    team_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    return team_service.get_team_dashboard(team_id, current_user.id, supabase)
 
 @router.patch("/{team_id}", response_model=TeamResponse)
 async def update_team(

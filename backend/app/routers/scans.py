@@ -5,7 +5,7 @@ import os
 import re
 import time
 import zipfile
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from supabase import Client
 
@@ -23,8 +23,15 @@ from app.services.scans.scan_storage_service import (
     create_manual_report,
     get_report_for_user,
     delete_report_scan_for_user,
+    build_code_zip_for_report,
 )
-from app.services.scans.report_storage_service import load_pdf_from_zip, load_report_from_zip
+from app.services.scans.report_storage_service import (
+    build_pdf_report,
+    build_vulnerability_csv,
+    load_pdf_from_zip,
+    load_report_from_zip,
+    load_source_files_from_report_artifact,
+)
 from app.services.project_files.file_service import save_scanned_sources_zip
 
 router = APIRouter()
@@ -158,6 +165,7 @@ async def start_scan(
         current_user.id,
         supabase
     )
+    save_scanned_sources_zip(body.project_id, current_user.id, files_dict, supabase)
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
     except HTTPException as exc:
@@ -455,6 +463,7 @@ async def generate_report(
 @router.get("/reports/{report_id}/download")
 async def download_report(
     report_id: str,
+    format: str | None = Query(default=None, pattern="^(pdf|csv)$"),
     current_user=Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
@@ -465,9 +474,37 @@ async def download_report(
         raise HTTPException(status_code=404, detail=str(exc))
 
     storage_path = report.get("file_path")
+    report_format = format or report.get("format") or "pdf"
+    if format in {"pdf", "csv"}:
+        scan_id = report.get("scan_id")
+        if not scan_id:
+            raise HTTPException(status_code=404, detail="Report is not linked to a scan.")
+        try:
+            detail = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        if report_format == "csv":
+            source_files = detail.get("source_files") or []
+            if not source_files:
+                source_files = load_source_files_from_report_artifact(supabase, report.get("file_path"))
+            content = build_vulnerability_csv(
+                detail["scan"],
+                detail.get("vulnerabilities") or [],
+                source_files,
+            )
+            media_type = "text/csv; charset=utf-8"
+        else:
+            content = build_pdf_report(detail["scan"], detail.get("vulnerabilities") or [])
+            media_type = "application/pdf"
+        safe_name = f"secureguard-{report.get('name') or 'report'}-{report_id}.{report_format}".replace("/", "-").replace("\\", "-")
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        )
+
     if not storage_path:
         raise HTTPException(status_code=404, detail="Report artifact is not available or has expired.")
-    report_format = report.get("format") or "pdf"
     content, filename, media_type = load_report_from_zip(supabase, storage_path, report_format)
     extension = "csv" if report_format == "csv" else "pdf"
     safe_name = f"secureguard-{report.get('name') or 'report'}-{report_id}.{extension}".replace("/", "-").replace("\\", "-")
@@ -475,6 +512,30 @@ async def download_report(
         content=content,
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
+
+
+@router.get("/reports/{report_id}/download-code")
+async def download_report_code(
+    report_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Download original scanned code and corrected code as a ZIP."""
+    try:
+        report = get_report_for_user(supabase, report_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        content, filename = build_code_zip_for_report(supabase, report, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -501,7 +562,10 @@ async def get_scan_detail(
     """
     Returns a single scan with its full vulnerability list.
     """
-    scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
+    try:
+        scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     return scan
 
 
@@ -511,7 +575,10 @@ async def get_scan_report_pdf(
     current_user=Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)["scan"]
+    try:
+        scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)["scan"]
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     storage_path = scan.get("report_storage_path")
     if not storage_path:
         raise HTTPException(status_code=404, detail="Report artifact is not available or has expired.")

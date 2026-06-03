@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useTheme } from "next-themes";
 import {
-  User, Key, Bell, Copy, Eye, EyeOff, RefreshCw, Camera,
+  User, Bell, Eye, EyeOff, Camera,
   Palette, Sun, Moon, Monitor, Users, Crown, Trash2, Github, ArrowRight,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,8 +22,14 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
   AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
 import { useCurrentUser, type UpdateProfilePayload } from "@/hooks/use-current-user";
+import { listTeams, type Team } from "@/lib/teams-api";
+import { listProjects } from "@/lib/projects-api";
+import {
+  defaultNotificationPreferences,
+  getNotificationPreferences,
+  saveNotificationPreferences,
+} from "@/lib/notifications";
 
 const Settings = () => {
   const [searchParams] = useSearchParams();
@@ -34,7 +41,7 @@ const Settings = () => {
   // Real user data — single source of truth via our hook (DRY)
   // ---------------------------------------------------------------------------
   const {
-    profile, displayName, email, avatarUrl, initials,
+    user, profile, displayName, email, avatarUrl, initials,
     isOAuthUser, hasEmailIdentity, updateProfile, updatePassword,
   } = useCurrentUser();
 
@@ -102,19 +109,14 @@ const Settings = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSavingPassword, setIsSavingPassword] = useState(false);
 
-  // ---------------------------------------------------------------------------
-  // Team data (still from mock until teams feature is built)
-  // ---------------------------------------------------------------------------
-  const userTeams = useMemo(
-    () => mockTeams.filter(t => t.members.some(m => m.id === CURRENT_USER_ID)),
-    []
-  );
+  const { data: userTeams = [] } = useQuery({ queryKey: ["teams"], queryFn: listTeams });
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const hasTeams = userTeams.length > 0;
 
   // Sync active tab from URL query param (?tab=profile)
   useEffect(() => {
     const tab = searchParams.get("tab");
-    const validTabs = ["profile", "api-keys", "notifications", "team-permissions", "appearance"];
+    const validTabs = ["profile", "notifications", "team-permissions", "appearance"];
     if (tab && validTabs.includes(tab)) {
       if (tab === "team-permissions" && !hasTeams) return;
       setActiveTab(tab);
@@ -122,21 +124,13 @@ const Settings = () => {
   }, [searchParams, hasTeams]);
 
   // ---------------------------------------------------------------------------
-  // API Key state (placeholder until backend API key feature is built)
-  // ---------------------------------------------------------------------------
-  const [apiKey] = useState("sg_live_aBcDeFgHiJkLmNoPqRsTuVwXyZ123456");
-  const [showKey, setShowKey] = useState(false);
-  const maskedKey = `${"•".repeat(32)}${apiKey.slice(-8)}`;
-
-  // ---------------------------------------------------------------------------
   // Notification state (local for now — will be persisted to DB later)
   // ---------------------------------------------------------------------------
-  const [notifications, setNotifications] = useState({
-    criticalAlerts: true,
-    scanCompleted: false,
-    newProject: false,
-    teamMemberScanned: false,
-  });
+  const [notifications, setNotifications] = useState(defaultNotificationPreferences);
+
+  useEffect(() => {
+    setNotifications(getNotificationPreferences());
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -222,13 +216,9 @@ const Settings = () => {
     setIsSavingPassword(false);
   };
 
-  const handleCopyKey = () => {
-    navigator.clipboard.writeText(apiKey);
-    toast.success("API key copied to clipboard");
-  };
-
-  const handleRegenerateKey = () => {
-    toast.success("New API key generated successfully");
+  const handleSaveNotificationPreferences = () => {
+    saveNotificationPreferences(notifications);
+    toast.success("Notification preferences saved");
   };
 
   const getRoleBadgeClasses = (role: string) => {
@@ -237,6 +227,17 @@ const Settings = () => {
       case "developer": return "bg-blue-500/15 text-blue-400 border-blue-500/30";
       default:          return "bg-muted text-muted-foreground border-border/50";
     }
+  };
+
+  const getTeamProjectNames = (teamId: string) => {
+    const teamProjects = projects.filter((project) => project.team_id === teamId);
+    return teamProjects.length > 0
+      ? teamProjects.map((project) => project.name).join(", ")
+      : "No team projects yet";
+  };
+
+  const getCurrentMember = (team: Team) => {
+    return team.members.find((member) => member.user_id === user?.id);
   };
 
   // ---------------------------------------------------------------------------
@@ -257,9 +258,6 @@ const Settings = () => {
           <TabsList className="flex lg:flex-col h-auto bg-card/50 backdrop-blur-sm border border-border/50 p-2 rounded-lg lg:w-56 shrink-0">
             <TabsTrigger value="profile" className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
               <User className="h-4 w-4" /> Profile
-            </TabsTrigger>
-            <TabsTrigger value="api-keys" className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
-              <Key className="h-4 w-4" /> API Keys
             </TabsTrigger>
             <TabsTrigger value="notifications" className="w-full justify-start gap-3 px-4 py-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
               <Bell className="h-4 w-4" /> Notifications
@@ -434,72 +432,6 @@ const Settings = () => {
             </TabsContent>
 
             {/* ----------------------------------------------------------------
-                API KEYS TAB
-            ---------------------------------------------------------------- */}
-            <TabsContent value="api-keys" className="mt-0">
-              <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-                <CardHeader>
-                  <CardTitle>Personal Access Token</CardTitle>
-                  <CardDescription>
-                    Use this token to authenticate API requests from external tools and scripts
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="space-y-3">
-                    <Label>Your API Key</Label>
-                    <div className="flex gap-2">
-                      <div className="flex-1 relative">
-                        <Input
-                          value={showKey ? apiKey : maskedKey}
-                          readOnly
-                          className="bg-background/50 border-border/50 font-mono text-sm pr-10"
-                        />
-                        <button
-                          onClick={() => setShowKey(!showKey)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                      <Button variant="outline" size="icon" onClick={handleCopyKey}>
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/20">
-                    <p className="text-sm text-destructive">
-                      <strong>Keep your API key secure.</strong> Do not share it publicly or commit it to version control.
-                      If compromised, regenerate it immediately.
-                    </p>
-                  </div>
-
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" className="gap-2">
-                        <RefreshCw className="h-4 w-4" /> Regenerate Token
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Regenerate API Token?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This will invalidate your current token immediately. Any applications using the old token will stop working.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleRegenerateKey} className="bg-destructive hover:bg-destructive/90">
-                          Regenerate
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* ----------------------------------------------------------------
                 NOTIFICATIONS TAB
             ---------------------------------------------------------------- */}
             <TabsContent value="notifications" className="mt-0">
@@ -530,7 +462,7 @@ const Settings = () => {
                     </div>
                   ))}
 
-                  <Button onClick={() => toast.success("Notification preferences saved")} className="bg-primary hover:bg-primary/90">
+                  <Button onClick={handleSaveNotificationPreferences} className="bg-primary hover:bg-primary/90">
                     Save Preferences
                   </Button>
                 </CardContent>
@@ -549,8 +481,10 @@ const Settings = () => {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {userTeams.map((team) => {
-                      const isTeamAdmin = team.currentUserRole === "admin";
-                      const repoName = team.githubRepo?.replace("https://github.com/", "") ?? null;
+                      const isTeamAdmin = team.current_user_role === "admin";
+                      const repoName = team.github_repo?.replace("https://github.com/", "") ?? null;
+                      const currentMember = getCurrentMember(team);
+                      const assignedBranches = currentMember?.branches ?? [];
 
                       return (
                         <div key={team.id} className="flex items-center justify-between p-4 rounded-lg bg-background/30 border border-border/30">
@@ -563,17 +497,23 @@ const Settings = () => {
                             <div className="space-y-1">
                               <div className="flex items-center gap-2">
                                 <span className="font-medium text-foreground">{team.name}</span>
-                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.currentUserRole)}`}>
-                                  {team.currentUserRole}
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getRoleBadgeClasses(team.current_user_role)}`}>
+                                  {team.current_user_role}
                                 </Badge>
                               </div>
-                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                <span>{team.members.length} members</span>
+                              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                                <span>{team.member_count} members</span>
                                 {repoName && (
                                   <span className="flex items-center gap-1">
                                     <Github className="h-3 w-3" /> {repoName}
                                   </span>
                                 )}
+                                <span>Projects: {getTeamProjectNames(team.id)}</span>
+                                <span>
+                                  Branches: {isTeamAdmin
+                                    ? (team.github_branches.length ? team.github_branches.join(", ") : "All")
+                                    : (assignedBranches.length ? assignedBranches.join(", ") : "None assigned")}
+                                </span>
                               </div>
                             </div>
                           </div>

@@ -11,26 +11,26 @@
 
 @layer base {
   :root {
-    /* Light theme - Clean and readable */
-    --background: 0 0% 98%;
-    --foreground: 222 47% 11%;
+    /* Light theme - layered, readable, not flat white */
+    --background: 210 33% 96%;
+    --foreground: 222 47% 10%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card: 210 29% 98%;
+    --card-foreground: 222 47% 10%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover: 210 33% 99%;
+    --popover-foreground: 222 47% 10%;
 
     /* Primary: Emerald Green */
     --primary: 160 84% 35%;
     --primary-foreground: 0 0% 100%;
 
-    /* Secondary: Light gray for UI elements */
-    --secondary: 220 14% 96%;
+    /* Secondary: cool slate for UI elements */
+    --secondary: 214 27% 91%;
     --secondary-foreground: 222 47% 11%;
 
-    --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 214 27% 92%;
+    --muted-foreground: 218 19% 32%;
 
     --accent: 160 84% 95%;
     --accent-foreground: 160 84% 25%;
@@ -39,20 +39,20 @@
     --destructive: 0 72% 50%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
+    --border: 214 20% 80%;
+    --input: 214 20% 78%;
     --ring: 160 84% 39%;
 
     --radius: 1rem;
 
     /* Sidebar - Light mode */
-    --sidebar-background: 0 0% 100%;
+    --sidebar-background: 212 32% 97%;
     --sidebar-foreground: 222 47% 11%;
     --sidebar-primary: 160 84% 35%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 160 84% 95%;
     --sidebar-accent-foreground: 160 84% 25%;
-    --sidebar-border: 220 13% 91%;
+    --sidebar-border: 214 20% 78%;
     --sidebar-ring: 160 84% 39%;
 
     /* Custom SecureGuard Colors */
@@ -64,24 +64,24 @@
     --warning-foreground: 38 92% 10%;
 
     /* Glassmorphism - Light mode */
-    --glass-bg: 0 0% 100%;
-    --glass-border: 220 13% 91%;
+    --glass-bg: 210 29% 98%;
+    --glass-border: 214 20% 78%;
     --chart-1: 160 84% 40%;
     --chart-2: 160 70% 50%;
     --chart-3: 160 60% 60%;
     --chart-4: 160 50% 30%;
     --chart-5: 220 9% 46%;
-    --sidebar: 0 0% 100%;
+    --sidebar: 212 32% 97%;
     --font-sans: 'Source Sans Pro', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
     --font-serif: 'Source Serif Pro', ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
     --font-mono: 'Source Code Pro', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
     --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
     --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
-    --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 1px 2px -1px hsl(0 0% 0% / 0.1);
-    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 1px 2px -1px hsl(0 0% 0% / 0.1);
-    --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 2px 4px -1px hsl(0 0% 0% / 0.1);
-    --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 4px 6px -1px hsl(0 0% 0% / 0.1);
-    --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 8px 10px -1px hsl(0 0% 0% / 0.1);
+    --shadow-sm: 0 1px 2px hsl(222 47% 10% / 0.08), 0 1px 0 hsl(0 0% 100% / 0.7) inset;
+    --shadow: 0 8px 24px -18px hsl(222 47% 10% / 0.35), 0 1px 0 hsl(0 0% 100% / 0.75) inset;
+    --shadow-md: 0 16px 36px -24px hsl(222 47% 10% / 0.45), 0 1px 0 hsl(0 0% 100% / 0.75) inset;
+    --shadow-lg: 0 24px 52px -30px hsl(222 47% 10% / 0.5), 0 1px 0 hsl(0 0% 100% / 0.75) inset;
+    --shadow-xl: 0 30px 70px -36px hsl(222 47% 10% / 0.55), 0 1px 0 hsl(0 0% 100% / 0.8) inset;
     --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
     --tracking-normal: 0em;
     --spacing: 0.25rem;
@@ -160,7 +160,7 @@
 @layer components {
   /* Glassmorphism Card */
   .glass-card {
-    @apply bg-card/80 backdrop-blur-xl border border-glass-border rounded-lg;
+    @apply bg-card/90 backdrop-blur-xl border border-glass-border rounded-lg shadow-md;
   }
 
   /* Enhanced card styling for metrics */
@@ -179,6 +179,20 @@
     height: 1px;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
     pointer-events: none;
+  }
+
+  :root:not(.dark) .glass-card,
+  .light .glass-card {
+    background: linear-gradient(180deg, hsl(210 33% 99% / 0.96), hsl(210 29% 96% / 0.94));
+    border-color: hsl(214 20% 76%);
+    box-shadow:
+      0 18px 42px -30px hsl(222 47% 10% / 0.5),
+      0 1px 0 hsl(0 0% 100% / 0.9) inset;
+  }
+
+  :root:not(.dark) .glass-card::before,
+  .light .glass-card::before {
+    background: linear-gradient(90deg, transparent, hsl(160 84% 35% / 0.22), transparent);
   }
 
   /* Glow effects */
@@ -202,6 +216,55 @@
   .hover-glow:hover {
     box-shadow: 0 0 20px hsl(var(--primary) / 0.2), 0 4px 20px hsl(0 0% 0% / 0.3);
     transform: translateY(-2px);
+  }
+
+  :root:not(.dark) .hover-glow:hover,
+  .light .hover-glow:hover {
+    box-shadow: 0 14px 34px -22px hsl(160 84% 28% / 0.35), 0 4px 18px hsl(222 47% 10% / 0.12);
+  }
+
+  .metric-card-3d {
+    perspective: 1200px;
+  }
+
+  .metric-card-3d-inner {
+    position: relative;
+    min-height: 200px;
+    transform-style: preserve-3d;
+    transition: transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .metric-card-3d:hover .metric-card-3d-inner {
+    transform: rotateY(180deg) translateY(-4px);
+  }
+
+  .metric-card-face {
+    min-height: 200px;
+    backface-visibility: hidden;
+    transform-style: preserve-3d;
+  }
+
+  .metric-card-face > * {
+    transform: translateZ(28px);
+  }
+
+  .metric-card-back {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: var(--radius);
+    transform: rotateY(180deg);
+  }
+
+  .metric-card-back::before {
+    content: '';
+    position: absolute;
+    inset: -40%;
+    background:
+      radial-gradient(circle at 30% 20%, hsl(0 0% 100% / 0.28), transparent 28%),
+      linear-gradient(120deg, transparent 35%, hsl(0 0% 100% / 0.22), transparent 65%);
+    transform: translateZ(1px) rotate(12deg);
+    pointer-events: none;
   }
 
   /* Vulnerability severity badges */
@@ -234,7 +297,10 @@
 @layer utilities {
   /* Theme-aware gradient backgrounds */
   .gradient-cyber {
-    background: linear-gradient(135deg, hsl(220 14% 96%) 0%, hsl(220 14% 98%) 50%, hsl(0 0% 100%) 100%);
+    background:
+      radial-gradient(circle at 18% 0%, hsl(160 84% 35% / 0.08), transparent 32%),
+      radial-gradient(circle at 85% 12%, hsl(214 70% 45% / 0.08), transparent 30%),
+      linear-gradient(135deg, hsl(212 35% 94%) 0%, hsl(210 33% 96%) 50%, hsl(214 30% 93%) 100%);
   }
 
   .dark .gradient-cyber {
@@ -314,6 +380,160 @@
 
   .row-hover:hover {
     @apply bg-muted/40 pl-2;
+  }
+
+  :root:not(.dark) .row-hover:hover,
+  .light .row-hover:hover {
+    background-color: hsl(160 84% 35% / 0.08);
+  }
+
+  :root:not(.dark) .bg-card\/50,
+  .light .bg-card\/50,
+  :root:not(.dark) .bg-card\/30,
+  .light .bg-card\/30 {
+    background-color: hsl(210 29% 98% / 0.92);
+  }
+
+  :root:not(.dark) .bg-background\/30,
+  .light .bg-background\/30,
+  :root:not(.dark) .bg-background\/50,
+  .light .bg-background\/50 {
+    background-color: hsl(214 27% 94% / 0.82);
+  }
+
+  :root:not(.dark) .bg-muted\/30,
+  .light .bg-muted\/30,
+  :root:not(.dark) .bg-muted\/40,
+  .light .bg-muted\/40,
+  :root:not(.dark) .bg-muted\/50,
+  .light .bg-muted\/50 {
+    background-color: hsl(214 27% 90% / 0.9);
+  }
+
+  :root:not(.dark) .border-border\/30,
+  .light .border-border\/30,
+  :root:not(.dark) .border-border\/40,
+  .light .border-border\/40,
+  :root:not(.dark) .border-border\/50,
+  .light .border-border\/50 {
+    border-color: hsl(214 20% 76% / 0.92);
+  }
+
+  :root:not(.dark) .text-muted-foreground,
+  .light .text-muted-foreground {
+    color: hsl(218 19% 32%);
+  }
+
+  :root:not(.dark) .text-muted-foreground\/50,
+  .light .text-muted-foreground\/50,
+  :root:not(.dark) .text-muted-foreground\/60,
+  .light .text-muted-foreground\/60,
+  :root:not(.dark) .text-muted-foreground\/65,
+  .light .text-muted-foreground\/65 {
+    color: hsl(218 17% 42% / 0.9);
+  }
+
+  :root:not(.dark) .text-white,
+  .light .text-white {
+    color: hsl(222 47% 11%) !important;
+  }
+
+  :root:not(.dark) .text-gray-200,
+  .light .text-gray-200,
+  :root:not(.dark) .text-gray-300,
+  .light .text-gray-300,
+  :root:not(.dark) .text-gray-400,
+  .light .text-gray-400 {
+    color: hsl(218 19% 34%) !important;
+  }
+
+  :root:not(.dark) .bg-white\/5,
+  .light .bg-white\/5,
+  :root:not(.dark) .bg-white\/\[0\.02\],
+  .light .bg-white\/\[0\.02\],
+  :root:not(.dark) .bg-white\/\[0\.03\],
+  .light .bg-white\/\[0\.03\],
+  :root:not(.dark) .bg-white\/\[0\.04\],
+  .light .bg-white\/\[0\.04\] {
+    background-color: hsl(214 27% 91% / 0.82);
+  }
+
+  :root:not(.dark) .border-white\/5,
+  .light .border-white\/5,
+  :root:not(.dark) .border-white\/10,
+  .light .border-white\/10 {
+    border-color: hsl(214 20% 76% / 0.9);
+  }
+
+  :root:not(.dark) table,
+  .light table {
+    color: hsl(var(--foreground));
+  }
+
+  :root:not(.dark) thead,
+  .light thead {
+    background: linear-gradient(90deg, hsl(193 78% 82% / 0.72), hsl(160 65% 84% / 0.6));
+    color: hsl(204 80% 24%);
+  }
+
+  :root:not(.dark) th,
+  .light th,
+  :root:not(.dark) [role="columnheader"],
+  .light [role="columnheader"] {
+    color: hsl(193 88% 24%) !important;
+    font-weight: 800;
+  }
+
+  :root:not(.dark) tbody tr,
+  .light tbody tr {
+    border-color: hsl(214 20% 78% / 0.85);
+    color: hsl(222 47% 11%);
+  }
+
+  :root:not(.dark) tbody tr:nth-child(odd),
+  .light tbody tr:nth-child(odd) {
+    background-color: hsl(193 78% 88% / 0.28);
+  }
+
+  :root:not(.dark) tbody tr:nth-child(even),
+  .light tbody tr:nth-child(even) {
+    background-color: hsl(160 65% 88% / 0.18);
+  }
+
+  :root:not(.dark) tbody tr:hover,
+  .light tbody tr:hover {
+    background-color: hsl(160 84% 35% / 0.12);
+  }
+
+  :root:not(.dark) td,
+  .light td {
+    color: hsl(222 47% 13%);
+  }
+
+  :root:not(.dark) td .text-muted-foreground,
+  .light td .text-muted-foreground {
+    color: hsl(218 19% 30%);
+  }
+
+  :root:not(.dark) input,
+  .light input,
+  :root:not(.dark) textarea,
+  .light textarea,
+  :root:not(.dark) [role="combobox"],
+  .light [role="combobox"] {
+    background-color: hsl(210 33% 99% / 0.92);
+    border-color: hsl(214 20% 74%);
+    color: hsl(var(--foreground));
+  }
+
+  :root:not(.dark) [data-radix-popper-content-wrapper] [role="menu"],
+  .light [data-radix-popper-content-wrapper] [role="menu"],
+  :root:not(.dark) [cmdk-root],
+  .light [cmdk-root] {
+    background-color: hsl(210 33% 99% / 0.98);
+    border-color: hsl(214 20% 76%);
+    color: hsl(var(--foreground));
+    box-shadow: var(--shadow-lg);
   }
 
   /* Shimmer loading effect */
@@ -516,8 +736,18 @@
     .icon-bounce,
     .row-hover,
     .stat-card-hover,
-    .feature-card-hover {
+    .feature-card-hover,
+    .metric-card-3d-inner {
       @apply transition-none transform-none;
+    }
+
+    .metric-card-3d:hover .metric-card-3d-inner,
+    .metric-card-back {
+      transform: none;
+    }
+
+    .metric-card-back {
+      display: none;
     }
     
     .animate-fade-in,

@@ -1,6 +1,4 @@
-import { useState, useEffect, useRef } from "react";
-import { toast } from "sonner";
-import { getScanHistory, ScanHistoryItem } from "@/lib/scans-api";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import MetricsRow from "@/components/dashboard/MetricsRow";
@@ -12,92 +10,61 @@ import VulnerabilityPieChart from "@/components/dashboard/VulnerabilityPieChart"
 import CriticalAlerts from "@/components/dashboard/CriticalAlerts";
 import TeamViewToggle from "@/components/dashboard/TeamViewToggle";
 import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
-import { mockTeams, CURRENT_USER_ID } from "@/lib/team-data";
+import { getScanHistory } from "@/lib/scans-api";
+import { getTeamDashboard, listTeams } from "@/lib/teams-api";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import type { ScanRecord, AlertRecord } from "@/types/realtime";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import type { AlertRecord } from "@/types/realtime";
 import { applyOptimisticInsert, applyOptimisticUpdate, applyOptimisticDelete } from "@/types/realtime";
+
+const emptySeverityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+
+const formatTimeAgo = (isoString: string): string => {
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  const diffMins = Math.max(0, Math.floor(diffMs / 60_000));
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+};
 
 const Dashboard = () => {
   const [showEmpty] = useState(false);
   const [viewMode, setViewMode] = useState<"personal" | "team">("personal");
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
-  const [realtimeScans, setRealtimeScans] = useState<ScanRecord[]>([]);
-  const prevScansRef = useRef<ScanRecord[]>([]);
   const [realtimeAlerts, setRealtimeAlerts] = useState<AlertRecord[]>([]);
-  const prevAlertsRef = useRef<AlertRecord[]>([]);
+  const { user } = useCurrentUser();
 
-  // Default team selection: first admin team, or first team
+  const { data: teams = [] } = useQuery({
+    queryKey: ["teams"],
+    queryFn: listTeams,
+  });
+
   useEffect(() => {
-    if (mockTeams.length > 0) {
-      const adminTeam = mockTeams.find((t) => t.currentUserRole === "admin");
-      setSelectedTeamId((adminTeam || mockTeams[0]).id);
+    if (teams.length === 0) {
+      setSelectedTeamId("");
+      return;
     }
-  }, []);
+    if (selectedTeamId && teams.some((team) => team.id === selectedTeamId)) return;
+    const adminTeam = teams.find((team) => team.current_user_role === "admin");
+    setSelectedTeamId((adminTeam || teams[0]).id);
+  }, [selectedTeamId, teams]);
 
-  // Fetch real scan history from the API
+  const selectedTeam = teams.find((team) => team.id === selectedTeamId);
+  const userRole = selectedTeam?.current_user_role;
+  const isTeamView = viewMode === "team" && !!selectedTeam;
+
   const { data: rawScans = [] } = useQuery({
     queryKey: ["scan-history"],
     queryFn: getScanHistory,
   });
 
-  // Top 5 most recent scans mapped to the Scan shape RecentScansTable expects
-  const recentScans: Scan[] = rawScans
-    .filter((s) => Boolean(s.project_name || s.file_name || s.branch))
-    .slice()
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 5)
-    .map((s) => ({
-      id: s.id,
-      projectName: s.project_name || s.file_name || "Project",
-      date: new Date(s.created_at),
-      status: (s.status === "completed" ? "completed" : "failed") as Scan["status"],
-      vulnerabilities: s.severity_counts ?? { critical: 0, high: 0, medium: 0, low: s.total_vulns ?? 0 },
-    }));
-
-  // Stat card values derived from real data
-  const totalScans = rawScans.length;
-  const criticalVulns = rawScans.reduce((sum, scan) => sum + (scan.severity_counts?.critical ?? 0), 0);
-  const completedScans = rawScans.filter((s) => s.status === "completed").length;
-  const vulnerabilityTrend = rawScans
-    .filter((scan) => scan.status === "completed")
-    .reduce((acc, scan) => {
-      const date = new Date(scan.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const current = acc.get(date) ?? { date, critical: 0, high: 0, medium: 0 };
-      current.critical += scan.severity_counts?.critical ?? 0;
-      current.high += scan.severity_counts?.high ?? 0;
-      current.medium += scan.severity_counts?.medium ?? 0;
-      acc.set(date, current);
-      return acc;
-    }, new Map<string, { date: string; critical: number; high: number; medium: number }>());
-  const criticalAlerts = rawScans
-    .flatMap((scan) =>
-      (scan.critical_findings ?? []).map((finding) => ({
-        id: finding.id,
-        title: `${finding.cwe_id || finding.type || "Critical Issue"}${finding.line_number ? ` at line ${finding.line_number}` : ""}`,
-        project: scan.project_name || finding.file_path || "Project",
-        timeAgo: new Date(finding.created_at).toLocaleString(),
-      }))
-    )
-    .slice(0, 10);
-
-  const selectedTeam = mockTeams.find((t) => t.id === selectedTeamId);
-  const userRole = selectedTeam?.currentUserRole;
-  const isTeamView = viewMode === "team" && !!selectedTeam;
-
-  // Real-time subscription for scans — scans.user_id links to auth user
-  // team scoping is done via: scans → projects → team_id
-  const { status: scansStatus, connectionCount: scansConnectionCount } = useRealtimeSync<ScanRecord>({
-    table: "scans",
-    enabled: true,
-    onInsert: (event) => {
-      setRealtimeScans((prev) => applyOptimisticInsert(prev, event.new));
-    },
-    onUpdate: (event) => {
-      setRealtimeScans((prev) => applyOptimisticUpdate(prev, event.new));
-    },
+  const { data: teamDashboard } = useQuery({
+    queryKey: ["team-dashboard", selectedTeamId],
+    queryFn: () => getTeamDashboard(selectedTeamId),
+    enabled: isTeamView && !!selectedTeamId,
   });
 
-  // Real-time subscription for alerts — alerts.user_id links to auth user
   const { status: alertsStatus, connectionCount: alertsConnectionCount } = useRealtimeSync<AlertRecord>({
     table: "alerts",
     enabled: true,
@@ -112,112 +79,90 @@ const Dashboard = () => {
     },
   });
 
-  // Map ScanRecord → Scan (component prop shape)
-  // scans has: file_name, file_path, branch, status, started_at, created_at
-  const mapScanRecordToScan = (record: ScanRecord): Scan => ({
-    id: record.id,
-    projectName: record.file_name ?? record.file_path ?? record.branch ?? record.project_id,
-    date: new Date(record.started_at ?? record.created_at),
-    status: record.status === "completed" ? "completed" : "failed",
-    vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0 },
-  });
+  const personalRecentScans: Scan[] = useMemo(() => {
+    return rawScans
+      .filter((scan) => Boolean(scan.project_name || scan.file_name || scan.branch))
+      .slice()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 5)
+      .map((scan) => ({
+        id: scan.id,
+        projectName: scan.project_name || scan.file_name || "Project",
+        date: new Date(scan.created_at),
+        status: (scan.status === "completed" ? "completed" : "failed") as Scan["status"],
+        vulnerabilities: scan.severity_counts ?? { ...emptySeverityCounts, low: scan.total_vulns ?? 0 },
+      }));
+  }, [rawScans]);
 
-  // Determine metrics
+  const personalTrend = useMemo(() => {
+    const trend = rawScans
+      .filter((scan) => scan.status === "completed")
+      .reduce((acc, scan) => {
+        const date = new Date(scan.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        const current = acc.get(date) ?? { date, critical: 0, high: 0, medium: 0 };
+        current.critical += scan.severity_counts?.critical ?? 0;
+        current.high += scan.severity_counts?.high ?? 0;
+        current.medium += scan.severity_counts?.medium ?? 0;
+        acc.set(date, current);
+        return acc;
+      }, new Map<string, { date: string; critical: number; high: number; medium: number }>());
+
+    return Array.from(trend.values()).slice(-7);
+  }, [rawScans]);
+
+  const personalCriticalAlerts = useMemo(() => {
+    return rawScans
+      .flatMap((scan) =>
+        (scan.critical_findings ?? []).map((finding) => ({
+          id: finding.id,
+          title: `${finding.cwe_id || finding.type || "Critical Issue"}${finding.line_number ? ` at line ${finding.line_number}` : ""}`,
+          project: scan.project_name || finding.file_path || "Project",
+          timeAgo: new Date(finding.created_at).toLocaleString(),
+        }))
+      )
+      .slice(0, 10);
+  }, [rawScans]);
+
+  const teamRecentScans: Scan[] = useMemo(() => {
+    return (teamDashboard?.recentScans ?? []).map((scan) => ({
+      id: scan.id,
+      projectName: scan.projectName,
+      date: new Date(scan.date),
+      status: (scan.status === "completed" ? "completed" : "failed") as Scan["status"],
+      vulnerabilities: scan.vulnerabilities,
+      memberId: scan.memberId ?? undefined,
+    }));
+  }, [teamDashboard?.recentScans]);
+
+  const teamCriticalAlerts = useMemo(() => {
+    return (teamDashboard?.criticalAlerts ?? []).map((alert) => ({
+      id: alert.id,
+      title: alert.title,
+      project: alert.project,
+      timeAgo: formatTimeAgo(alert.createdAt || alert.timeAgo),
+      memberName: alert.memberName,
+      branch: alert.branch,
+    }));
+  }, [teamDashboard?.criticalAlerts]);
+
+  const totalScans = rawScans.length;
+  const criticalVulns = rawScans.reduce((sum, scan) => sum + (scan.severity_counts?.critical ?? 0), 0);
+  const completedScans = rawScans.filter((scan) => scan.status === "completed").length;
+
   const personalMetrics = {
     totalScans,
     criticalVulns,
     healthScore: totalScans > 0 ? Math.round((completedScans / totalScans) * 100) : 100,
   };
 
-  const metrics = isTeamView && selectedTeam ? selectedTeam.metrics : personalMetrics;
-
-  // Determine scans based on role, preferring realtime data when available
-  const getScans = (): Scan[] => {
-    // Use realtime data if we have any from the subscription
-    if (realtimeScans.length > 0) {
-      const mapped = realtimeScans.map(mapScanRecordToScan);
-      if (!isTeamView || !selectedTeam) return mapped;
-      if (userRole === "developer") {
-        return realtimeScans
-          .filter((s) => s.team_id === selectedTeamId)
-          .map(mapScanRecordToScan);
-      }
-      return mapped;
-    }
-    // Fall back to real recent scans while realtime hasn't loaded yet
-    const normalizeTeamScan = (scan: Scan): Scan => ({
-      ...scan,
-      status: scan.status === "completed" ? "completed" : "failed",
-    });
-    if (!isTeamView || !selectedTeam) return recentScans;
-    if (userRole === "developer") {
-      return selectedTeam.scans.filter((s) => s.memberId === CURRENT_USER_ID).map(normalizeTeamScan);
-    }
-    return selectedTeam.scans.map(normalizeTeamScan);
-  };
-
-  // ---------------------------------------------------------------------------
-  // Optimistic mutation handlers — Scans
-  // ---------------------------------------------------------------------------
-
-  /** Snapshot current scans state, then apply an optimistic INSERT. */
-  const handleOptimisticScanInsert = (record: ScanRecord) => {
-    prevScansRef.current = realtimeScans;
-    setRealtimeScans((prev) => applyOptimisticInsert(prev, record));
-  };
-
-  /** Snapshot current scans state, then apply an optimistic UPDATE. */
-  const handleOptimisticScanUpdate = (record: ScanRecord) => {
-    prevScansRef.current = realtimeScans;
-    setRealtimeScans((prev) => applyOptimisticUpdate(prev, record));
-  };
-
-  /** Restore scans to the pre-mutation snapshot and show an error toast. */
-  const handleRollbackScans = (errorMessage?: string) => {
-    setRealtimeScans(prevScansRef.current);
-    toast.error(errorMessage ?? "Scan update failed. Changes have been reverted.");
-  };
-
-  // ---------------------------------------------------------------------------
-  // Optimistic mutation handlers — Alerts
-  // ---------------------------------------------------------------------------
-
-  /** Snapshot current alerts state, then apply an optimistic INSERT. */
-  const handleOptimisticAlertInsert = (record: AlertRecord) => {
-    prevAlertsRef.current = realtimeAlerts;
-    setRealtimeAlerts((prev) => applyOptimisticInsert(prev, record));
-  };
-
-  /** Snapshot current alerts state, then apply an optimistic DELETE. */
-  const handleOptimisticAlertDelete = (id: string) => {
-    prevAlertsRef.current = realtimeAlerts;
-    setRealtimeAlerts((prev) => applyOptimisticDelete(prev, id));
-  };
-
-  /** Restore alerts to the pre-mutation snapshot and show an error toast. */
-  const handleRollbackAlerts = (errorMessage?: string) => {
-    setRealtimeAlerts(prevAlertsRef.current);
-    toast.error(errorMessage ?? "Alert update failed. Changes have been reverted.");
-  };
-
-  // Expose mutation handlers via a plain object — child components can receive
-  // these as props when they need to trigger mutations with optimistic updates.
-  const scanMutationHandlers = {
-    onOptimisticInsert: handleOptimisticScanInsert,
-    onOptimisticUpdate: handleOptimisticScanUpdate,
-    onRollback: handleRollbackScans,
-  };
-
-  const alertMutationHandlers = {
-    onOptimisticInsert: handleOptimisticAlertInsert,
-    onOptimisticDelete: handleOptimisticAlertDelete,
-    onRollback: handleRollbackAlerts,
-  };
+  const metrics = isTeamView && teamDashboard ? teamDashboard.metrics : personalMetrics;
+  const scans = isTeamView ? teamRecentScans : personalRecentScans;
+  const chartData = isTeamView ? teamDashboard?.vulnerabilityTrend ?? [] : personalTrend;
+  const alerts = isTeamView ? teamCriticalAlerts : personalCriticalAlerts;
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl lg:text-3xl font-bold text-foreground">Dashboard</h1>
@@ -227,56 +172,49 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Team View Toggle */}
-        {mockTeams.length > 0 && (
+        {teams.length > 0 && (
           <TeamViewToggle
             viewMode={viewMode}
             onViewModeChange={setViewMode}
-            teams={mockTeams}
+            teams={teams}
             selectedTeamId={selectedTeamId}
             onTeamChange={setSelectedTeamId}
           />
         )}
 
-        {/* Metrics Row */}
         <MetricsRow {...metrics} isTeamView={isTeamView} />
 
-        {/* Team Health Overview - only in team view */}
-        {isTeamView && selectedTeam && userRole && (
+        {isTeamView && selectedTeam && userRole && teamDashboard && (
           <TeamHealthOverview
-            team={selectedTeam}
-            currentUserId={CURRENT_USER_ID}
+            teamName={selectedTeam.name}
+            members={teamDashboard.members}
+            currentUserId={user?.id ?? ""}
             userRole={userRole}
           />
         )}
 
-        {/* Main Content */}
         {showEmpty ? (
           <EmptyState />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left Column - 2/3 width */}
             <div className="lg:col-span-2 space-y-6">
               <RecentScansTable
-                scans={getScans()}
+                scans={scans}
                 userRole={isTeamView ? userRole : undefined}
               />
-              {/* Bar Chart and Pie Chart */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <VulnerabilityBarChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
-                <VulnerabilityPieChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
+                <VulnerabilityBarChart data={chartData} />
+                <VulnerabilityPieChart data={chartData} />
               </div>
             </div>
 
-            {/* Right Column - 1/3 width */}
             <div className="space-y-6">
-              <VulnerabilityChart data={Array.from(vulnerabilityTrend.values()).slice(-7)} />
+              <VulnerabilityChart data={chartData} />
               <CriticalAlerts
                 isTeamView={isTeamView}
-                teamAlerts={isTeamView && selectedTeam ? selectedTeam.alerts : undefined}
                 userRole={isTeamView ? userRole : undefined}
-                realtimeAlerts={realtimeAlerts.length > 0 ? realtimeAlerts : undefined}
-                scanAlerts={criticalAlerts}
+                realtimeAlerts={!isTeamView && realtimeAlerts.length > 0 ? realtimeAlerts : undefined}
+                scanAlerts={alerts}
                 connectionStatus={{ status: alertsStatus, connectionCount: alertsConnectionCount }}
               />
             </div>

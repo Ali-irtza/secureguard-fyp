@@ -1,6 +1,8 @@
 import io
 import csv
 import html
+import os
+import re
 import zipfile
 import random
 import time
@@ -208,18 +210,128 @@ def _chunk_line(chunk: Dict, line_number: int) -> str:
     return lines[line_number - start_line] if 0 <= line_number - start_line < len(lines) else ""
 
 
-def _affected_code_for_issue(issue: Dict, chunks: List[Dict]) -> str:
+def _nearest_non_empty_line(lines: list[str], preferred_index: int = 0) -> str:
+    if not lines:
+        return ""
+    preferred_index = max(0, min(preferred_index, len(lines) - 1))
+    if lines[preferred_index].strip():
+        return lines[preferred_index]
+    for distance in range(1, len(lines)):
+        before = preferred_index - distance
+        after = preferred_index + distance
+        if before >= 0 and lines[before].strip():
+            return lines[before]
+        if after < len(lines) and lines[after].strip():
+            return lines[after]
+    return lines[preferred_index]
+
+
+def _nearest_chunk_line(chunk: Dict, line_number: int) -> str:
+    lines = str(chunk.get("code") or "").splitlines()
+    if not lines:
+        return ""
+    start_line = int(chunk.get("start_line") or 1)
+    preferred_index = line_number - start_line if line_number > 0 else 0
+    return _nearest_non_empty_line(lines, preferred_index)
+
+
+def _split_source_lines(source: str) -> list[str]:
+    lines = str(source or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _path_matches(candidate: str, target: str) -> bool:
+    candidate_norm = _safe_zip_path(candidate).lower()
+    target_norm = _safe_zip_path(target).lower()
+    if not candidate_norm or not target_norm:
+        return False
+    return (
+        candidate_norm == target_norm
+        or candidate_norm.endswith(f"/{target_norm}")
+        or target_norm.endswith(f"/{candidate_norm}")
+        or os.path.basename(candidate_norm) == os.path.basename(target_norm)
+    )
+
+
+def _source_line_for_issue(issue: Dict, source_files: List[Dict]) -> str:
+    line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    issue_path = str(issue.get("file_path") or "").strip()
+    candidates: list[Dict] = []
+    for source in source_files:
+        source_name = str(source.get("filename") or "").strip()
+        if issue_path and source_name and _path_matches(source_name, issue_path):
+            candidates.append(source)
+
+    if not candidates and len(source_files) == 1:
+        candidates = source_files
+
+    for source in candidates:
+        lines = _split_source_lines(str(source.get("source_code") or ""))
+        if 0 <= line_number - 1 < len(lines):
+            return _nearest_non_empty_line(lines, line_number - 1)
+    for source in candidates:
+        nearest = _nearest_non_empty_line(_split_source_lines(str(source.get("source_code") or "")), max(line_number - 1, 0))
+        if nearest.strip():
+            return nearest
+    return ""
+
+
+def _looks_like_line_marker(value: str) -> bool:
+    normalized = value.strip()
+    return bool(re.fullmatch(r"(?:line\s*)?\d+|line\s+\d+\s*:?", normalized, re.IGNORECASE))
+
+
+def _looks_like_non_code_value(value: str) -> bool:
+    normalized = " ".join(value.strip().lower().split())
+    return normalized in {
+        "",
+        "null",
+        "none",
+        "n/a",
+        "critical",
+        "high",
+        "medium",
+        "low",
+    } or _looks_like_line_marker(value)
+
+
+def _affected_code_for_issue(issue: Dict, chunks: List[Dict], source_files: List[Dict] | None = None) -> str:
     direct = str(issue.get("affected_code") or issue.get("code_snippet") or "").strip()
-    if direct:
-        return direct
     file_path = issue.get("file_path") or ""
     line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    source_line = _source_line_for_issue(issue, source_files or [])
+    if source_line.strip():
+        return source_line
     for chunk in chunks:
-        if (chunk.get("file_path") or "") == file_path:
+        chunk_path = str(chunk.get("file_path") or "")
+        if file_path and chunk_path and _path_matches(chunk_path, file_path):
             source_line = _chunk_line(chunk, line_number)
             if source_line.strip():
                 return source_line
-    return f"Line {line_number or 'N/A'}"
+    fallback_chunks = chunks if len({str(chunk.get("file_path") or "") for chunk in chunks}) <= 1 else []
+    for chunk in fallback_chunks:
+        source_line = _chunk_line(chunk, line_number)
+        if source_line.strip():
+            return source_line
+    for chunk in chunks:
+        chunk_path = str(chunk.get("file_path") or "")
+        if file_path and chunk_path and _path_matches(chunk_path, file_path):
+            source_line = _nearest_chunk_line(chunk, line_number)
+            if source_line.strip():
+                return source_line
+    for chunk in fallback_chunks:
+        source_line = _nearest_chunk_line(chunk, line_number)
+        if source_line.strip():
+            return source_line
+    if direct and not _looks_like_non_code_value(direct):
+        return direct
+    for source in source_files or []:
+        source_line = _nearest_non_empty_line(_split_source_lines(str(source.get("source_code") or "")))
+        if source_line.strip():
+            return source_line
+    return ""
 
 
 def _chunk_issues(chunk: Dict, vulnerabilities: List[Dict]) -> list[Dict]:
@@ -542,57 +654,51 @@ def _build_simple_pdf(title: str, scan_data: Dict, vulnerabilities: List[Dict]) 
     return buffer.getvalue()
 
 
-def _build_csv(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
+def build_pdf_report(scan_data: Dict, vulnerabilities: List[Dict]) -> bytes:
+    scan_id = scan_data.get("id") or scan_data.get("scan_id") or "scan"
+    title = f"SecureGuard Scan Report - {scan_data.get('project_name') or scan_id}"
+    return _build_simple_pdf(title, scan_data, vulnerabilities)
+
+
+def _build_csv(scan_data: Dict, vulnerabilities: List[Dict], source_files: List[Dict] | None = None) -> bytes:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["SecureGuard Full Scan Report"])
-    writer.writerow([])
-    writer.writerow(["Project", scan_data.get("project_name") or "Project"])
-    writer.writerow(["Scan ID", scan_data.get("id") or scan_data.get("scan_id") or ""])
-    writer.writerow(["Scan Type", scan_data.get("scan_type") or "Unknown"])
-    writer.writerow(["Risk Level", scan_data.get("overall_risk_level") or scan_data.get("risk_level") or "Unknown"])
-    writer.writerow(["Risk Score", scan_data.get("overall_risk_score") or scan_data.get("risk_score") or 0])
-    writer.writerow(["Files Scanned", scan_data.get("files_scanned") or scan_data.get("files_analyzed") or 0])
-    writer.writerow(["Total Vulnerabilities", scan_data.get("total_vulnerabilities") or scan_data.get("total_vulns") or len(vulnerabilities)])
-    writer.writerow([])
-    writer.writerow(["Input And Corrected Code"])
-    writer.writerow(["File", "Start Line", "End Line", "Input Code", "Corrected Code"])
-    for chunk in scan_data.get("chunk_outputs") or []:
-        writer.writerow([
-            chunk.get("file_path") or "",
-            chunk.get("start_line") or "",
-            chunk.get("end_line") or "",
-            chunk.get("code") or "",
-            chunk.get("corrected_code") or "",
-        ])
-    writer.writerow([])
-    writer.writerow(["Vulnerability Details"])
-    writer.writerow([
-        "Severity",
-        "CWE ID",
-        "CWE Name",
-        "File",
-        "Line",
-        "Vulnerable Code",
-        "Explanation",
-        "Fix Suggestion",
-        "Function",
-        "Location",
-    ])
+    writer.writerow(["Line Number", "CWE ID", "Code Line", "Explanation"])
     for vuln in vulnerabilities:
         writer.writerow([
-            str(vuln.get("severity") or "").upper(),
-            vuln.get("cwe_id") or "",
-            vuln.get("cwe_name") or vuln.get("type") or "",
-            vuln.get("file_path") or "",
             vuln.get("line_number") or vuln.get("absolute_line") or "",
-            _affected_code_for_issue(vuln, scan_data.get("chunk_outputs") or []),
+            vuln.get("cwe_id") or "",
+            _affected_code_for_issue(vuln, scan_data.get("chunk_outputs") or [], source_files or []),
             vuln.get("description") or "",
-            vuln.get("fix_suggestion") or "",
-            vuln.get("function_name") or "",
-            vuln.get("location") or "",
         ])
     return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def build_vulnerability_csv(scan_data: Dict, vulnerabilities: List[Dict], source_files: List[Dict] | None = None) -> bytes:
+    return _build_csv(scan_data, vulnerabilities, source_files)
+
+
+def load_source_files_from_report_artifact(supabase: Client, storage_path: str | None) -> list[dict]:
+    if not storage_path:
+        return []
+    try:
+        zipped = supabase.storage.from_(REPORT_BUCKET).download(storage_path)
+        source_files: list[dict] = []
+        with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
+            for name in archive.namelist():
+                if not name.startswith("code/input/") or name.endswith("/"):
+                    continue
+                source_files.append(
+                    {
+                        "filename": name.removeprefix("code/input/"),
+                        "source_code": archive.read(name).decode("utf-8", errors="replace"),
+                        "storage_path": storage_path,
+                    }
+                )
+        return source_files
+    except Exception as exc:
+        print(f"[reports] Failed to load source files from report artifact: {exc}")
+        return []
 
 
 def _upload_zip(supabase: Client, path: str, files: dict[str, bytes]) -> None:
@@ -612,6 +718,57 @@ def _upload_zip(supabase: Client, path: str, files: dict[str, bytes]) -> None:
     )
 
 
+def _safe_zip_path(path: str) -> str:
+    normalized = (path or "source.c").replace("\\", "/").strip().lstrip("/")
+    parts = [part for part in normalized.split("/") if part and part not in {".", ".."}]
+    return "/".join(parts) or "source.c"
+
+
+def _corrected_name_for(path: str) -> str:
+    safe_path = _safe_zip_path(path)
+    directory = os.path.dirname(safe_path).replace("\\", "/")
+    basename = os.path.basename(safe_path)
+    stem, ext = os.path.splitext(basename)
+    corrected = f"{stem or 'source'}_corrected{ext or '.txt'}"
+    return f"{directory}/{corrected}" if directory else corrected
+
+
+def _normalized_chunk_outputs(scan_data: Dict) -> list[dict]:
+    chunks = scan_data.get("chunk_outputs") or []
+    if chunks:
+        return chunks
+
+    normalized: list[dict] = []
+    for file_item in scan_data.get("files") or []:
+        file_path = file_item.get("filename") or file_item.get("file_path") or scan_data.get("file_name") or "source.c"
+        for chunk in file_item.get("chunk_outputs") or []:
+            normalized.append({**chunk, "file_path": chunk.get("file_path") or file_path})
+    return normalized
+
+
+def _code_entries_from_chunks(scan_data: Dict) -> dict[str, bytes]:
+    grouped: dict[str, list[dict]] = {}
+    for chunk in _normalized_chunk_outputs(scan_data):
+        file_path = chunk.get("file_path") or chunk.get("chunk_name") or "source.c"
+        grouped.setdefault(file_path, []).append(chunk)
+
+    files: dict[str, bytes] = {}
+    for file_path, chunks in grouped.items():
+        safe_path = _safe_zip_path(file_path)
+        sorted_chunks = sorted(chunks, key=lambda chunk: int(chunk.get("chunk_index") or 0))
+        input_code = "\n\n".join(str(chunk.get("code") or "") for chunk in sorted_chunks if chunk.get("code")).strip()
+        corrected_code = "\n\n".join(
+            str(chunk.get("corrected_code") or "")
+            for chunk in sorted_chunks
+            if chunk.get("corrected_code") and chunk.get("corrected_code") not in {"None", "Pending..."}
+        ).strip()
+        if input_code:
+            files[f"code/input/{safe_path}"] = input_code.encode("utf-8")
+        if corrected_code:
+            files[f"code/corrected/{_corrected_name_for(safe_path)}"] = corrected_code.encode("utf-8")
+    return files
+
+
 def create_zipped_pdf_report(
     supabase: Client,
     user_id: str,
@@ -624,7 +781,7 @@ def create_zipped_pdf_report(
     pdf_bytes = _build_simple_pdf(title, scan_data, vulnerabilities)
 
     path = f"{user_id}/{scan_id}/report.zip"
-    _upload_zip(supabase, path, {"report.pdf": pdf_bytes})
+    _upload_zip(supabase, path, {"report.pdf": pdf_bytes, **_code_entries_from_chunks(scan_data)})
     return {"path": path, "expires_at": expires_at.isoformat()}
 
 
@@ -647,7 +804,7 @@ def create_zipped_report(
         content = _build_simple_pdf(title, scan_data, vulnerabilities)
 
     path = f"{user_id}/{scan_id}/{safe_format}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}.zip"
-    _upload_zip(supabase, path, {filename: content})
+    _upload_zip(supabase, path, {filename: content, **_code_entries_from_chunks(scan_data)})
     return {"path": path, "expires_at": expires_at.isoformat(), "filename": filename, "format": safe_format}
 
 
