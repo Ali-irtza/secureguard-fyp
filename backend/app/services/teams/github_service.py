@@ -12,8 +12,10 @@ from app.models.teams import TeamResponse, GithubAuthorizeResponse, BranchFileIt
 from app.services.teams.team_service import require_admin, require_member, fetch_members_for_team, build_team_response
 
 GITHUB_API = "https://api.github.com"
-FRONTEND_TEAM_URL = "http://localhost:8080/team"
 GITHUB_APP_SLUG = "secureguard-pro"
+
+def _frontend_team_url() -> str:
+    return f"{settings.frontend_base_url.rstrip('/')}/team"
 
 def _load_private_key() -> str:
     pem_path = Path(settings.github_private_key_path)
@@ -180,8 +182,10 @@ async def refresh_branches(team_id: str, repo_url: str, pat: str, user_id: str, 
     return await connect_github_repo(team_id, repo_url, pat, user_id, supabase)
 
 async def process_github_callback(installation_id: int | None, state: str | None, supabase: Client) -> RedirectResponse:
+    frontend_team_url = _frontend_team_url()
+
     if not state or not installation_id:
-        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=missing_params")
+        return RedirectResponse(f"{frontend_team_url}?github_error=missing_params")
 
     # Route project callbacks — state starts with "project:" when initiated
     # from a personal project's GitHub authorize flow.
@@ -192,22 +196,22 @@ async def process_github_callback(installation_id: int | None, state: str | None
     try:
         team_id, csrf_token = state.split(":", 1)
     except ValueError:
-        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=invalid_state")
+        return RedirectResponse(f"{frontend_team_url}?github_error=invalid_state")
 
     team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
     if not team_result.data:
-        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=team_not_found")
+        return RedirectResponse(f"{frontend_team_url}?github_error=team_not_found")
 
     stored = team_result.data.get("github_oauth_token", "")
     if stored != f"pending:{csrf_token}":
-        return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_error=csrf_mismatch")
+        return RedirectResponse(f"{frontend_team_url}?github_error=csrf_mismatch")
 
     supabase.table("teams").update({
         "github_installation_id": installation_id,
         "github_oauth_token":     None,
     }).eq("id", team_id).execute()
 
-    return RedirectResponse(f"{FRONTEND_TEAM_URL}?github_connected=true&team_id={team_id}")
+    return RedirectResponse(f"{frontend_team_url}?github_connected=true&team_id={team_id}")
 
 def generate_github_authorize_url(team_id: str, user_id: str, supabase: Client) -> GithubAuthorizeResponse:
     if not settings.github_app_id or not settings.github_client_id:
@@ -480,4 +484,3 @@ async def fetch_file_content(
         size=data.get("size", 0),
         encoding="utf-8",
     )
-

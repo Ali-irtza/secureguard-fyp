@@ -43,12 +43,12 @@ from app.services.teams.github_service import (
 GITHUB_API = "https://api.github.com"
 C_CPP_EXTENSIONS = (".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx")
 
-# Frontend URL to redirect back to after OAuth callback
-FRONTEND_PROJECT_BASE_URL = "http://localhost:8080/projects"
-
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+def _frontend_project_base_url() -> str:
+    return f"{settings.frontend_base_url.rstrip('/')}/projects"
 
 def _pat_headers(pat: str) -> dict:
     """Build standard GitHub API headers for a PAT request."""
@@ -232,8 +232,10 @@ async def process_github_callback(
     the GitHub App. Validates the CSRF token, stores the installation_id on
     the project, then redirects to the project detail page.
     """
+    frontend_project_base_url = _frontend_project_base_url()
+
     if not state or not installation_id:
-        return RedirectResponse(f"{FRONTEND_PROJECT_BASE_URL}?github_error=missing_params")
+        return RedirectResponse(f"{frontend_project_base_url}?github_error=missing_params")
 
     try:
         # state = "project:{project_id}:{csrf_token}"
@@ -241,7 +243,7 @@ async def process_github_callback(
         if prefix != "project":
             raise ValueError("not a project callback")
     except ValueError:
-        return RedirectResponse(f"{FRONTEND_PROJECT_BASE_URL}?github_error=invalid_state")
+        return RedirectResponse(f"{frontend_project_base_url}?github_error=invalid_state")
 
     project_result = (
         supabase.table("projects")
@@ -251,11 +253,11 @@ async def process_github_callback(
         .execute()
     )
     if not project_result.data:
-        return RedirectResponse(f"{FRONTEND_PROJECT_BASE_URL}?github_error=project_not_found")
+        return RedirectResponse(f"{frontend_project_base_url}?github_error=project_not_found")
 
     stored = project_result.data.get("github_oauth_token", "")
     if stored != f"pending:{csrf_token}":
-        return RedirectResponse(f"{FRONTEND_PROJECT_BASE_URL}?github_error=csrf_mismatch")
+        return RedirectResponse(f"{frontend_project_base_url}?github_error=csrf_mismatch")
 
     supabase.table("projects").update({
         "github_installation_id": installation_id,
@@ -263,7 +265,7 @@ async def process_github_callback(
     }).eq("id", project_id).execute()
 
     return RedirectResponse(
-        f"{FRONTEND_PROJECT_BASE_URL}/{project_id}?github_connected=true"
+        f"{frontend_project_base_url}/{project_id}?github_connected=true"
     )
 
 

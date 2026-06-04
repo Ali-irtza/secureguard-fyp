@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # CORS
     cors_origins: str = "http://localhost:5173"
+    frontend_base_url: str = "http://localhost:8080"
 
     # GitHub App credentials
     # Register at: github.com → Settings → Developer settings → GitHub Apps
