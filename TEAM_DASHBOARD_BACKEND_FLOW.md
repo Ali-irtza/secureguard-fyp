@@ -567,7 +567,7 @@ WHERE p.team_id = :team_id
 ORDER BY v.created_at DESC
 LIMIT 10;
 ```
-
+s
 ## How Team GitHub Scans Are Saved
 
 Team GitHub scan route:
