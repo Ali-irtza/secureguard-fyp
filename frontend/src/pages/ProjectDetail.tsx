@@ -66,6 +66,15 @@ const SOURCE_BADGE: Record<FileSource, string> = {
   github: "bg-violet-500/20 text-violet-400 border-violet-500/30",
 };
 
+const projectLanguages = (language?: string | null): string[] =>
+  (language ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const displayHealthScore = (score?: string | null): string =>
+  (score ?? "").trim().slice(0, 1).toUpperCase() || "A";
+
 const HealthIcon = ({ score }: { score: string | null }) => {
   if (!score)                          return <Shield      className="w-5 h-5 text-muted-foreground" />;
   if (score === "A" || score === "B")  return <ShieldCheck className="w-5 h-5 text-green-400" />;
@@ -1008,6 +1017,11 @@ const ProjectDetail = () => {
   const acceptStr        = getAcceptString(project.language);
   const hasActiveUploads = uploadQueue.some((i) => i.status === "uploading" || i.status === "pending");
   const hasFinished      = uploadQueue.some((i) => i.status === "done" || i.status === "error");
+  const sourceFiles      = files.filter((file) =>
+    [".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx"].some((ext) =>
+      file.name.toLowerCase().endsWith(ext)
+    )
+  );
 
   // Show GitHub panel only for team projects where user is admin or developer
   const showGithub = teamCtx && teamCtx.githubRepo && teamCtx.role !== "viewer";
@@ -1046,9 +1060,11 @@ const ProjectDetail = () => {
               <div>
                 <h1 className="text-2xl font-bold text-foreground">{project.name}</h1>
                 <div className="flex flex-wrap items-center gap-2 mt-2">
-                  {project.language && (
-                    <Badge variant="outline" className={LANG_BADGE[project.language] ?? ""}>{project.language}</Badge>
-                  )}
+                  {projectLanguages(project.language).map((language) => (
+                    <Badge key={language} variant="outline" className={LANG_BADGE[language] ?? ""}>
+                      {language}
+                    </Badge>
+                  ))}
                   <Badge variant="outline" className="bg-muted/50 text-muted-foreground border-border/50 capitalize">
                     {project.type}
                   </Badge>
@@ -1057,33 +1073,21 @@ const ProjectDetail = () => {
                       {teamCtx.teamName}
                     </Badge>
                   )}
-                  {project.health_score ? (
-                    <Badge variant="outline" className={HEALTH_STYLES[project.health_score] ?? ""}>
-                      <HealthIcon score={project.health_score} />
-                      <span className="ml-1">Health: {project.health_score}</span>
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="bg-muted/30 text-muted-foreground border-border/50">
-                      <Shield className="w-3 h-3 mr-1" />Not scanned yet
-                    </Badge>
-                  )}
+                  <Badge variant="outline" className={HEALTH_STYLES[displayHealthScore(project.health_score)] ?? ""}>
+                    <HealthIcon score={displayHealthScore(project.health_score)} />
+                    <span className="ml-1">Health: {displayHealthScore(project.health_score)}</span>
+                  </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
                   <Clock className="w-3 h-3" />Last updated {formatDate(project.updated_at)}
                 </p>
               </div>
             </div>
-            <Button
-              onClick={() => navigate(`/new-scan?project=${encodeURIComponent(project.name)}`)}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-glow-primary flex-shrink-0"
-            >
-              <Shield className="w-4 h-4 mr-2" />Run Scan
-            </Button>
           </div>
         </Card>
 
         {/* GitHub repository card — personal projects only */}
-        {project.type === "personal" && (
+        {false && project.type === "personal" && (
           <ProjectGithubCard
             project={project}
             onProjectUpdated={handleProjectUpdated}
@@ -1091,7 +1095,7 @@ const ProjectDetail = () => {
         )}
 
         {/* GitHub file browser — personal projects with a connected repo */}
-        {project.type === "personal" && project.github_repo && (
+        {false && project.type === "personal" && project.github_repo && (
           <PersonalGitHubImportPanel
             projectId={projectId!}
             language={project.language}
@@ -1102,7 +1106,7 @@ const ProjectDetail = () => {
         )}
 
         {/* GitHub import panel — team projects with connected repo, admin/developer only */}
-        {showGithub && teamCtx && (
+        {false && showGithub && teamCtx && (
           <GitHubImportPanel
             projectId={projectId!}
             language={project.language}
@@ -1115,9 +1119,9 @@ const ProjectDetail = () => {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-foreground">Source Files</h2>
+              <h2 className="text-lg font-semibold text-foreground">Project Files</h2>
               <p className="text-sm text-muted-foreground mt-0.5">
-                {project.language ? `Only ${acceptStr} files are accepted` : "No language set"}
+                C and C++ source files saved in this project
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1129,20 +1133,20 @@ const ProjectDetail = () => {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Refresh</TooltipContent>
               </Tooltip>
-              <Button onClick={() => fileInputRef.current?.click()} disabled={!project.language}
+              {false && <Button onClick={() => fileInputRef.current?.click()} disabled={!project.language}
                 className="bg-primary hover:bg-primary/90 text-primary-foreground">
                 <Plus className="w-4 h-4 mr-2" />Upload Files
-              </Button>
+              </Button>}
             </div>
           </div>
 
           {/* Hidden file input */}
-          <input ref={fileInputRef} type="file" multiple accept={acceptStr} className="hidden"
+          {false && <input ref={fileInputRef} type="file" multiple accept={acceptStr} className="hidden"
             onChange={(e) => { if (e.target.files) { validateAndEnqueue(e.target.files); e.target.value = ""; } }}
-          />
+          />}
 
           {/* Drag & drop zone */}
-          <div
+          {false && <div
             onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
             className={`relative rounded-xl border-2 border-dashed transition-all cursor-pointer
@@ -1158,10 +1162,10 @@ const ProjectDetail = () => {
               <p className="text-xs text-muted-foreground mt-1">or click to browse — {project.language ? `${acceptStr} only` : "no language set"}</p>
               <p className="text-xs text-muted-foreground/60 mt-1">Max 10 MB per file</p>
             </div>
-          </div>
+          </div>}
 
           {/* Upload queue */}
-          {uploadQueue.length > 0 && (
+          {false && uploadQueue.length > 0 && (
             <Card className="p-4 bg-card/50 border-border/50 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-medium text-foreground">
@@ -1226,18 +1230,18 @@ const ProjectDetail = () => {
                 <Button variant="outline" size="sm" onClick={loadFiles}>Retry</Button>
               </div>
             </Card>
-          ) : files.length === 0 ? (
+          ) : sourceFiles.length === 0 ? (
             <Card className="p-8 bg-card/30 border-border/50 border-dashed">
               <div className="flex flex-col items-center gap-2 text-center">
                 <FileCode className="w-10 h-10 text-muted-foreground/40" />
-                <p className="text-sm font-medium text-muted-foreground">No files yet</p>
-                <p className="text-xs text-muted-foreground/60">Upload or import source files to start scanning</p>
+                <p className="text-sm font-medium text-muted-foreground">No C/C++ files found</p>
+                <p className="text-xs text-muted-foreground/60">This project does not currently have saved C or C++ source files.</p>
               </div>
             </Card>
           ) : (
             <Card className="bg-card/50 border-border/50">
               <div className="divide-y divide-border/30">
-                {files.map((file) => {
+                {sourceFiles.map((file) => {
                   const uploaderName = resolveUploaderName(file.uploaded_by);
                   return (
                     <div key={file.name} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/10 transition-colors group">
@@ -1351,10 +1355,10 @@ const ProjectDetail = () => {
               {/* Footer */}
               <div className="px-4 py-2.5 border-t border-border/30 bg-muted/10 flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">
-                  {files.length} file{files.length !== 1 ? "s" : ""}
+                  {sourceFiles.length} file{sourceFiles.length !== 1 ? "s" : ""}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {formatBytes(files.reduce((s, f) => s + f.size, 0))} total
+                  {formatBytes(sourceFiles.reduce((s, f) => s + f.size, 0))} total
                 </span>
               </div>
             </Card>

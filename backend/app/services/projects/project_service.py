@@ -6,6 +6,94 @@ from app.models.projects import (
     ProjectResponse, ProjectListResponse, BulkDeleteResponse
 )
 
+C_EXTENSIONS = {".c", ".h"}
+CPP_EXTENSIONS = {".cpp", ".cc", ".cxx", ".hpp", ".hxx"}
+
+
+def _language_from_filename(filename: str | None) -> set[str]:
+    lowered = (filename or "").lower().strip()
+    if not lowered:
+        return set()
+    if any(lowered.endswith(ext) for ext in CPP_EXTENSIONS):
+        return {"C++"}
+    if any(lowered.endswith(ext) for ext in C_EXTENSIONS):
+        return {"C"}
+    return set()
+
+
+def _language_label(languages: set[str], fallback: str | None) -> str | None:
+    if "C" in languages and "C++" in languages:
+        return "C, C++"
+    if "C++" in languages:
+        return "C++"
+    if "C" in languages:
+        return "C"
+    return fallback
+
+
+def _health_grade_from_risk_score(risk_score: int | float | None) -> str | None:
+    if risk_score is None:
+        return None
+    score = float(risk_score)
+    if score <= 0:
+        return "A"
+    if score < 10:
+        return "B"
+    if score < 30:
+        return "C"
+    if score < 60:
+        return "D"
+    return "F"
+
+
+def _enrich_project_rows(rows: list[dict], supabase: Client) -> list[dict]:
+    project_ids = [row["id"] for row in rows if row.get("id")]
+    if not project_ids:
+        return rows
+
+    languages_by_project: dict[str, set[str]] = {project_id: set() for project_id in project_ids}
+
+    files_result = (
+        supabase.table("project_files")
+        .select("project_id,filename")
+        .in_("project_id", project_ids)
+        .execute()
+    )
+    for file_row in files_result.data or []:
+        project_id = file_row.get("project_id")
+        if project_id in languages_by_project:
+            languages_by_project[project_id].update(_language_from_filename(file_row.get("filename")))
+
+    scans_result = (
+        supabase.table("scans")
+        .select("project_id,file_name,risk_score,status,created_at")
+        .in_("project_id", project_ids)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    latest_scan_by_project: dict[str, dict] = {}
+    for scan in scans_result.data or []:
+        project_id = scan.get("project_id")
+        if project_id not in languages_by_project:
+            continue
+        if project_id not in latest_scan_by_project and scan.get("risk_score") is not None:
+            latest_scan_by_project[project_id] = scan
+        for filename in str(scan.get("file_name") or "").split(","):
+            languages_by_project[project_id].update(_language_from_filename(filename.strip()))
+
+    enriched_rows: list[dict] = []
+    for row in rows:
+        project_id = row.get("id")
+        enriched = dict(row)
+        enriched["language"] = _language_label(languages_by_project.get(project_id, set()), row.get("language"))
+        latest_scan = latest_scan_by_project.get(project_id)
+        latest_grade = _health_grade_from_risk_score(latest_scan.get("risk_score") if latest_scan else None)
+        enriched["health_score"] = latest_grade or row.get("health_score")
+        enriched_rows.append(enriched)
+
+    return enriched_rows
+
 
 def require_owner(project_id: str, user_id: str, supabase: Client) -> dict:
     """Fetches the project and raises 404/403 if not found or not owned."""
@@ -53,8 +141,9 @@ def list_user_projects(user_id: str, supabase: Client) -> ProjectListResponse:
         .or_(filter_str)
         .execute()
     )
+    rows = _enrich_project_rows(result.data or [], supabase)
     return ProjectListResponse(
-        projects=[ProjectResponse(**row) for row in (result.data or [])]
+        projects=[ProjectResponse(**row) for row in rows]
     )
 
 
@@ -133,7 +222,7 @@ def get_project_by_id(project_id: str, user_id: str, supabase: Client) -> Projec
 
     # Check visibility: owned by user OR user is a member of the project's team
     if row["owner_id"] == user_id:
-        return ProjectResponse(**row)
+        return ProjectResponse(**_enrich_project_rows([row], supabase)[0])
 
     if row.get("team_id"):
         membership = (
@@ -144,7 +233,7 @@ def get_project_by_id(project_id: str, user_id: str, supabase: Client) -> Projec
             .execute()
         )
         if membership.data:
-            return ProjectResponse(**row)
+            return ProjectResponse(**_enrich_project_rows([row], supabase)[0])
 
     # Don't leak existence — return 404 for non-visible projects
     raise HTTPException(

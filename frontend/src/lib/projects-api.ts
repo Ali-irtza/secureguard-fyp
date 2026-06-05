@@ -52,7 +52,7 @@ export type { BranchFilesResponse, FileContentResponse };
 // fetches fresh data from the API automatically.
 // ---------------------------------------------------------------------------
 
-const PROJECTS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const PROJECTS_CACHE_TTL_MS = 0;
 
 let _projectsCache: { data: Project[]; timestamp: number } | null = null;
 

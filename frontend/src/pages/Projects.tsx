@@ -62,6 +62,18 @@ const healthScoreStyles: Record<string, string> = {
 
 const healthScoreOrder: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, F: 5 };
 
+const projectLanguages = (language?: string | null): string[] =>
+  (language ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const primaryHealthScore = (score?: string | null): string =>
+  (score ?? "").trim().slice(0, 1).toUpperCase();
+
+const displayHealthScore = (score?: string | null): string =>
+  primaryHealthScore(score) || "A";
+
 const roleBadgeStyles: Record<TeamRole, string> = {
   admin: "bg-primary/20 text-primary border-primary/30",
   developer: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -185,9 +197,9 @@ const Projects = () => {
 
   // ── Stats ────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
-    const healthy = projects.filter(p => p.health_score === "A" || p.health_score === "B").length;
-    const needsAttention = projects.filter(p => p.health_score === "C" || p.health_score === "D").length;
-    const critical = projects.filter(p => p.health_score === "F").length;
+    const healthy = projects.filter(p => ["A", "B"].includes(displayHealthScore(p.health_score))).length;
+    const needsAttention = projects.filter(p => ["C", "D"].includes(displayHealthScore(p.health_score))).length;
+    const critical = projects.filter(p => displayHealthScore(p.health_score) === "F").length;
     return { total: projects.length, healthy, needsAttention, critical };
   }, [projects]);
 
@@ -195,11 +207,12 @@ const Projects = () => {
   const filteredProjects = useMemo(() => {
     let result = projects.filter((project) => {
       const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesLanguage = languageFilter === "all" || project.language === languageFilter;
+      const matchesLanguage = languageFilter === "all" || projectLanguages(project.language).includes(languageFilter);
+      const grade = displayHealthScore(project.health_score);
       const matchesHealth = healthFilter === "all" ||
-        (healthFilter === "healthy" && (project.health_score === "A" || project.health_score === "B")) ||
-        (healthFilter === "attention" && (project.health_score === "C" || project.health_score === "D")) ||
-        (healthFilter === "critical" && project.health_score === "F");
+        (healthFilter === "healthy" && (grade === "A" || grade === "B")) ||
+        (healthFilter === "attention" && (grade === "C" || grade === "D")) ||
+        (healthFilter === "critical" && grade === "F");
       const matchesType = projectTypeFilter === "all" || project.type === projectTypeFilter;
       return matchesSearch && matchesLanguage && matchesHealth && matchesType;
     });
@@ -214,8 +227,8 @@ const Projects = () => {
         case "updated_at":
           comparison = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime(); break;
         case "health_score":
-          comparison = (healthScoreOrder[a.health_score ?? ""] ?? 99) -
-                       (healthScoreOrder[b.health_score ?? ""] ?? 99); break;
+          comparison = (healthScoreOrder[displayHealthScore(a.health_score)] ?? 99) -
+                       (healthScoreOrder[displayHealthScore(b.health_score)] ?? 99); break;
       }
       return sortDirection === "asc" ? comparison : -comparison;
     });
@@ -276,8 +289,8 @@ const Projects = () => {
     }
   };
 
-  const handleRescan = (projectName: string) => {
-    navigate(`/new-scan?project=${encodeURIComponent(projectName)}`);
+  const handleRescan = (projectId: string) => {
+    navigate(`/new-scan?projectId=${encodeURIComponent(projectId)}`);
   };
 
   const handleBulkRescan = () => {
@@ -512,17 +525,11 @@ const Projects = () => {
         </div>
 
         {/* Quick Stats Banner */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="p-4 bg-card/50 border-border/50 backdrop-blur-sm">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-primary/10"><Shield className="w-5 h-5 text-primary" /></div>
               <div><p className="text-2xl font-bold text-foreground">{stats.total}</p><p className="text-sm text-muted-foreground">Total Projects</p></div>
-            </div>
-          </Card>
-          <Card className="p-4 bg-card/50 border-border/50 backdrop-blur-sm">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-green-500/10"><ShieldCheck className="w-5 h-5 text-green-400" /></div>
-              <div><p className="text-2xl font-bold text-green-400">{stats.healthy}</p><p className="text-sm text-muted-foreground">Healthy (A-B)</p></div>
             </div>
           </Card>
           <Card className="p-4 bg-card/50 border-border/50 backdrop-blur-sm">
@@ -661,8 +668,14 @@ const Projects = () => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {project.language ? (
-                          <Badge variant="outline" className={languageBadgeStyles[project.language] ?? ""}>{project.language}</Badge>
+                        {projectLanguages(project.language).length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {projectLanguages(project.language).map((language) => (
+                              <Badge key={language} variant="outline" className={languageBadgeStyles[language] ?? ""}>
+                                {language}
+                              </Badge>
+                            ))}
+                          </div>
                         ) : (
                           <span className="text-muted-foreground text-sm">—</span>
                         )}
@@ -683,11 +696,9 @@ const Projects = () => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {project.health_score ? (
-                          <Badge variant="outline" className={healthScoreStyles[project.health_score] ?? ""}>{project.health_score}</Badge>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">—</span>
-                        )}
+                        <Badge variant="outline" className={healthScoreStyles[displayHealthScore(project.health_score)] ?? ""}>
+                          {displayHealthScore(project.health_score)}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center justify-end gap-1">
@@ -699,7 +710,7 @@ const Projects = () => {
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => handleRescan(project.name)}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => handleRescan(project.id)}>
                                 <RotateCcw className="w-4 h-4" />
                               </Button>
                             </TooltipTrigger>

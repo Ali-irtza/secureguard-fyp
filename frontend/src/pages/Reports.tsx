@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { FileText, Calendar, Download, Trash2, FileBarChart, CheckCircle2, Users, Loader2, RefreshCw, Code2 } from "lucide-react";
+import { FileText, Calendar, Download, Trash2, FileBarChart, CheckCircle2, Users, Loader2, Code2 } from "lucide-react";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,7 +25,6 @@ const isThisMonth = (value?: string | null) => {
 };
 
 const Reports = () => {
-  const navigate = useNavigate();
   const [reportTypeFilter, setReportTypeFilter] = useState<"all" | "personal" | "team">("all");
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,15 +121,6 @@ const Reports = () => {
     }
   };
 
-  const handleRescan = (report: ReportItem) => {
-    const projectId = report.scans?.project_id;
-    if (!projectId) {
-      toast.error("This report is not linked to a project.");
-      return;
-    }
-    navigate(`/new-scan?projectId=${encodeURIComponent(projectId)}&autoStart=1`);
-  };
-
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -204,7 +193,6 @@ const Reports = () => {
                     <TableHead>Status</TableHead>
                     <TableHead className="text-center">Report</TableHead>
                     <TableHead className="text-center">Code</TableHead>
-                    <TableHead className="text-center">Rescan</TableHead>
                     <TableHead className="text-center">Delete</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -265,18 +253,6 @@ const Reports = () => {
                             title="Download input and corrected code ZIP"
                           >
                             {codeBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
-                          </Button>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleRescan(report)}
-                            disabled={!report.scans?.project_id}
-                            className="h-8 w-8"
-                            title="Rescan project"
-                          >
-                            <RefreshCw className="h-4 w-4" />
                           </Button>
                         </TableCell>
                         <TableCell className="text-center">
