@@ -5,7 +5,32 @@ from app.models.teams import (
     MemberProfile,
     TeamRole,
 )
+from app.config import settings
+from app.services.email_service import send_team_invite_email
 from app.services.teams.team_service import require_admin
+
+
+def _profile_name(user_id: str, fallback_email: str | None, supabase: Client) -> str:
+    result = (
+        supabase.table("profiles")
+        .select("full_name")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    name = (result.data or {}).get("full_name")
+    return name or (fallback_email or "A SecureGuard admin")
+
+
+def _team_name(team_id: str, supabase: Client) -> str:
+    result = (
+        supabase.table("teams")
+        .select("name")
+        .eq("id", team_id)
+        .single()
+        .execute()
+    )
+    return (result.data or {}).get("name") or "SecureGuard team"
 
 def invite_user_to_team(team_id: str, email: str, role: str, current_user_id: str, supabase: Client) -> TeamMemberResponse:
     """Adds a user to the team by their email address."""
@@ -16,6 +41,7 @@ def invite_user_to_team(team_id: str, email: str, role: str, current_user_id: st
         (u for u in users_response if u.email and u.email.lower() == email.lower()),
         None,
     )
+    inviter = next((u for u in users_response if u.id == current_user_id), None)
 
     if not invitee:
         raise HTTPException(
@@ -52,6 +78,20 @@ def invite_user_to_team(team_id: str, email: str, role: str, current_user_id: st
         .execute()
     )
     new_member = member_result.data[0]
+
+    try:
+        team_name = _team_name(team_id, supabase)
+        inviter_email = getattr(inviter, "email", None)
+        inviter_name = _profile_name(current_user_id, inviter_email, supabase)
+        send_team_invite_email(
+            to_email=invitee.email,
+            team_name=team_name,
+            inviter_name=inviter_name,
+            role=role,
+            frontend_base_url=settings.frontend_base_url,
+        )
+    except Exception as exc:
+        print(f"[email] team invite email skipped after member insert: {exc}")
 
     profile_result = (
         supabase.table("profiles")

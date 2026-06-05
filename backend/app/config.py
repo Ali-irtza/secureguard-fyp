@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     groq_model_name: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     groq_api_key: str = ""
 
+    # Optional SMTP email notifications for team invites
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "SecureGuard"
+
     @property
     def cors_origins_list(self) -> list[str]:
         """
