@@ -31,6 +31,7 @@ const Notifications = () => {
       queryKey: ["team-dashboard", team.id],
       queryFn: () => getTeamDashboard(team.id),
       enabled: preferences.teamMemberScanned,
+      staleTime: 5 * 60_000,
     })),
   });
 

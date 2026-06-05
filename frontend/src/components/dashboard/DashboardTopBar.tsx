@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { useNavigate } from "react-router-dom";
 import { Bell } from "lucide-react";
@@ -19,7 +19,7 @@ import { supabase } from "@/lib/supabase";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { getScanHistory } from "@/lib/scans-api";
 import { listProjects } from "@/lib/projects-api";
-import { getTeamDashboard, listTeams } from "@/lib/teams-api";
+import { listTeams } from "@/lib/teams-api";
 import {
   buildNotifications,
   formatTimeAgo,
@@ -51,14 +51,6 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
   const { data: scans = [] } = useQuery({ queryKey: ["scan-history"], queryFn: getScanHistory });
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { data: teams = [] } = useQuery({ queryKey: ["teams"], queryFn: listTeams });
-  const teamDashboardQueries = useQueries({
-    queries: teams.map((team) => ({
-      queryKey: ["team-dashboard", team.id],
-      queryFn: () => getTeamDashboard(team.id),
-      enabled: preferences.teamMemberScanned,
-      refetchInterval: preferences.teamMemberScanned ? 15_000 : false,
-    })),
-  });
 
   useEffect(() => {
     const syncNotifications = () => {
@@ -83,9 +75,8 @@ const DashboardTopBar = ({ hasNotifications = true }: DashboardTopBarProps) => {
       preferences,
       localNotifications,
       currentUserId: user?.id,
-      teamScans: teamDashboardQueries.flatMap((query) => query.data?.recentScans ?? []),
     }),
-    [localNotifications, preferences, projects, scans, teamDashboardQueries, teams, user?.id]
+    [localNotifications, preferences, projects, scans, teams, user?.id]
   );
 
   const primaryRole = useMemo(() => {
