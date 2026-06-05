@@ -810,7 +810,7 @@ const NewScan = () => {
       }
 
       // Step 2: Collect all files to scan:
-      //   a) selected existing project files (read their content from the URL)
+      //   a) selected existing project files (read decoded source from the API)
       //   b) newly uploaded files
       type FileTuple = { name: string; content: string };
       const filesToScan: FileTuple[] = [];
@@ -819,7 +819,8 @@ const NewScan = () => {
       if (isAutoRescan && resolvedProjectId && resolvedProjectId !== "__new__") {
         setAutoRescanPreparing(true);
         try {
-          const sourceFiles = await listProjectSourceFiles(resolvedProjectId);
+          const selectedIds = selectedFileIds.size > 0 ? Array.from(selectedFileIds) : undefined;
+          const sourceFiles = await listProjectSourceFiles(resolvedProjectId, selectedIds);
           for (const sourceFile of sourceFiles) {
             filesToScan.push({ name: sourceFile.name, content: sourceFile.content });
           }
@@ -827,22 +828,13 @@ const NewScan = () => {
           setAutoRescanPreparing(false);
         }
       } else if (projectFiles.length > 0 && selectedFileIds.size > 0) {
-        const { data: { session } } = await (await import("@/lib/supabase")).supabase.auth.getSession();
-        for (const pf of projectFiles) {
-          if (!selectedFileIds.has(pf.id)) continue;
-          try {
-            const fileRes = await fetch(pf.url, {
-              headers: session?.access_token
-                ? { Authorization: `Bearer ${session.access_token}` }
-                : {},
-            });
-            if (fileRes.ok) {
-              const text = await fileRes.text();
-              filesToScan.push({ name: pf.name, content: text });
-            }
-          } catch {
-            addLog(`Warning: could not read ${pf.name} from project`, "warning");
+        try {
+          const sourceFiles = await listProjectSourceFiles(resolvedProjectId, Array.from(selectedFileIds));
+          for (const sourceFile of sourceFiles) {
+            filesToScan.push({ name: sourceFile.name, content: sourceFile.content });
           }
+        } catch (err: any) {
+          addLog(`Warning: could not read selected project files - ${err.message || "unknown error"}`, "warning");
         }
       }
 

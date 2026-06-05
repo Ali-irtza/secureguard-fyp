@@ -64,13 +64,54 @@ const sourceLineForVulnerability = (
   return splitSourceLines(source.source_code)[lineNumber - 1] ?? "";
 };
 
-const codeForVulnerability = (
-  sourceFiles: Array<{ filename: string; source_code: string }>,
+const pathMatches = (candidate: string, target: string): boolean => {
+  const candidateNorm = candidate.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+  const targetNorm = target.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+  const candidateBase = candidateNorm.split("/").pop() ?? candidateNorm;
+  const targetBase = targetNorm.split("/").pop() ?? targetNorm;
+  return (
+    candidateNorm === targetNorm ||
+    candidateNorm.endsWith(`/${targetNorm}`) ||
+    targetNorm.endsWith(`/${candidateNorm}`) ||
+    candidateBase === targetBase
+  );
+};
+
+const isLineMarker = (value: string): boolean =>
+  /^(?:(?:line\s*)?\d+|line\s+\d+\s*:?)$/i.test(value.trim());
+
+const chunkLineForVulnerability = (
+  chunks: Array<{ file_path?: string; code?: string; start_line?: number; end_line?: number }>,
   vulnerability: StoredVulnerability
 ): string => {
+  const filePath = vulnerability.file_path || "";
+  const lineNumber = vulnerability.line_number || vulnerability.absolute_line || 0;
+  if (lineNumber <= 0) return "";
+
+  const matchingChunks = chunks.filter((chunk) => !filePath || !chunk.file_path || pathMatches(chunk.file_path, filePath));
+  for (const chunk of matchingChunks) {
+    const startLine = chunk.start_line || 1;
+    const endLine = chunk.end_line || startLine;
+    if (lineNumber < startLine || lineNumber > endLine) continue;
+    const line = splitSourceLines(chunk.code || "")[lineNumber - startLine];
+    if (line?.trim()) return line;
+  }
+  return "";
+};
+
+const codeForVulnerability = (
+  sourceFiles: Array<{ filename: string; source_code: string }>,
+  vulnerability: StoredVulnerability,
+  chunks: Array<{ file_path?: string; code?: string; start_line?: number; end_line?: number }> = []
+): string => {
   const snippet = vulnerability.code_snippet?.trim();
-  if (snippet) return snippet;
-  return sourceLineForVulnerability(sourceFiles, vulnerability).trim() || `Line ${vulnerability.line_number || vulnerability.absolute_line || "N/A"}`;
+  if (snippet && !isLineMarker(snippet)) return snippet;
+  return (
+    sourceLineForVulnerability(sourceFiles, vulnerability).trim() ||
+    chunkLineForVulnerability(chunks, vulnerability).trim() ||
+    snippet ||
+    `Line ${vulnerability.line_number || vulnerability.absolute_line || "N/A"}`
+  );
 };
 
 const ReportDetail = () => {
@@ -105,6 +146,7 @@ const ReportDetail = () => {
   }
 
   const { scan, vulnerabilities, source_files = [] } = data;
+  const chunks = scan.chunk_outputs || [];
   const expiresAt = scan.report_expires_at ? new Date(scan.report_expires_at) : null;
 
   return (
@@ -201,7 +243,7 @@ const ReportDetail = () => {
                       <div>
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code at this line</p>
                         <NumberedCodeBlock
-                          code={codeForVulnerability(source_files, vulnerability)}
+                          code={codeForVulnerability(source_files, vulnerability, chunks)}
                           startLine={vulnerability.line_number || vulnerability.absolute_line || 1}
                         />
                       </div>

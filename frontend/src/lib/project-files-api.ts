@@ -130,10 +130,14 @@ export async function listProjectFiles(
 }
 
 export async function listProjectSourceFiles(
-  projectId: string
+  projectId: string,
+  fileIds?: string[]
 ): Promise<ProjectSourceFile[]> {
+  const query = fileIds?.length
+    ? `?${fileIds.map((id) => `file_ids=${encodeURIComponent(id)}`).join("&")}`
+    : "";
   const res = await apiFetch<ProjectSourceFilesResponse>(
-    `/projects/${projectId}/source-files`
+    `/projects/${projectId}/source-files${query}`
   );
   return res.files;
 }

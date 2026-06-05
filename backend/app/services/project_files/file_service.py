@@ -347,6 +347,7 @@ def list_project_source_files(
     project_id: str,
     user_id: str,
     supabase: Client,
+    file_ids: list[str] | None = None,
 ) -> ProjectSourceFilesResponse:
     """
     Returns project files as source text for rescans.
@@ -354,13 +355,15 @@ def list_project_source_files(
     """
     _require_project_access(project_id, user_id, supabase)
 
-    result = (
+    query = (
         supabase.table("project_files")
-        .select("filename,storage_path,content_type,created_at")
+        .select("id,filename,storage_path,content_type,created_at")
         .eq("project_id", project_id)
         .order("created_at", desc=True)
-        .execute()
     )
+    if file_ids:
+        query = query.in_("id", file_ids)
+    result = query.execute()
 
     source_files: list[ProjectSourceFile] = []
     seen_names: set[str] = set()
@@ -388,6 +391,8 @@ def list_project_source_files(
                             continue
                         safe_name = _safe_zip_source_name(member.filename)
                         if not safe_name or not _is_c_cpp_source(safe_name) or safe_name in seen_names:
+                            continue
+                        if file_ids and safe_name != filename:
                             continue
                         source_files.append(
                             ProjectSourceFile(
@@ -421,21 +426,17 @@ def save_scanned_sources_zip(
     supabase: Client,
 ) -> list[dict]:
     """
-    Store the exact scanned C/C++ sources as a single ZIP object.
-    Each scanned source gets a project_files row with its original extension,
-    and all rows point to the same storage_path.
+    Store the exact scanned C/C++ sources as individual text objects.
+    Older versions stored a shared ZIP here, which made project downloads and
+    rescans read ZIP bytes when the UI expected source text.
     """
     if not project_id or not files_dict:
         return []
 
     _require_project_access(project_id, user_id, supabase)
-    zip_bytes = _build_source_zip(files_dict)
-    storage_path = _scan_zip_storage_path(project_id)
-    _upload_bytes(storage_path, zip_bytes, "application/zip", supabase)
-
     rows: list[dict] = []
     used_names: set[str] = set()
-    for file_path in files_dict.keys():
+    for file_path, source_code in files_dict.items():
         filename = _source_filename(file_path)
         unique_filename = filename
         duplicate_index = 2
@@ -443,14 +444,17 @@ def save_scanned_sources_zip(
             unique_filename = f"{filename}-{duplicate_index}"
             duplicate_index += 1
         used_names.add(unique_filename)
+        source_bytes = source_code.encode("utf-8")
+        storage_path = _storage_path(project_id, unique_filename)
+        _upload_bytes(storage_path, source_bytes, "text/plain; charset=utf-8", supabase)
         rows.append(
             _upsert_db_record(
                 project_id=project_id,
                 user_id=user_id,
                 filename=unique_filename,
                 storage_path=storage_path,
-                size=len(zip_bytes),
-                content_type="application/zip",
+                size=len(source_bytes),
+                content_type="text/plain; charset=utf-8",
                 source=FILE_SOURCE_LOCAL,
                 supabase=supabase,
             )

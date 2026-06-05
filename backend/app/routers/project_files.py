@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, status
+from fastapi import APIRouter, Depends, UploadFile, File, Query, status
 from supabase import Client
 
 from app.dependencies import get_supabase, get_current_user
@@ -27,11 +27,12 @@ async def list_files(
 @router.get("/{project_id}/source-files", response_model=ProjectSourceFilesResponse)
 async def list_source_files(
     project_id: str,
+    file_ids: list[str] | None = Query(default=None),
     current_user=Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
     """Return C/C++ source text for project rescans, extracting stored ZIP bundles in memory."""
-    return file_service.list_project_source_files(project_id, current_user.id, supabase)
+    return file_service.list_project_source_files(project_id, current_user.id, supabase, file_ids)
 
 
 @router.post(
