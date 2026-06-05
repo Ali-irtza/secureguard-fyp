@@ -69,17 +69,23 @@ def _corrected_code_from_scan_data(scan_data: dict) -> str | None:
     return "\n\n".join(corrected_files) if corrected_files else corrected
 
 
+def _nullable_uuid(value: str | None) -> str | None:
+    value = str(value or "").strip()
+    return value or None
+
+
 def create_scan_record(
-    supabase: Client, user_id: str, project_id: str, scan_data: dict
+    supabase: Client, user_id: str, project_id: str | None, scan_data: dict
 ) -> str:
     """Insert a new row into the scans table and return the new scan's id."""
+    normalized_project_id = _nullable_uuid(project_id)
     result = _retry_supabase_request(
         "create_scan_record",
         lambda: (
             supabase.table("scans")
             .insert(
                 {
-                    "project_id": project_id,
+                    "project_id": normalized_project_id,
                     "user_id": user_id,
                     "status": "completed",
                     "project_name": scan_data.get("project_name", ""),
@@ -111,12 +117,13 @@ def create_scan_record(
 def create_failed_scan_record(
     supabase: Client,
     user_id: str,
-    project_id: str,
+    project_id: str | None,
     scan_data: dict,
     error_message: str,
 ) -> str | None:
     """Persist a failed scan when a model run does not complete."""
-    if not project_id:
+    normalized_project_id = _nullable_uuid(project_id)
+    if not normalized_project_id:
         return None
     result = _retry_supabase_request(
         "create_failed_scan_record",
@@ -124,7 +131,7 @@ def create_failed_scan_record(
             supabase.table("scans")
             .insert(
                 {
-                    "project_id": project_id,
+                    "project_id": normalized_project_id,
                     "user_id": user_id,
                     "status": "failed",
                     "project_name": scan_data.get("project_name", ""),

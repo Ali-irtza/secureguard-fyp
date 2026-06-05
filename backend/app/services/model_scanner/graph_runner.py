@@ -419,19 +419,29 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
         "stream": False,
     }
 
-    # Try primary configured model endpoint first
+    groq_base = getattr(settings, "groq_base_url", "") or ""
+    groq_key = getattr(settings, "groq_api_key", "") or ""
+    has_groq_fallback = bool(groq_base and groq_key)
+
+    # Try primary configured model endpoint first. If it fails and Groq is
+    # configured, this is a normal fallback path, not a scan-ending error.
     primary_url = _chat_url()
     primary_error = "Security model endpoint is not configured."
     if primary_url:
         try:
             started_at = time.monotonic()
-            response = requests.post(primary_url, json=payload, timeout=(10, MODEL_PASS_TIMEOUT_SECONDS))
+            response = requests.post(
+                primary_url,
+                json=payload,
+                timeout=(10, MODEL_PASS_TIMEOUT_SECONDS),
+                headers={"ngrok-skip-browser-warning": "true"},
+            )
             if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
                 primary_error = "Request timeout exceeded. Please try again."
-                print(f"[model_scanner] primary endpoint timeout: {primary_url}")
+                print(f"[model_scanner] primary endpoint fallback: timeout url={primary_url}")
             elif response.status_code != 200:
                 primary_error = f"Model API error: {response.status_code} - {response.text}"
-                print(f"[model_scanner] primary endpoint error: status={response.status_code} url={primary_url}")
+                print(f"[model_scanner] primary endpoint fallback: status={response.status_code} url={primary_url}")
             else:
                 data = response.json()
                 choices = data.get("choices") or []
@@ -439,17 +449,17 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
                 if content:
                     return content, ""
                 primary_error = "Security model returned an empty response."
-                print(f"[model_scanner] primary endpoint empty response: url={primary_url}")
+                print(f"[model_scanner] primary endpoint fallback: empty response url={primary_url}")
         except requests.Timeout:
             primary_error = "Request timeout exceeded. Please try again."
-            print(f"[model_scanner] primary endpoint timeout: {primary_url}")
+            print(f"[model_scanner] primary endpoint fallback: timeout url={primary_url}")
         except Exception as exc:
             primary_error = f"Model request failed: {exc}"
-            print(f"[model_scanner] primary endpoint exception: {exc}")
+            print(f"[model_scanner] primary endpoint fallback: exception={exc}")
+    elif has_groq_fallback:
+        print("[model_scanner] primary endpoint not configured; using Groq fallback")
 
     # Primary failed — attempt Groq fallback if configured
-    groq_base = getattr(settings, "groq_base_url", "") or ""
-    groq_key = getattr(settings, "groq_api_key", "") or ""
     if groq_base and groq_key:
         groq_url = f"{groq_base.rstrip('/')}/chat/completions"
         groq_model = getattr(settings, "groq_model_name", "meta-llama/llama-4-scout-17b-16e-instruct") or "meta-llama/llama-4-scout-17b-16e-instruct"
