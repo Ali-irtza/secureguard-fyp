@@ -340,6 +340,10 @@ export async function getScanHistory(): Promise<ScanHistoryItem[]> {
   return apiFetch<ScanHistoryItem[]>("/scans/history");
 }
 
+export async function deleteScanHistory(scanId: string): Promise<void> {
+  return apiFetch<void>(`/scans/${scanId}`, { method: "DELETE" });
+}
+
 /**
  * GET /scans/:scanId
  * Returns a single scan with its full vulnerability list.

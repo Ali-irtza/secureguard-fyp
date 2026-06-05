@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
-import { getScanDetail, getScanHistory, ScanDetailResult, ScanHistoryItem, StoredVulnerability } from "@/lib/scans-api";
+import { deleteScanHistory, getScanDetail, getScanHistory, ScanDetailResult, ScanHistoryItem, StoredVulnerability } from "@/lib/scans-api";
 import { useQuery } from "@tanstack/react-query";
-import { History, Search, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info, X } from "lucide-react";
+import { History, Search, FolderKanban, Clock, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, CalendarIcon, Shield, CheckCircle2, AlertTriangle, Timer, Download, FileText, FileSpreadsheet, XCircle, Info, X, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -52,6 +52,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -80,7 +90,7 @@ type SortDirection = "asc" | "desc";
 const ITEMS_PER_PAGE = 10;
 
 const ScanHistory = () => {
-  const { data: rawScans = [], isLoading, isError } = useQuery({
+  const { data: rawScans = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["scan-history"],
     queryFn: getScanHistory,
   });
@@ -116,6 +126,9 @@ const ScanHistory = () => {
   const [selectedHistoryScan, setSelectedHistoryScan] = useState<ScanRecord | null>(null);
   const [selectedHistoryDetail, setSelectedHistoryDetail] = useState<ScanDetailResult | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [scanPendingDelete, setScanPendingDelete] = useState<ScanRecord | null>(null);
+  const [deletingScanId, setDeletingScanId] = useState<string | null>(null);
 
   const formatDuration = (seconds: number): string => {
     if (seconds === 0) return "—";
@@ -203,6 +216,29 @@ const ScanHistory = () => {
     e.stopPropagation();
     setSelectedFailedScan(scan);
     setFailureDialogOpen(true);
+  };
+
+  const handleRequestDeleteHistory = (e: React.MouseEvent, scan: ScanRecord) => {
+    e.stopPropagation();
+    setScanPendingDelete(scan);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteHistory = async () => {
+    if (!scanPendingDelete) return;
+    setDeletingScanId(scanPendingDelete.id);
+    try {
+      await deleteScanHistory(scanPendingDelete.id);
+      toast.success("Scan history deleted");
+      setDeleteDialogOpen(false);
+      setScanPendingDelete(null);
+      await refetch();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not delete scan history.";
+      toast.error(message);
+    } finally {
+      setDeletingScanId(null);
+    }
   };
 
   const getFilterSummary = () => {
@@ -652,12 +688,13 @@ const ScanHistory = () => {
                       </span>
                     </TableHead>
                     <TableHead className="font-semibold text-right">Actions</TableHead>
+                    <TableHead className="font-semibold text-right">Delete History</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginatedScans.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-12">
+                      <TableCell colSpan={7} className="text-center py-12">
                         <p className="text-muted-foreground text-sm">
                           No scans found. Try adjusting your search or filters.
                         </p>
@@ -751,6 +788,19 @@ const ScanHistory = () => {
                           >
                             <FileText className="h-4 w-4 mr-1.5" />
                             History
+                          </Button>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => handleRequestDeleteHistory(e, scan)}
+                            disabled={deletingScanId === scan.id}
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            aria-label={`Delete history for ${scan.projectName}`}
+                            title="Delete history"
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -927,6 +977,30 @@ const ScanHistory = () => {
             </div>
           </DialogContent>
         </Dialog>
+
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete History</AlertDialogTitle>
+              <AlertDialogDescription>
+                Delete the scan history for "{scanPendingDelete?.projectName}"? This also removes linked reports for this scan and cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={Boolean(deletingScanId)}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  void handleDeleteHistory();
+                }}
+                disabled={Boolean(deletingScanId)}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deletingScanId ? "Deleting..." : "Delete History"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Failure Details Dialog */}
         <Dialog open={failureDialogOpen} onOpenChange={setFailureDialogOpen}>

@@ -23,6 +23,7 @@ from app.services.scans.scan_storage_service import (
     create_manual_report,
     get_report_for_user,
     delete_report_scan_for_user,
+    delete_scan_for_user,
     build_code_zip_for_report,
 )
 from app.services.scans.report_storage_service import (
@@ -417,6 +418,20 @@ async def get_scan_history(
     """
     scans = get_scans_for_user(supabase, current_user.id)
     return scans
+
+
+@router.delete("/scans/{scan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_scan_history(
+    scan_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """Delete one scan history row and its linked reports for the current user."""
+    try:
+        delete_scan_for_user(supabase, scan_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/reports", response_model=list[dict])

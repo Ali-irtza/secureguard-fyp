@@ -432,6 +432,35 @@ def delete_report_scan_for_user(supabase: Client, report_id: str, user_id: str) 
     return scan_id
 
 
+def delete_scan_for_user(supabase: Client, scan_id: str, user_id: str) -> str:
+    """Delete one user-owned scan and any linked report artifacts/metadata."""
+    scan_result = (
+        supabase.table("scans")
+        .select("id")
+        .eq("id", scan_id)
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+    if not scan_result.data:
+        raise ValueError("Scan not found")
+
+    related_reports = (
+        supabase.table("reports")
+        .select("id,file_path")
+        .eq("scan_id", scan_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    paths = [row["file_path"] for row in related_reports.data or [] if row.get("file_path")]
+    if paths:
+        supabase.storage.from_(REPORT_BUCKET).remove(paths)
+
+    supabase.table("reports").delete().eq("scan_id", scan_id).eq("user_id", user_id).execute()
+    supabase.table("scans").delete().eq("id", scan_id).eq("user_id", user_id).execute()
+    return scan_id
+
+
 def get_scan_with_vulnerabilities(
     supabase: Client, scan_id: str, user_id: str
 ) -> Dict:
