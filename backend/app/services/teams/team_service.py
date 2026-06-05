@@ -170,6 +170,7 @@ def build_team_response(team: dict, members: list, current_user_id: str) -> Team
         name=team["name"],
         github_repo=team.get("github_repo"),
         github_branches=team.get("github_branches") or [],
+        github_installation_id=team.get("github_installation_id"),
         created_by=team["created_by"],
         created_at=team["created_at"],
         updated_at=team["updated_at"],

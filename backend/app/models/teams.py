@@ -163,6 +163,7 @@ class TeamResponse(BaseModel):
     name:              str
     github_repo:       Optional[str]   = None
     github_branches:   List[str]       = []   # populated after GitHub connect
+    github_installation_id: Optional[int] = None
     created_by:        str
     created_at:        datetime
     updated_at:        datetime

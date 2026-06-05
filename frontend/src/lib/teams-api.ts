@@ -27,6 +27,7 @@ export interface Team {
   name: string;
   github_repo: string | null;
   github_branches: string[];
+  github_installation_id: number | string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -102,7 +103,7 @@ export interface TeamDashboardData {
 // - DRY: auth header logic lives in one place only
 // ---------------------------------------------------------------------------
 
-const API_BASE = import.meta.env.VITE_API_URL as string ?? "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) || "http://localhost:8000";
 
 export async function apiFetch<T>(
   path: string,
@@ -314,7 +315,7 @@ export async function selectGithubRepo(
 export async function inviteMember(
   teamId: string,
   email: string,
-  role: "developer" | "viewer"
+  role: TeamRole
 ): Promise<TeamMember> {
   invalidateTeamsCache();
   return apiFetch<TeamMember>(`/teams/${teamId}/members`, {
@@ -387,6 +388,29 @@ const _branchFilesCache = new Map<string, CacheEntry<BranchFilesResponse>>();
 // Key: "teamId::branch::path"
 const _fileContentCache = new Map<string, CacheEntry<FileContentResponse>>();
 
+export function invalidateBranchFilesCache(teamId: string, branch?: string): void {
+  if (branch) {
+    _branchFilesCache.delete(`${teamId}::${branch}`);
+    for (const key of _fileContentCache.keys()) {
+      if (key.startsWith(`${teamId}::${branch}::`)) {
+        _fileContentCache.delete(key);
+      }
+    }
+    return;
+  }
+
+  for (const key of _branchFilesCache.keys()) {
+    if (key.startsWith(`${teamId}::`)) {
+      _branchFilesCache.delete(key);
+    }
+  }
+  for (const key of _fileContentCache.keys()) {
+    if (key.startsWith(`${teamId}::`)) {
+      _fileContentCache.delete(key);
+    }
+  }
+}
+
 /** Return cached branch files if available (even if stale) — for instant display */
 export function getCachedBranchFiles(
   teamId: string,
@@ -423,7 +447,8 @@ export async function fetchBranchFiles(
   branch: string
 ): Promise<BranchFilesResponse> {
   const res = await apiFetch<BranchFilesResponse>(
-    `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files`
+    `/teams/${teamId}/branches/${encodeURIComponent(branch)}/files?_=${Date.now()}`,
+    { cache: "no-store" }
   );
   _branchFilesCache.set(`${teamId}::${branch}`, {
     data: res,

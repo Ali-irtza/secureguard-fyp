@@ -168,6 +168,10 @@ const Team = () => {
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [loading, setLoading]           = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [githubAuthLoading, setGithubAuthLoading] = useState(false);
+  const [repoSelectLoading, setRepoSelectLoading] = useState(false);
+  const [selectedRepoLoading, setSelectedRepoLoading] = useState<string | null>(null);
   const [refreshing, setRefreshing]     = useState(false);
 
   // ── Modal state ───────────────────────────────────────────────────────────
@@ -175,7 +179,7 @@ const Team = () => {
   const [newTeamName, setNewTeamName]           = useState("");
   const [inviteModalOpen, setInviteModalOpen]   = useState(false);
   const [inviteEmail, setInviteEmail]           = useState("");
-  const [inviteRole, setInviteRole]             = useState<"developer" | "viewer">("developer");
+  const [inviteRole, setInviteRole]             = useState<TeamRole>("developer");
   const [connectGithubOpen, setConnectGithubOpen] = useState(false);
   const [repoUrl, setRepoUrl]                   = useState("");
   const [repoPat, setRepoPat]                   = useState("");
@@ -266,7 +270,7 @@ const Team = () => {
 
   const handleCreateTeam = async () => {
     if (!newTeamName.trim()) return;
-    setActionLoading(true);
+    setCreateLoading(true);
     try {
       const team = await createTeam(newTeamName.trim());
       setTeams(prev => [...prev, team]);
@@ -277,7 +281,7 @@ const Team = () => {
     } catch (err: any) {
       toast.error(err.message ?? "Failed to create team");
     } finally {
-      setActionLoading(false);
+      setCreateLoading(false);
     }
   };
 
@@ -331,22 +335,25 @@ const Team = () => {
 
   const handleGithubOAuth = async () => {
     if (!selectedTeam) return;
-    setActionLoading(true);
+    setGithubAuthLoading(true);
     try {
       const url = await getGithubAuthorizeUrl(selectedTeam.id);
       // Redirect the browser to GitHub's authorization page
       window.location.href = url;
     } catch (err: any) {
       toast.error(err.message ?? "Failed to start GitHub authorization");
-      setActionLoading(false);
+      setGithubAuthLoading(false);
     }
   };
 
-  const handleOAuthCallback = useCallback(async (teamId: string) => {
+  const openRepoPickerForTeam = useCallback(async (teamId: string) => {
     // Called when user returns from GitHub OAuth — load their repos
     setReposLoading(true);
     try {
       const repos = await listGithubRepos(teamId);
+      setGithubRepos(repos);
+      setRepoPicker(true);
+      return;
       
       if (repos.length === 1) {
         // Auto-connect if exactly one repository is selected
@@ -375,7 +382,8 @@ const Team = () => {
 
   const handleSelectRepo = async (repoFullName: string, repoUrl: string) => {
     if (!selectedTeam) return;
-    setActionLoading(true);
+    setRepoSelectLoading(true);
+    setSelectedRepoLoading(repoFullName);
     try {
       const updated = await selectGithubRepo(selectedTeam.id, repoFullName, repoUrl);
       setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
@@ -385,7 +393,8 @@ const Team = () => {
     } catch (err: any) {
       toast.error(err.message ?? "Failed to connect repository");
     } finally {
-      setActionLoading(false);
+      setRepoSelectLoading(false);
+      setSelectedRepoLoading(null);
     }
   };
 
@@ -409,9 +418,9 @@ const Team = () => {
       // Select the team that just connected
       setSelectedTeamId(teamId);
       // Load repo picker
-      handleOAuthCallback(teamId);
+      openRepoPickerForTeam(teamId);
     }
-  }, [handleOAuthCallback]);
+  }, [openRepoPickerForTeam]);
 
   const handleDisconnectGithub = async () => {
     if (!selectedTeam) return;
@@ -590,8 +599,8 @@ const Team = () => {
               </div>
               <DialogFooter>
                 <Button variant="ghost" onClick={() => setCreateTeamOpen(false)}>Cancel</Button>
-                <Button onClick={handleCreateTeam} disabled={!newTeamName.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
-                  {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Team"}
+                <Button onClick={handleCreateTeam} disabled={!newTeamName.trim() || createLoading} className="bg-primary hover:bg-primary/90">
+                  {createLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Team"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -699,10 +708,6 @@ const Team = () => {
 
             {isAdmin && (
               <div className="flex items-center gap-3 ml-auto">
-                <Button variant="outline" onClick={handleGithubOAuth} disabled={actionLoading} className="gap-2">
-                  <Github className="h-4 w-4" />
-                  {selectedTeam.github_repo ? "Reconnect GitHub" : "Connect with GitHub"}
-                </Button>
                 <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
                   <UserPlus className="h-4 w-4" />
                   Invite Member
@@ -803,31 +808,19 @@ const Team = () => {
 
                       {/* Role */}
                       <TableCell>
-                        {isAdmin && !isSelf ? (
-                          <Select
-                            value={member.role}
-                            onValueChange={val => handleUpdateMemberRole(member.user_id, val as TeamRole)}
-                          >
-                            <SelectTrigger className="w-32 h-8 bg-background/50 border-border/50 text-xs hover:bg-accent hover:text-accent-foreground">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="admin">Admin</SelectItem>
-                              <SelectItem value="developer">Developer</SelectItem>
-                              <SelectItem value="viewer">Viewer</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Badge variant="outline" className={`text-xs ${getRoleBadgeClasses(member.role)}`}>
-                            {member.role}
-                          </Badge>
-                        )}
+                        <Badge variant="outline" className={`text-xs ${getRoleBadgeClasses(member.role)}`}>
+                          {member.role}
+                        </Badge>
                       </TableCell>
 
                       {/* Branch */}
                       <TableCell>
                         {member.role === "admin" ? (
-                          <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">All Branches</Badge>
+                          selectedTeam.github_repo ? (
+                            <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">All team branches</Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground italic">Connect repo first</span>
+                          )
                         ) : member.role === "viewer" ? (
                           <div className="flex items-center gap-1 text-muted-foreground">
                             <Lock className="h-3 w-3" />
@@ -940,13 +933,33 @@ const Team = () => {
                   </div>
                 </div>
                 {isAdmin && (
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing}>
                       {refreshing
                         ? <Loader2 className="h-4 w-4 animate-spin" />
                         : <RefreshCw className="h-4 w-4" />
                       }
                       Refresh Branches
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => openRepoPickerForTeam(selectedTeam.id)}
+                      disabled={reposLoading}
+                    >
+                      {reposLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                      Change Repository
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={handleGithubOAuth}
+                      disabled={githubAuthLoading}
+                    >
+                      {githubAuthLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                      Manage GitHub Access
                     </Button>
                     <Button
                       variant="outline"
@@ -966,13 +979,25 @@ const Team = () => {
                 <div className="text-center space-y-1">
                   <p className="font-medium">No repository connected</p>
                   <p className="text-sm text-muted-foreground">
-                    Connect a GitHub repository to enable branch-based scanning for your team
+                    {selectedTeam?.github_installation_id
+                      ? "GitHub access is ready. Choose one repository for this team to scan."
+                      : "Connect GitHub to choose a repository for branch-based scanning."}
                   </p>
                 </div>
                 {isAdmin && (
-                  <Button onClick={handleGithubOAuth} disabled={actionLoading} className="bg-primary hover:bg-primary/90 gap-2">
-                    {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                    Connect with GitHub
+                  <Button
+                    onClick={() => {
+                      if (selectedTeam?.github_installation_id) {
+                        openRepoPickerForTeam(selectedTeam.id);
+                      } else {
+                        handleGithubOAuth();
+                      }
+                    }}
+                    disabled={githubAuthLoading || reposLoading}
+                    className="bg-primary hover:bg-primary/90 gap-2"
+                  >
+                    {githubAuthLoading || reposLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                    {selectedTeam?.github_installation_id ? "Choose Repository" : "Connect with GitHub"}
                   </Button>
                 )}
               </div>
@@ -1018,7 +1043,7 @@ const Team = () => {
             <div className="space-y-2">
               <Label>Role</Label>
               <div className="grid grid-cols-2 gap-3">
-                {(["developer", "viewer"] as const).map(r => (
+                {(["developer", "viewer", "admin"] as const).map(r => (
                   <button
                     key={r}
                     onClick={() => setInviteRole(r)}
@@ -1132,8 +1157,8 @@ const Team = () => {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreateTeamOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreateTeam} disabled={!newTeamName.trim() || actionLoading} className="bg-primary hover:bg-primary/90">
-              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Team"}
+            <Button onClick={handleCreateTeam} disabled={!newTeamName.trim() || createLoading} className="bg-primary hover:bg-primary/90">
+              {createLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Team"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1145,7 +1170,7 @@ const Team = () => {
           <DialogHeader>
             <DialogTitle>Select a Repository</DialogTitle>
             <DialogDescription>
-              Choose which repository to connect to this team
+              GitHub may grant access to several repositories. Choose the one this team should scan.
             </DialogDescription>
           </DialogHeader>
           <div className="py-2">
@@ -1157,27 +1182,39 @@ const Team = () => {
               <p className="text-sm text-muted-foreground text-center py-8">No repositories found.</p>
             ) : (
               <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
-                {githubRepos.map(repo => (
+                {githubRepos.map(repo => {
+                  const isConnecting = selectedRepoLoading === repo.full_name;
+                  return (
                   <button
                     key={repo.full_name}
                     onClick={() => handleSelectRepo(repo.full_name, repo.url)}
-                    disabled={actionLoading}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-muted/50 transition-colors text-left group"
+                    disabled={repoSelectLoading}
+                    className={`w-full cursor-pointer flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors text-left group disabled:cursor-not-allowed ${
+                      isConnecting ? "bg-primary/10 border border-primary/30" : "hover:bg-muted/50"
+                    } ${repoSelectLoading && !isConnecting ? "opacity-50" : ""}`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <Github className="h-4 w-4 text-muted-foreground shrink-0" />
+                      {isConnecting ? (
+                        <Loader2 className="h-4 w-4 text-primary shrink-0 animate-spin" />
+                      ) : (
+                        <Github className="h-4 w-4 text-muted-foreground shrink-0" />
+                      )}
                       <span className="text-sm font-medium truncate">{repo.full_name}</span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
                       {repo.private && (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Private</Badge>
                       )}
-                      <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                      {isConnecting && (
+                        <span className="text-xs text-primary">Connecting...</span>
+                      )}
+                      <span className={`text-xs transition-opacity ${isConnecting ? "hidden" : "text-primary opacity-0 group-hover:opacity-100"}`}>
                         Connect →
                       </span>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

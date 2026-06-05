@@ -13,6 +13,8 @@ from app.services.teams.team_service import require_admin, require_member, fetch
 
 GITHUB_API = "https://api.github.com"
 GITHUB_APP_SLUG = "secureguard-pro"
+INSTALLATION_TOKEN_REFRESH_BUFFER_SECONDS = 5 * 60
+_installation_token_cache: dict[int, tuple[str, float]] = {}
 
 def _frontend_team_url() -> str:
     return f"{settings.frontend_base_url.rstrip('/')}/team"
@@ -37,22 +39,54 @@ def _make_github_app_jwt() -> str:
     return jwt.encode(payload, private_key, algorithm="RS256")
 
 async def _get_installation_token(installation_id: int) -> str:
+    now = time.time()
+    cached = _installation_token_cache.get(installation_id)
+    if cached:
+        token, expires_at = cached
+        if expires_at - INSTALLATION_TOKEN_REFRESH_BUFFER_SECONDS > now:
+            return token
+
     app_jwt = _make_github_app_jwt()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            f"{GITHUB_API}/app/installations/{installation_id}/access_tokens",
-            headers={
-                "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{GITHUB_API}/app/installations/{installation_id}/access_tokens",
+                headers={
+                    "Authorization": f"Bearer {app_jwt}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="GitHub timed out while creating an installation token. Try again.",
+        )
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach GitHub while creating an installation token.",
         )
     if resp.status_code != 201:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to get GitHub installation token: {resp.status_code}",
         )
-    return resp.json()["token"]
+    data = resp.json()
+    token = data["token"]
+    expires_at_raw = data.get("expires_at")
+    expires_at = now + 55 * 60
+    if expires_at_raw:
+        try:
+            from datetime import datetime
+            expires_at = datetime.fromisoformat(
+                expires_at_raw.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            pass
+
+    _installation_token_cache[installation_id] = (token, expires_at)
+    return token
 
 def _parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
     clean = repo_url.rstrip("/").removesuffix(".git")
@@ -315,6 +349,7 @@ async def select_installation_repo(team_id: str, repo_full_name: str, repo_url: 
     team_upd = supabase.table("teams").update({
         "github_repo":     repo_url or f"https://github.com/{repo_full_name}",
         "github_branches": branches,
+        "github_oauth_token": None,
     }).eq("id", team_id).execute()
 
     members = fetch_members_for_team(team_id, supabase)

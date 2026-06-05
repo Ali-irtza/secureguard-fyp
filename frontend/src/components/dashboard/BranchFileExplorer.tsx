@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   FolderOpen, FolderClosed, FileText, FileCode2, FileJson, FileImage,
   ChevronRight, ChevronDown, Loader2, GitBranch, X, ArrowLeft,
-  FileType, Info, Lock, Maximize2,
+  FileType, Info, Lock, Maximize2, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import {
   fetchFileContent,
   getCachedBranchFiles,
   getCachedFileContent,
+  invalidateBranchFilesCache,
   isBranchFilesCacheFresh,
   type BranchFileItem,
   type Team,
@@ -213,6 +214,8 @@ export default function BranchFileExplorer({
   const [selectedBranch, setSelectedBranch] = useState<string>("");
   const [files, setFiles] = useState<BranchFileItem[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  const [fileTreeError, setFileTreeError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
@@ -257,6 +260,7 @@ export default function BranchFileExplorer({
     // Reset file selection on branch change
     setSelectedFile(null);
     setFileContent(null);
+    setFileTreeError(null);
 
     // 2) Background: always fetch fresh data from API
     fetchBranchFiles(team.id, selectedBranch)
@@ -266,6 +270,9 @@ export default function BranchFileExplorer({
         }
       })
       .catch(err => {
+        if (!cancelled) {
+          setFileTreeError(err.message ?? "Failed to load files");
+        }
         // Only toast if there was no cached data to fall back on
         if (!cancelled && !cached) {
           toast.error(err.message ?? "Failed to load files");
@@ -276,7 +283,18 @@ export default function BranchFileExplorer({
       });
 
     return () => { cancelled = true; };
-  }, [selectedBranch, team.id, team.github_repo]);
+  }, [selectedBranch, team.id, team.github_repo, refreshNonce]);
+
+  const refreshCurrentBranchFiles = () => {
+    if (!selectedBranch) return;
+    invalidateBranchFilesCache(team.id, selectedBranch);
+    setFiles([]);
+    setSelectedFile(null);
+    setFileContent(null);
+    setFileTreeError(null);
+    setLoadingFiles(true);
+    setRefreshNonce(prev => prev + 1);
+  };
 
   // Fetch file content when file is selected — module-level cache in teams-api.ts
   const handleFileClick = useCallback((path: string) => {
@@ -365,6 +383,22 @@ export default function BranchFileExplorer({
             <GitBranch className="h-5 w-5" />
             Branch Files
           </CardTitle>
+          {selectedBranch && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-2"
+              onClick={refreshCurrentBranchFiles}
+              disabled={loadingFiles}
+            >
+              {loadingFiles ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Refresh Files
+            </Button>
+          )}
 
           {/* Branch selector — admin can select from all branches */}
           {isAdmin ? (
@@ -434,7 +468,23 @@ export default function BranchFileExplorer({
         )}
 
         {/* File explorer */}
-        {selectedBranch && !loadingFiles && files.length > 0 && (
+        {selectedBranch && !loadingFiles && fileTreeError && files.length === 0 && (
+          <div className="border-2 border-dashed border-destructive/40 rounded-lg p-8 flex flex-col items-center gap-3 text-center">
+            <Info className="h-8 w-8 text-destructive" />
+            <p className="text-sm font-medium text-foreground">Could not load files</p>
+            <p className="text-sm text-muted-foreground max-w-lg">{fileTreeError}</p>
+            <Button variant="outline" size="sm" onClick={() => {
+              const branch = selectedBranch;
+              setSelectedBranch("");
+              requestAnimationFrame(() => setSelectedBranch(branch));
+            }}>
+              Try again
+            </Button>
+          </div>
+        )}
+
+        {/* File explorer */}
+        {selectedBranch && !loadingFiles && !fileTreeError && files.length > 0 && (
           <div className="border border-border/50 rounded-lg overflow-hidden bg-background/30">
             {/* Stats bar */}
             <div className="px-3 py-2 border-b border-border/50 bg-muted/20 flex items-center gap-3">
@@ -534,7 +584,7 @@ export default function BranchFileExplorer({
         )}
 
         {/* Empty state */}
-        {selectedBranch && !loadingFiles && files.length === 0 && (
+        {selectedBranch && !loadingFiles && !fileTreeError && files.length === 0 && (
           <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-3">
             <FileText className="h-8 w-8 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">No files found in this branch</p>
