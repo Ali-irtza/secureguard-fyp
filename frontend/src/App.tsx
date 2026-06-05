@@ -30,6 +30,7 @@ import Notifications from "./pages/Notifications";
 import Alerts from "./pages/Alerts";
 import Team from "./pages/Team";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import { GlobalScanActivityToast } from "./components/scan/GlobalScanActivityToast";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,6 +79,7 @@ const App = () => (
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+            <GlobalScanActivityToast />
           </BrowserRouter>
         </ContactFormProvider>
       </UserProvider>

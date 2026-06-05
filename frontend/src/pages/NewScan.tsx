@@ -81,6 +81,12 @@ import { ScanningProgress } from "@/components/scan/ScanningProgress";
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
 import { toast } from "sonner";
 import { addLocalNotification, getNotificationPreferences } from "@/lib/notifications";
+import {
+  completeGlobalScanActivity,
+  failGlobalScanActivity,
+  startGlobalScanActivity,
+  updateGlobalScanActivity,
+} from "@/lib/scan-activity";
 
 interface CodeLine {
   lineNumber: number;
@@ -732,6 +738,7 @@ const NewScan = () => {
 
   const handleStartScan = async () => {
     const isAutoRescan = searchParams.get("autoStart") === "1";
+    let globalScanActivityId: string | null = null;
     scanAbortRef.current = false;
     scanStartedAtRef.current = Date.now();
     setAutoRescanPreparing(isAutoRescan);
@@ -876,6 +883,10 @@ const NewScan = () => {
       setCurrentPhase(2);
       const zipUploadCount = uploadedFiles.filter((file) => file.name.toLowerCase().endsWith(".zip")).length;
       const pendingUploadCount = filesToScan.length + zipUploadCount;
+      globalScanActivityId = startGlobalScanActivity({
+        title: resolvedProjectName || primaryFile?.name || "Security scan",
+        detail: `Scanning ${pendingUploadCount} source item${pendingUploadCount === 1 ? "" : "s"}. You can keep working while the report is prepared.`,
+      });
       addLog(
         zipUploadCount > 0
           ? `Reviewing ${pendingUploadCount} upload${pendingUploadCount === 1 ? "" : "s"}; ZIP archives will be filtered on the backend.`
@@ -963,6 +974,12 @@ const NewScan = () => {
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
         notifyScanFinished(resolvedProjectName || primaryFile?.name || "Security scan", combinedResult);
+        completeGlobalScanActivity(globalScanActivityId, {
+          scanId: combinedResult.scan_id,
+          issueCount: combinedResult.total_vulnerabilities,
+          riskLevel: combinedResult.overall_risk_level,
+          title: resolvedProjectName || primaryFile?.name || "Security scan",
+        });
         addLog(`Found ${combinedResult.total_vulnerabilities} vulnerabilities — Risk: ${combinedResult.overall_risk_level}`, combinedResult.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -975,6 +992,7 @@ const NewScan = () => {
         }
         const message = friendlyScanError(err.message || "Scan failed");
         setScanError(message);
+        failGlobalScanActivity(globalScanActivityId, message);
         addLog(`Error: ${message}`, "warning");
       }
 
@@ -995,6 +1013,10 @@ const NewScan = () => {
       sourceLineCountsRef.current = {};
 
       try {
+        globalScanActivityId = startGlobalScanActivity({
+          title: resolvedProjectName || selectedProject?.name || "GitHub scan",
+          detail: `Fetching source files from ${branch}. You can move around SecureGuard while analysis continues.`,
+        });
         addLog("Preparing source package...", "info");
         setCurrentPhase(1);
 
@@ -1006,6 +1028,9 @@ const NewScan = () => {
           .filter((f) => f.type === "file" && C_CPP_EXTS.some((ext) => f.path.toLowerCase().endsWith(ext)))
           .map((f) => f.path);
         setBranchFiles(files);
+        updateGlobalScanActivity(globalScanActivityId, {
+          detail: `Reviewing ${files.length} C/C++ file${files.length === 1 ? "" : "s"} from ${branch}. The report will appear in Reports.`,
+        });
         addLog(`Found ${files.length} C/C++ file${files.length === 1 ? "" : "s"}`, "success");
 
         setCurrentPhase(2);
@@ -1045,6 +1070,12 @@ const NewScan = () => {
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
         notifyScanFinished(resolvedProjectName || selectedProject?.name || "Security scan", result);
+        completeGlobalScanActivity(globalScanActivityId, {
+          scanId: result.scan_id,
+          issueCount: result.total_vulnerabilities,
+          riskLevel: result.overall_risk_level,
+          title: resolvedProjectName || selectedProject?.name || "GitHub scan",
+        });
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -1056,6 +1087,7 @@ const NewScan = () => {
         }
         const message = friendlyScanError(err.message || "Scan failed");
         setScanError(message);
+        failGlobalScanActivity(globalScanActivityId, message);
         addLog(`Error: ${message}`, "warning");
       }
 
@@ -1082,12 +1114,19 @@ const NewScan = () => {
       sourceLineCountsRef.current = {};
 
       try {
+        globalScanActivityId = startGlobalScanActivity({
+          title: resolvedProjectName || selectedApiTeam?.name || "Team scan",
+          detail: `Fetching team source files from ${branch}. You can move around SecureGuard while analysis continues.`,
+        });
         addLog("Preparing source package...", "info");
         setCurrentPhase(1);
 
         addLog(`Fetching C/C++ files from branch: ${branch}...`, "info");
         const files = await getBranchFiles(effectiveTeamId, branch);
         setBranchFiles(files);
+        updateGlobalScanActivity(globalScanActivityId, {
+          detail: `Reviewing ${files.length} team file${files.length === 1 ? "" : "s"} from ${branch}. The report will appear in Reports.`,
+        });
         addLog(`Found ${files.length} C/C++ files`, "success");
 
         setCurrentPhase(2);
@@ -1122,6 +1161,12 @@ const NewScan = () => {
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
         notifyScanFinished(resolvedProjectName || selectedApiTeam?.name || "Team scan", result);
+        completeGlobalScanActivity(globalScanActivityId, {
+          scanId: result.scan_id,
+          issueCount: result.total_vulnerabilities,
+          riskLevel: result.overall_risk_level,
+          title: resolvedProjectName || selectedApiTeam?.name || "Team scan",
+        });
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
 
@@ -1133,6 +1178,7 @@ const NewScan = () => {
         }
         const message = friendlyScanError(err.message || "Scan failed");
         setScanError(message);
+        failGlobalScanActivity(globalScanActivityId, message);
         addLog(`Error: ${message}`, "warning");
       }
 
@@ -1938,6 +1984,65 @@ const NewScan = () => {
                     {showSourceLoader ? (
                       <div className="grid h-full place-items-center rounded-lg border border-border/30 bg-[#0d1117]">
                         <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                      </div>
+                    ) : isScanning && codeLines.length === 0 ? (
+                      <div className="flex h-full flex-col rounded-lg border border-border/30 bg-[#0d1117]">
+                        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <Radar className="h-4 w-4 text-primary" />
+                            <span className="font-mono text-sm font-semibold text-foreground">
+                              Preparing source package
+                            </span>
+                          </div>
+                          <Badge variant="outline" className="border-primary/30 text-primary">
+                            live
+                          </Badge>
+                        </div>
+                        <div className="flex flex-1 items-center justify-center p-6">
+                          <div className="w-full max-w-xl space-y-5 text-center">
+                            <div className="mx-auto grid h-16 w-16 place-items-center rounded-lg border border-primary/30 bg-primary/10">
+                              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                            </div>
+                            <div>
+                              <h2 className="text-lg font-semibold text-foreground">
+                                Source files are being reviewed
+                              </h2>
+                              <p className="mt-1 text-sm text-muted-foreground">
+                                The analyzer is collecting files, chunking code, and preparing the report stream.
+                              </p>
+                            </div>
+                            {branchFiles.length > 0 ? (
+                              <div className="rounded-md border border-border/40 bg-background/50 text-left">
+                                <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
+                                  <span className="text-xs font-semibold uppercase text-muted-foreground">
+                                    Files queued
+                                  </span>
+                                  <span className="text-xs text-primary">{branchFiles.length}</span>
+                                </div>
+                                <div className="max-h-48 overflow-y-auto p-2">
+                                  {branchFiles.slice(0, 8).map((filePath) => (
+                                    <div key={filePath} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground">
+                                      <FileUp className="h-3.5 w-3.5 shrink-0 text-primary" />
+                                      <span className="truncate font-mono text-xs">{filePath}</span>
+                                    </div>
+                                  ))}
+                                  {branchFiles.length > 8 && (
+                                    <p className="px-2 py-1 text-xs text-muted-foreground">
+                                      {branchFiles.length - 8} more file{branchFiles.length - 8 === 1 ? "" : "s"} queued
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                                  <div className="h-full w-1/2 animate-global-scan-progress rounded-full bg-primary" />
+                                </div>
+                                <p className="text-xs text-muted-foreground">Waiting for GitHub file discovery...</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <CodeViewer
