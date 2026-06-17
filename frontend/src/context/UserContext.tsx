@@ -2,28 +2,22 @@ import { createContext, useContext, useEffect, useState, useCallback } from "rea
 import { supabase } from "@/lib/supabase";
 import type { User } from "@supabase/supabase-js";
 
-// ---------------------------------------------------------------------------
-// UserContext
-// ---------------------------------------------------------------------------
-// Fetches session + profile ONCE at the app level.
-// Every component that calls useCurrentUser() reads from this shared context —
-// no component ever triggers its own DB fetch.
-// ---------------------------------------------------------------------------
-
 export interface ProfileRow {
-  id: string;
+  user_id: string;
   full_name: string | null;
+  email: string;
   avatar_url: string | null;
-  bio: string | null;
-  provider: string | null;
+  signup_provider: "email" | "google" | "github";
+  last_login_provider: "email" | "google" | "github" | null;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
+  last_sign_in_at: string | null;
 }
 
 export interface UpdateProfilePayload {
   full_name?: string;
   avatar_url?: string;
-  bio?: string;
 }
 
 interface UserContextValue {
@@ -42,29 +36,34 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(async (userId: string) => {
-    // Check localStorage cache first — show it instantly while DB fetch runs
     const cached = localStorage.getItem(`profile:${userId}`);
     if (cached) {
-      try { setProfile(JSON.parse(cached)); } catch { /* ignore bad cache */ }
+      try {
+        setProfile(JSON.parse(cached));
+      } catch {
+        localStorage.removeItem(`profile:${userId}`);
+      }
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("*")
-      .eq("id", userId)
-      .single();
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Failed to fetch profile", error.message);
+      return;
+    }
 
     if (data) {
-      setProfile(data as ProfileRow);
-      // Update cache with fresh data
-      localStorage.setItem(`profile:${userId}`, JSON.stringify(data));
+      const nextProfile = data as ProfileRow;
+      setProfile(nextProfile);
+      localStorage.setItem(`profile:${userId}`, JSON.stringify(nextProfile));
     }
   }, []);
 
   useEffect(() => {
-    // Run session read and profile fetch in parallel.
-    // getSession() reads from localStorage (instant).
-    // fetchProfile() is the only real network call — start it immediately.
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
@@ -75,39 +74,36 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    // onAuthStateChange fires on: login, logout, token refresh.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         const currentUser = session?.user ?? null;
         setUser(currentUser);
+
         if (currentUser) {
           setProfile(prev => {
-            if (prev?.id === currentUser.id) {
-              // Same user, profile already loaded — do nothing
-              return prev;
-            }
-            // Different user or fresh login — load from cache immediately
-            // so the UI shows correct data before the DB fetch completes
+            if (prev?.user_id === currentUser.id) return prev;
+
             const cached = localStorage.getItem(`profile:${currentUser.id}`);
             if (cached) {
               try {
                 const parsed = JSON.parse(cached) as ProfileRow;
-                // Kick off a background refresh to get latest data
                 fetchProfile(currentUser.id);
-                return parsed; // show cached data instantly
-              } catch { /* ignore */ }
+                return parsed;
+              } catch {
+                localStorage.removeItem(`profile:${currentUser.id}`);
+              }
             }
-            // No cache — fetch from DB (first ever login)
+
             fetchProfile(currentUser.id);
             return null;
           });
+          setLoading(false);
         } else {
           setProfile(null);
           setLoading(false);
-          // Clear cache on logout
           Object.keys(localStorage)
-            .filter(k => k.startsWith("profile:"))
-            .forEach(k => localStorage.removeItem(k));
+            .filter(key => key.startsWith("profile:"))
+            .forEach(key => localStorage.removeItem(key));
         }
       }
     );
@@ -115,36 +111,59 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, [fetchProfile]);
 
-  // Writes only to profiles table — never to auth/user_metadata
   const updateProfile = useCallback(
     async (payload: UpdateProfilePayload): Promise<{ error: string | null }> => {
       const userId = user?.id;
+      const email = user?.email;
       if (!userId) return { error: "Not authenticated" };
+      if (!email) return { error: "Authenticated user has no email" };
 
-      const patch: Record<string, string> = { id: userId };
+      const patch: Partial<ProfileRow> = { user_id: userId, email };
       if (payload.full_name !== undefined) patch.full_name = payload.full_name;
       if (payload.avatar_url !== undefined) patch.avatar_url = payload.avatar_url;
-      if (payload.bio !== undefined) patch.bio = payload.bio;
 
       const { error } = await supabase
         .from("profiles")
-        .upsert(patch, { onConflict: "id" });
+        .update(patch)
+        .eq("user_id", userId);
 
       if (error) return { error: error.message };
 
-      // Merge into local state — no second DB call
+      const authData: Record<string, string> = {};
+      if (payload.full_name !== undefined) authData.full_name = payload.full_name;
+      if (payload.avatar_url !== undefined) {
+        const objectPath = payload.avatar_url.replace(/^avatars\//, "");
+        authData.avatar_url = supabase.storage.from("avatars").getPublicUrl(objectPath).data.publicUrl;
+      }
+
+      if (Object.keys(authData).length > 0) {
+        const { error: authError } = await supabase.auth.updateUser({ data: authData });
+        if (authError) return { error: authError.message };
+      }
+
       setProfile(prev => {
-        const updated = prev
+        const updated: ProfileRow = prev
           ? { ...prev, ...patch }
-          : { id: userId, full_name: null, avatar_url: null, bio: null, provider: null, created_at: "", updated_at: "", ...patch };
-        // Keep cache in sync so next reload is instant
+          : {
+              user_id: userId,
+              email,
+              full_name: null,
+              avatar_url: null,
+              signup_provider: "email",
+              last_login_provider: null,
+              is_active: true,
+              created_at: "",
+              updated_at: "",
+              last_sign_in_at: null,
+              ...patch,
+            };
         localStorage.setItem(`profile:${userId}`, JSON.stringify(updated));
         return updated;
       });
 
       return { error: null };
     },
-    [user?.id]
+    [user?.email, user?.id]
   );
 
   const updatePassword = useCallback(
@@ -163,7 +182,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Internal — only used by useCurrentUser hook
 export function useUserContext(): UserContextValue {
   const ctx = useContext(UserContext);
   if (!ctx) throw new Error("useUserContext must be used inside <UserProvider>");

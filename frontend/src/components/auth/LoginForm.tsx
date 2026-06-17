@@ -36,9 +36,6 @@ const LoginForm = () => {
     defaultValues: { email: "", password: "" },
   });
 
-  // ---------------------------------------------------------------------------
-  // Email + Password Login
-  // ---------------------------------------------------------------------------
   const onSubmit = async (data: LoginFormValues) => {
     setIsLoading(true);
     const { error } = await supabase.auth.signInWithPassword({
@@ -53,28 +50,28 @@ const LoginForm = () => {
         variant: "destructive",
       });
     } else {
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData.user) {
+        await supabase
+          .from("profiles")
+          .update({
+            last_login_provider: "email",
+            last_sign_in_at: new Date().toISOString(),
+          })
+          .eq("user_id", userData.user.id);
+      }
       toast({ title: "Welcome back!", description: "Signed in successfully." });
       navigate("/dashboard");
     }
     setIsLoading(false);
   };
 
-  // ---------------------------------------------------------------------------
-  // OAuth Login (GitHub / Google)
-  // ---------------------------------------------------------------------------
-  // How OAuth works:
-  // 1. We call supabase.auth.signInWithOAuth({ provider })
-  // 2. Supabase redirects the browser to GitHub/Google login page
-  // 3. User approves → GitHub/Google redirects back to our app
-  // 4. Supabase reads the token from the URL and creates a session
-  // 5. User is now logged in
-  // ---------------------------------------------------------------------------
   const handleOAuthLogin = async (provider: "github" | "google") => {
     setOauthLoading(provider);
+    sessionStorage.setItem("secureguard_oauth_provider", provider);
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        // After OAuth completes, redirect here
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -87,7 +84,6 @@ const LoginForm = () => {
       });
       setOauthLoading(null);
     }
-    // If no error, browser is redirecting — no need to setOauthLoading(null)
   };
 
   return (
@@ -126,7 +122,7 @@ const LoginForm = () => {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       type={showPassword ? "text" : "password"}
-                      placeholder="••••••••"
+                      placeholder="********"
                       className="pl-10 pr-10 bg-background/50 border-border/50 focus:border-primary"
                       {...field}
                     />
@@ -159,7 +155,6 @@ const LoginForm = () => {
         </form>
       </Form>
 
-      {/* Divider */}
       <div className="relative">
         <div className="absolute inset-0 flex items-center">
           <div className="w-full border-t border-border/50" />
@@ -169,7 +164,6 @@ const LoginForm = () => {
         </div>
       </div>
 
-      {/* GitHub */}
       <Button
         type="button"
         variant="outline"
@@ -181,7 +175,6 @@ const LoginForm = () => {
         {oauthLoading === "github" ? "Redirecting..." : "Continue with GitHub"}
       </Button>
 
-      {/* Google */}
       <Button
         type="button"
         variant="outline"

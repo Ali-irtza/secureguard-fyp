@@ -10,9 +10,12 @@ class Settings(BaseSettings):
     """
 
     # Supabase
-    supabase_url: str
-    supabase_anon_key: str
-    supabase_service_role_key: str
+    # Database is intentionally disconnected on branch `zunair/new_db`.
+    # Keep these optional so backend startup does not depend on old Supabase env
+    # values while the new database design is being prepared.
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
 
     # App
     app_env: str = "development"

@@ -17,22 +17,6 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 
-// ---------------------------------------------------------------------------
-// ResetPassword Page
-// ---------------------------------------------------------------------------
-// This page is shown AFTER the user clicks the reset link in their email.
-//
-// Flow:
-//   1. User clicks "Forgot Password" on /forgot-password
-//   2. Supabase sends an email with a link to /auth/callback?type=recovery
-//   3. AuthCallback detects the PASSWORD_RECOVERY event and redirects here
-//   4. User enters a new password — we call supabase.auth.updateUser({ password })
-//   5. On success, redirect to /dashboard
-//
-// Security: Supabase automatically creates a temporary session from the
-// recovery token. updateUser() uses that session. No extra auth needed.
-// ---------------------------------------------------------------------------
-
 const resetSchema = z.object({
   password: z
     .string()
@@ -55,17 +39,13 @@ const ResetPassword = () => {
   const [showConfirm, setShowConfirm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDone, setIsDone] = useState(false);
-  // Guard: if no recovery session exists, redirect away
   const [isValidSession, setIsValidSession] = useState(false);
 
-  // Supabase creates a temporary session from the recovery token.
-  // We verify it exists before showing the form.
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setIsValidSession(true);
       } else {
-        // No session — link expired or user navigated here directly
         toast({
           title: "Link expired",
           description: "Your reset link has expired. Please request a new one.",
@@ -83,32 +63,28 @@ const ResetPassword = () => {
 
   const onSubmit = async (data: ResetFormValues) => {
     setIsLoading(true);
-    // updateUser() uses the active recovery session Supabase created from the link
     const { error } = await supabase.auth.updateUser({ password: data.password });
 
     if (error) {
       toast({ title: "Failed to reset password", description: error.message, variant: "destructive" });
     } else {
       setIsDone(true);
-      // Sign out so the user logs in fresh with their new password
       await supabase.auth.signOut();
       setTimeout(() => navigate("/auth", { replace: true }), 2500);
     }
     setIsLoading(false);
   };
 
-  if (!isValidSession) return null; // waiting for session check
+  if (!isValidSession) return null;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-8 bg-background relative overflow-hidden">
-      {/* Background glow */}
       <div className="absolute inset-0 opacity-30 pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[120px]" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald/20 rounded-full blur-[120px]" />
       </div>
 
       <div className="w-full max-w-md relative z-10">
-        {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-8">
           <div className="relative">
             <Shield className="h-10 w-10 text-primary" />
@@ -123,7 +99,6 @@ const ResetPassword = () => {
 
         <div className="glass-card p-8">
           {isDone ? (
-            // Success state
             <div className="text-center py-4 space-y-4">
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald/10">
                 <CheckCircle className="h-8 w-8 text-emerald" />
@@ -155,7 +130,7 @@ const ResetPassword = () => {
                             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                             <Input
                               type={showPassword ? "text" : "password"}
-                              placeholder="••••••••"
+                              placeholder="********"
                               className="pl-10 pr-10 bg-background/50 border-border/50 focus:border-primary"
                               {...field}
                             />
@@ -184,7 +159,7 @@ const ResetPassword = () => {
                             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                             <Input
                               type={showConfirm ? "text" : "password"}
-                              placeholder="••••••••"
+                              placeholder="********"
                               className="pl-10 pr-10 bg-background/50 border-border/50 focus:border-primary"
                               {...field}
                             />

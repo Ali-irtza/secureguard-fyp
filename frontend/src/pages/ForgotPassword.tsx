@@ -37,7 +37,27 @@ const ForgotPassword = () => {
 
   const onSubmit = async (data: ForgotPasswordFormValues) => {
     setIsLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(data.email, {
+    const email = data.email.trim().toLowerCase();
+    const { data: exists, error: existsError } = await supabase.rpc("profile_email_exists", {
+      input_email: email,
+    });
+
+    if (existsError) {
+      toast({ title: "Error", description: existsError.message, variant: "destructive" });
+      setIsLoading(false);
+      return;
+    }
+
+    if (!exists) {
+      form.setError("email", {
+        type: "manual",
+        message: "No SecureGuard Pro account exists with this email.",
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/auth/callback`,
     });
     if (error) {
@@ -50,14 +70,12 @@ const ForgotPassword = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-8 bg-background relative overflow-hidden">
-      {/* Background effects */}
       <div className="absolute inset-0 opacity-30">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[120px]" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald/20 rounded-full blur-[120px]" />
       </div>
 
       <div className="w-full max-w-md relative z-10">
-        {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-8">
           <div className="relative">
             <Shield className="h-10 w-10 text-primary" />
@@ -70,7 +88,6 @@ const ForgotPassword = () => {
           </span>
         </div>
 
-        {/* Card */}
         <div className="glass-card p-8">
           {!isSubmitted ? (
             <>
@@ -136,7 +153,6 @@ const ForgotPassword = () => {
             </div>
           )}
 
-          {/* Back to login */}
           <div className="mt-6 text-center">
             <Link
               to="/auth"

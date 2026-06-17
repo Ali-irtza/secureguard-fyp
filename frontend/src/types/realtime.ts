@@ -218,12 +218,16 @@ export interface TeamRecord {
  * A row in the `profiles` table.
  */
 export interface ProfileRecord {
-  id: string;
+  user_id: string;
   full_name: string | null;
+  email: string;
   avatar_url: string | null;
+  signup_provider: "email" | "google" | "github";
+  last_login_provider: "email" | "google" | "github" | null;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
-  bio: string | null;
+  last_sign_in_at: string | null;
 }
 
 // ---------------------------------------------------------------------------

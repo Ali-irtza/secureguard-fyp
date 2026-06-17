@@ -51,15 +51,6 @@ const RegisterForm = () => {
     { label: "Contains number", met: /\d/.test(password) },
   ];
 
-  // ---------------------------------------------------------------------------
-  // Email + Password Signup
-  // ---------------------------------------------------------------------------
-  // How it works:
-  // 1. supabase.auth.signUp creates the user in Supabase Auth
-  // 2. Supabase sends a confirmation email (if email confirm is ON in dashboard)
-  // 3. We store fullName in user_metadata — Supabase saves this alongside the user
-  // 4. Our DB trigger (from migration) auto-creates a profile row
-  // ---------------------------------------------------------------------------
   const onSubmit = async (data: RegisterFormValues) => {
     setIsLoading(true);
     const { data: signUpData, error } = await supabase.auth.signUp({
@@ -67,10 +58,8 @@ const RegisterForm = () => {
       password: data.password,
       options: {
         data: {
-          full_name: data.fullName, // stored in auth.users.raw_user_meta_data
+          full_name: data.fullName,
         },
-        // After user clicks the confirmation link in their email,
-        // Supabase redirects here. AuthCallback then sends them to /dashboard.
         emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -82,14 +71,17 @@ const RegisterForm = () => {
         variant: "destructive",
       });
     } else if (signUpData.user && signUpData.user.identities?.length === 0) {
-      // identities is empty → this email is already registered
-      // Supabase returns a fake success to prevent email enumeration attacks,
-      // but identities array is empty — that's the tell.
       toast({
         title: "Email already registered",
         description: "An account with this email already exists. Try signing in instead.",
         variant: "destructive",
       });
+    } else if (signUpData.session) {
+      toast({
+        title: "Account created",
+        description: "Signed in successfully.",
+      });
+      navigate("/dashboard");
     } else {
       toast({
         title: "Check your email",
@@ -100,11 +92,9 @@ const RegisterForm = () => {
     setIsLoading(false);
   };
 
-  // ---------------------------------------------------------------------------
-  // OAuth Signup (same flow as login — Supabase creates account if new)
-  // ---------------------------------------------------------------------------
   const handleOAuthLogin = async (provider: "github" | "google") => {
     setOauthLoading(provider);
+    sessionStorage.setItem("secureguard_oauth_provider", provider);
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
@@ -179,7 +169,7 @@ const RegisterForm = () => {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       type={showPassword ? "text" : "password"}
-                      placeholder="••••••••"
+                      placeholder="********"
                       className="pl-10 pr-10 bg-background/50 border-border/50 focus:border-primary"
                       {...field}
                     />
@@ -228,7 +218,7 @@ const RegisterForm = () => {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       type={showConfirmPassword ? "text" : "password"}
-                      placeholder="••••••••"
+                      placeholder="********"
                       className="pl-10 pr-10 bg-background/50 border-border/50 focus:border-primary"
                       {...field}
                     />
@@ -252,7 +242,6 @@ const RegisterForm = () => {
         </form>
       </Form>
 
-      {/* Divider */}
       <div className="relative">
         <div className="absolute inset-0 flex items-center">
           <div className="w-full border-t border-border/50" />
@@ -262,7 +251,6 @@ const RegisterForm = () => {
         </div>
       </div>
 
-      {/* GitHub */}
       <Button
         type="button"
         variant="outline"
@@ -274,7 +262,6 @@ const RegisterForm = () => {
         {oauthLoading === "github" ? "Redirecting..." : "Continue with GitHub"}
       </Button>
 
-      {/* Google */}
       <Button
         type="button"
         variant="outline"

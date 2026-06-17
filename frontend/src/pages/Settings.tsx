@@ -30,6 +30,7 @@ import {
   getNotificationPreferences,
   saveNotificationPreferences,
 } from "@/lib/notifications";
+import { supabase } from "@/lib/supabase";
 
 const Settings = () => {
   const [searchParams] = useSearchParams();
@@ -69,12 +70,11 @@ const Settings = () => {
       // Use profile.full_name if set, otherwise fall back to displayName
       // (which is the email prefix) so the field is never blank on load
       setName(profile.full_name || displayName);
-      if (profile.avatar_url && !pendingAvatarFile) {
-        setAvatarPreview(profile.avatar_url);
+      if (avatarUrl && !pendingAvatarFile) {
+        setAvatarPreview(avatarUrl);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile]);
+  }, [avatarUrl, displayName, pendingAvatarFile, profile]);
 
   // NOTE: avatarPreview is synced from profile inside the effect above.
   // We do NOT sync from avatarUrl (user_metadata) to avoid showing Google's
@@ -160,13 +160,29 @@ const Settings = () => {
     }
 
     if (avatarChanged && pendingAvatarFile) {
-      try {
-        payload.avatar_url = await fileToBase64(pendingAvatarFile);
-      } catch {
-        toast.error("Failed to process image");
+      if (!user) {
+        toast.error("You must be signed in to upload a profile photo");
         setIsSavingProfile(false);
         return;
       }
+
+      const extension = pendingAvatarFile.name.split(".").pop()?.toLowerCase() || "jpg";
+      const objectPath = `${user.id}/avatar.${extension}`;
+      const storagePath = `avatars/${objectPath}`;
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(objectPath, pendingAvatarFile, {
+          upsert: true,
+          contentType: pendingAvatarFile.type,
+        });
+
+      if (uploadError) {
+        toast.error(`Failed to upload image: ${uploadError.message}`);
+        setIsSavingProfile(false);
+        return;
+      }
+
+      payload.avatar_url = storagePath;
     }
 
     const { error } = await updateProfile(payload);
@@ -175,21 +191,13 @@ const Settings = () => {
     } else {
       toast.success("Profile updated successfully");
       setPendingAvatarFile(null);
-      // Update preview to the saved base64 so it stays correct
-      if (payload.avatar_url) setAvatarPreview(payload.avatar_url);
+      if (payload.avatar_url) {
+        const publicPath = payload.avatar_url.replace(/^avatars\//, "");
+        setAvatarPreview(supabase.storage.from("avatars").getPublicUrl(publicPath).data.publicUrl);
+      }
     }
     setIsSavingProfile(false);
   };
-
-  // Converts a File object to a base64 data URL string
-  // e.g. "data:image/jpeg;base64,/9j/4AAQ..."
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
 
   const handleUpdatePassword = async () => {
     if (!newPassword || !confirmPassword) {

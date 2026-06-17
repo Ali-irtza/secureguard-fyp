@@ -1,6 +1,7 @@
 import { useUserContext } from "@/context/UserContext";
 import type { ProfileRow, UpdateProfilePayload } from "@/context/UserContext";
 import type { User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
 // Re-export types so callers don't need to import from context directly
 export type { ProfileRow, UpdateProfilePayload };
@@ -29,10 +30,14 @@ interface UseCurrentUserReturn {
 export function useCurrentUser(): UseCurrentUserReturn {
   const { user, profile, loading, updateProfile, updatePassword } = useUserContext();
 
-  // All display values from profiles table only
   const displayName = profile?.full_name || user?.email?.split("@")[0] || "User";
   const email       = user?.email || "";
-  const avatarUrl   = profile?.avatar_url || "";
+  const avatarUrl = (() => {
+    if (!profile?.avatar_url) return "";
+    if (/^https?:\/\//i.test(profile.avatar_url)) return profile.avatar_url;
+    const objectPath = profile.avatar_url.replace(/^avatars\//, "");
+    return supabase.storage.from("avatars").getPublicUrl(objectPath).data.publicUrl;
+  })();
 
   const initials = displayName
     .split(" ")
