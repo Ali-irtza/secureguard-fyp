@@ -68,11 +68,19 @@ const projectLanguages = (language?: string | null): string[] =>
     .map((item) => item.trim())
     .filter(Boolean);
 
-const primaryHealthScore = (score?: string | null): string =>
-  (score ?? "").trim().slice(0, 1).toUpperCase();
+const numericHealthScore = (score?: number | null): number => {
+  if (typeof score !== "number" || Number.isNaN(score)) return 100;
+  return Math.max(0, Math.min(100, Math.round(score)));
+};
 
-const displayHealthScore = (score?: string | null): string =>
-  primaryHealthScore(score) || "A";
+const displayHealthScore = (score?: number | null): string => {
+  const value = numericHealthScore(score);
+  if (value >= 90) return "A";
+  if (value >= 80) return "B";
+  if (value >= 70) return "C";
+  if (value >= 60) return "D";
+  return "F";
+};
 
 const roleBadgeStyles: Record<TeamRole, string> = {
   admin: "bg-primary/20 text-primary border-primary/30",

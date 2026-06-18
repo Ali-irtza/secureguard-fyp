@@ -11,7 +11,7 @@ export interface Project {
   id: string;
   name: string;
   language: string | null;
-  health_score: string | null;
+  health_score: number | null;
   type: "personal" | "team";
   owner_id: string;
   team_id: string | null;
@@ -31,7 +31,7 @@ export interface CreateProjectPayload {
 export interface UpdateProjectPayload {
   name?: string;
   language?: string;
-  health_score?: string;
+  health_score?: number;
   type?: "personal" | "team";
   team_id?: string;
   /** Set to "" to disconnect the GitHub repo */

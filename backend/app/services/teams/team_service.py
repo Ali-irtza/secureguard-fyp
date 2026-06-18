@@ -19,6 +19,11 @@ from app.models.teams import (
 EMPTY_SEVERITY_COUNTS = {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
 
+def _is_missing_table_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "PGRST205" in message or "Could not find the table" in message
+
+
 def _calculate_health_score(counts: dict[str, int]) -> int:
     raw_score = (
         100
@@ -265,12 +270,17 @@ def list_user_teams(user_id: str, supabase: Client) -> TeamListResponse:
          + profiles    → fetch ALL profiles for ALL members in one query
          (steps 3+4 handled by fetch_members_for_teams)
     """
-    memberships = (
-        supabase.table("team_members")
-        .select("team_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
+    try:
+        memberships = (
+            supabase.table("team_members")
+            .select("team_id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_table_error(exc):
+            return TeamListResponse(teams=[])
+        raise
     team_ids = [m["team_id"] for m in (memberships.data or [])]
 
     if not team_ids:

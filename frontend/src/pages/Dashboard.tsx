@@ -11,6 +11,7 @@ import CriticalAlerts from "@/components/dashboard/CriticalAlerts";
 import TeamViewToggle from "@/components/dashboard/TeamViewToggle";
 import TeamHealthOverview from "@/components/dashboard/TeamHealthOverview";
 import { getScanHistory } from "@/lib/scans-api";
+import { listProjects } from "@/lib/projects-api";
 import { getTeamDashboard, listTeams } from "@/lib/teams-api";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -57,6 +58,11 @@ const Dashboard = () => {
   const { data: rawScans = [] } = useQuery({
     queryKey: ["scan-history"],
     queryFn: getScanHistory,
+  });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
   });
 
   const { data: teamDashboard } = useQuery({
@@ -112,14 +118,13 @@ const Dashboard = () => {
 
   const personalCriticalAlerts = useMemo(() => {
     return rawScans
-      .flatMap((scan) =>
-        (scan.critical_findings ?? []).map((finding) => ({
-          id: finding.id,
-          title: `${finding.cwe_id || finding.type || "Critical Issue"}${finding.line_number ? ` at line ${finding.line_number}` : ""}`,
-          project: scan.project_name || finding.file_path || "Project",
-          timeAgo: new Date(finding.created_at).toLocaleString(),
-        }))
-      )
+      .filter((scan) => (scan.severity_counts?.critical ?? 0) > 0)
+      .map((scan) => ({
+        id: scan.id,
+        title: `${scan.severity_counts?.critical ?? 0} critical issue${(scan.severity_counts?.critical ?? 0) === 1 ? "" : "s"}`,
+        project: scan.project_name || scan.file_name || "Project",
+        timeAgo: formatTimeAgo(scan.created_at),
+      }))
       .slice(0, 10);
   }, [rawScans]);
 
@@ -147,12 +152,16 @@ const Dashboard = () => {
 
   const totalScans = rawScans.length;
   const criticalVulns = rawScans.reduce((sum, scan) => sum + (scan.severity_counts?.critical ?? 0), 0);
-  const completedScans = rawScans.filter((scan) => scan.status === "completed").length;
+  const healthScores = projects
+    .map((project) => project.health_score)
+    .filter((score): score is number => typeof score === "number" && !Number.isNaN(score));
 
   const personalMetrics = {
     totalScans,
     criticalVulns,
-    healthScore: totalScans > 0 ? Math.round((completedScans / totalScans) * 100) : 100,
+    healthScore: healthScores.length > 0
+      ? Math.round(healthScores.reduce((sum, score) => sum + score, 0) / healthScores.length)
+      : 100,
   };
 
   const metrics = isTeamView && teamDashboard ? teamDashboard.metrics : personalMetrics;

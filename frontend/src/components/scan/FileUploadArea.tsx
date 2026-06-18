@@ -51,8 +51,8 @@ interface FileUploadAreaProps {
   onDrop: (e: React.DragEvent) => void;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemoveFile: (index: number) => void;
-  /** When set, restricts displayed badges, support text, and file input accept to this language only */
   lockedLanguage?: "C" | "C++" | null;
+  compactSelected?: boolean;
 }
 
 const validateFile = (file: File): boolean => {
@@ -81,12 +81,13 @@ export const FileUploadArea = ({
   onFileSelect,
   onRemoveFile,
   lockedLanguage,
+  compactSelected = false,
 }: FileUploadAreaProps) => {
-  // Resolve display config based on locked language
   const config = lockedLanguage ? LANG_CONFIG[lockedLanguage] : null;
   const badges      = config?.badges      ?? ALL_LANGUAGE_BADGES;
   const supportText = config?.supportText ?? "Supports .c, .h, .cpp, .cc, .cxx, .hpp, .hxx files or a .zip archive";
   const acceptAttr  = config?.accept      ?? SUPPORTED_EXTENSIONS.join(",");
+  const showPicker = !(compactSelected && uploadedFiles.length > 0);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -111,77 +112,78 @@ export const FileUploadArea = ({
 
   return (
     <div className="space-y-4">
-      {/* Supported Languages */}
-      <div className="flex items-center gap-2 justify-center flex-wrap">
-        <span className="text-xs text-muted-foreground">Supported:</span>
-        {badges.map((lang) => (
-          <span
-            key={lang.ext}
+      {showPicker && (
+        <>
+          <div className="flex items-center gap-2 justify-center flex-wrap">
+            <span className="text-xs text-muted-foreground">Supported:</span>
+            {badges.map((lang) => (
+              <span
+                key={lang.ext}
+                className={cn(
+                  "text-xs px-2 py-1 rounded-full border font-medium",
+                  lang.color
+                )}
+              >
+                {lang.label}
+              </span>
+            ))}
+          </div>
+
+          <div
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={handleDrop}
             className={cn(
-              "text-xs px-2 py-1 rounded-full border font-medium",
-              lang.color
+              "relative border-2 border-dashed rounded-xl p-12 text-center transition-all duration-300 cursor-pointer",
+              isDragOver
+                ? "border-primary bg-primary/10 scale-[1.02]"
+                : uploadedFiles.length > 0
+                ? "border-primary/50 bg-primary/5"
+                : "border-border hover:border-primary/50 hover:bg-muted/50"
             )}
           >
-            {lang.label}
-          </span>
-        ))}
-      </div>
+            <input
+              type="file"
+              accept={acceptAttr}
+              multiple
+              onChange={handleFileSelect}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
 
-      {/* Drop Zone */}
-      <div
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onDrop={handleDrop}
-        className={cn(
-          "relative border-2 border-dashed rounded-xl p-12 text-center transition-all duration-300 cursor-pointer",
-          isDragOver
-            ? "border-primary bg-primary/10 scale-[1.02]"
-            : uploadedFiles.length > 0
-            ? "border-primary/50 bg-primary/5"
-            : "border-border hover:border-primary/50 hover:bg-muted/50"
-        )}
-      >
-        <input
-          type="file"
-          accept={acceptAttr}
-          multiple
-          onChange={handleFileSelect}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-        />
-
-        <div className="space-y-4">
-          <div className={cn(
-            "mx-auto w-16 h-16 rounded-full flex items-center justify-center transition-all",
-            isDragOver ? "bg-primary/20 scale-110" : uploadedFiles.length > 0 ? "bg-primary/20" : "bg-muted"
-          )}>
-            {uploadedFiles.length > 0 ? (
-              <FileCode className="h-8 w-8 text-primary" />
-            ) : (
-              <Upload className={cn(
-                "h-8 w-8 transition-colors",
-                isDragOver ? "text-primary" : "text-muted-foreground"
-              )} />
-            )}
+            <div className="space-y-4">
+              <div className={cn(
+                "mx-auto w-16 h-16 rounded-full flex items-center justify-center transition-all",
+                isDragOver ? "bg-primary/20 scale-110" : uploadedFiles.length > 0 ? "bg-primary/20" : "bg-muted"
+              )}>
+                {uploadedFiles.length > 0 ? (
+                  <FileCode className="h-8 w-8 text-primary" />
+                ) : (
+                  <Upload className={cn(
+                    "h-8 w-8 transition-colors",
+                    isDragOver ? "text-primary" : "text-muted-foreground"
+                  )} />
+                )}
+              </div>
+              <div>
+                <p className="font-semibold text-foreground">
+                  {uploadedFiles.length > 0
+                    ? `${uploadedFiles.length} file${uploadedFiles.length > 1 ? "s" : ""} selected`
+                    : "Drop your files or .zip folder here"}
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {uploadedFiles.length > 0 ? "Drop more files or click to add" : "or click to browse"}
+                </p>
+              </div>
+              {uploadedFiles.length === 0 && (
+                <p className="text-xs text-muted-foreground/70">
+                  {supportText}
+                </p>
+              )}
+            </div>
           </div>
-          <div>
-            <p className="font-semibold text-foreground">
-              {uploadedFiles.length > 0
-                ? `${uploadedFiles.length} file${uploadedFiles.length > 1 ? "s" : ""} selected`
-                : "Drop your files or .zip folder here"}
-            </p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {uploadedFiles.length > 0 ? "Drop more files or click to add" : "or click to browse"}
-            </p>
-          </div>
-          {uploadedFiles.length === 0 && (
-            <p className="text-xs text-muted-foreground/70">
-              {supportText}
-            </p>
-          )}
-        </div>
-      </div>
+        </>
+      )}
 
-      {/* File List */}
       {uploadedFiles.length > 0 && (
         <div className="space-y-2">
           {uploadedFiles.map((file, index) => (

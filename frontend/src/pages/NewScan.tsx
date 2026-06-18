@@ -24,7 +24,6 @@ import type { Team as ApiTeam } from "@/lib/teams-api";
 import {
   listProjectFiles,
   listProjectSourceFiles,
-  uploadProjectFile,
   formatFileSize,
   formatRelativeTime,
   type ProjectFileResponse,
@@ -256,6 +255,7 @@ const NewScan = () => {
   // "new" means user wants to create a new project inline
   const [newProjectName, setNewProjectName] = useState<string>("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isProjectSubmitting, setIsProjectSubmitting] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
 
@@ -338,6 +338,40 @@ const NewScan = () => {
     handleStartScan();
   }, [searchParams, selectedProjectId, projectFilesLoading, selectedFileIds.size, isScanning]);
 
+  const handleCreateInlineProject = async () => {
+    const trimmedName = newProjectName.trim();
+    if (!trimmedName) {
+      toast.error("Project name is required");
+      return null;
+    }
+    if (!/^[a-zA-Z]/.test(trimmedName)) {
+      toast.error("Invalid Project Name", { description: "Project name must start with a letter." });
+      return null;
+    }
+
+    setIsProjectSubmitting(true);
+    try {
+      const created = await createProject({
+        name: trimmedName,
+        type: "personal",
+        language: detectedProjectLanguage ?? undefined,
+      });
+      setSelectedProjectId(created.id);
+      setSelectedProjectName(created.name);
+      setProjectName(created.name);
+      setNewProjectName("");
+      setIsCreatingProject(false);
+      await refetchProjects();
+      toast.success("Project created", { description: created.name });
+      return created;
+    } catch (err: any) {
+      toast.error("Failed to create project", { description: err.message || "Please try again." });
+      return null;
+    } finally {
+      setIsProjectSubmitting(false);
+    }
+  };
+
   // Selected team in team mode (real API team)
   const selectedApiTeam: ApiTeam | null = allTeams.find((t) => t.id === selectedTeamId) ?? null;
   const userTeamRole = selectedApiTeam?.current_user_role ?? null;
@@ -379,6 +413,8 @@ const NewScan = () => {
   const scanAbortRef = useRef(false);
   const sourceLineCountsRef = useRef<Record<string, number>>({});
   const scanStartedAtRef = useRef<number | null>(null);
+  const scanOutputRef = useRef<HTMLDivElement | null>(null);
+  const correctionTimersRef = useRef<number[]>([]);
 
   // New scan result state
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -387,6 +423,8 @@ const NewScan = () => {
   const [scanError, setScanError] = useState<string>("");
   const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
   const [streamingChunks, setStreamingChunks] = useState<ChunkOutput[]>([]);
+  const displayedChunks = streamingChunks.length ? streamingChunks : scanResult?.chunk_outputs ?? [];
+  const openChunkItems = displayedChunks.map((chunk) => `${chunk.file_path}-${chunk.chunk_index}`);
 
   // Panel visibility state
   const [showPanel, setShowPanel] = useState(true);
@@ -525,6 +563,29 @@ const NewScan = () => {
     ]);
   }, []);
 
+  const clearCorrectionTimers = useCallback(() => {
+    correctionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    correctionTimersRef.current = [];
+  }, []);
+
+  const updateCorrectedChunk = useCallback((filePath: string, chunkIndex: number, correctedCode: string) => {
+    setStreamingChunks((prev) => prev.map((chunk) =>
+      (chunk.file_path === filePath && chunk.chunk_index === chunkIndex)
+        ? { ...chunk, corrected_code: correctedCode }
+        : chunk
+    ));
+    setScanResult((prev) => prev ? {
+      ...prev,
+      chunk_outputs: (prev.chunk_outputs ?? []).map((chunk) =>
+        (chunk.file_path === filePath && chunk.chunk_index === chunkIndex)
+          ? { ...chunk, corrected_code: correctedCode }
+          : chunk
+      ),
+    } : prev);
+  }, []);
+
+  useEffect(() => () => clearCorrectionTimers(), [clearCorrectionTimers]);
+
   const sanitizeScanResultChunkRanges = useCallback((result: ScanResult): ScanResult => {
     const chunkOutputs = result.chunk_outputs ?? [];
     const invalidFiles = new Set<string>();
@@ -642,19 +703,16 @@ const NewScan = () => {
         addLog(event.message, "info");
         break;
       case "correction_result":
-        setStreamingChunks((prev) => prev.map((chunk) =>
-          (chunk.file_path === event.file_path && chunk.chunk_index === event.chunk_index)
-            ? { ...chunk, corrected_code: event.corrected_code }
-            : chunk
-        ));
-        setScanResult((prev) => prev ? {
-          ...prev,
-          chunk_outputs: (prev.chunk_outputs ?? []).map((chunk) =>
-            (chunk.file_path === event.file_path && chunk.chunk_index === event.chunk_index)
-              ? { ...chunk, corrected_code: event.corrected_code }
-              : chunk
-          ),
-        } : prev);
+        {
+          const lines = event.corrected_code.split(/\r?\n/);
+          updateCorrectedChunk(event.file_path, event.chunk_index, "");
+          lines.forEach((_line, index) => {
+            const timer = window.setTimeout(() => {
+              updateCorrectedChunk(event.file_path, event.chunk_index, lines.slice(0, index + 1).join("\n"));
+            }, Math.min(index * 18, 900));
+            correctionTimersRef.current.push(timer);
+          });
+        }
         addLog(`Corrected code streamed for ${event.file_path}: chunk ${event.chunk_index}`, "success");
         break;
       case "scan_result":
@@ -672,7 +730,15 @@ const NewScan = () => {
         addLog(event.message, "error");
         break;
     }
-  }, [addLog, replaceStreamingChunksForFile, sanitizeScanResultChunkRanges, upsertStreamingChunk]);
+  }, [addLog, replaceStreamingChunksForFile, sanitizeScanResultChunkRanges, updateCorrectedChunk, upsertStreamingChunk]);
+
+  useEffect(() => {
+    if (!isScanning && displayedChunks.length === 0) return;
+    scanOutputRef.current?.scrollTo({
+      top: scanOutputRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [displayedChunks.length, thinkingSteps.length, isScanning]);
 
   const renderThinkingStream = (emptyText: string) => {
     const activeIndex = thinkingSteps.length - 1;
@@ -732,6 +798,7 @@ const NewScan = () => {
 
   const handleStopScan = () => {
     scanAbortRef.current = true;
+    clearCorrectionTimers();
     setIsScanning(false);
     addLog("Scan cancelled by user", "warning");
   };
@@ -741,6 +808,7 @@ const NewScan = () => {
     let globalScanActivityId: string | null = null;
     scanAbortRef.current = false;
     scanStartedAtRef.current = Date.now();
+    clearCorrectionTimers();
     setAutoRescanPreparing(isAutoRescan);
     setIsScanning(true);
     setScanComplete(false);
@@ -793,29 +861,9 @@ const NewScan = () => {
 
     // ── UPLOAD MODE ──────────────────────────────────────────────────────────
     if (activeTab === "upload") {
-      // Step 1: Upload files marked "save to project" before scanning
-      if (false && resolvedProjectId && resolvedProjectId !== "__new__") {
-        for (let i = 0; i < uploadedFiles.length; i++) {
-          if (saveToProject[i] !== false) {
-            // default is true when a real project is selected
-            try {
-              addLog(`Uploading ${uploadedFiles[i].name} to project...`, "info");
-              await uploadProjectFile(resolvedProjectId, uploadedFiles[i]);
-              addLog(`Saved ${uploadedFiles[i].name} to project`, "success");
-            } catch (err: any) {
-              addLog(`Warning: could not save ${uploadedFiles[i].name} — ${err.message}`, "warning");
-            }
-          }
-        }
-      }
-
-      // Step 2: Collect all files to scan:
-      //   a) selected existing project files (read decoded source from the API)
-      //   b) newly uploaded files
       type FileTuple = { name: string; content: string };
       const filesToScan: FileTuple[] = [];
 
-      // Existing project files that are checked
       if (isAutoRescan && resolvedProjectId && resolvedProjectId !== "__new__") {
         setAutoRescanPreparing(true);
         try {
@@ -838,7 +886,6 @@ const NewScan = () => {
         }
       }
 
-      // Newly uploaded files
       for (const file of uploadedFiles) {
         if (file.name.toLowerCase().endsWith(".zip")) continue;
         const text = await file.text();
@@ -1324,6 +1371,12 @@ const NewScan = () => {
   const hasFilesToScan =
     uploadedFiles.length > 0 || selectedFileIds.size > 0;
 
+  const shouldShowUploadCard =
+    uploadedFiles.length > 0 ||
+    !selectedProjectId ||
+    selectedProjectId === "__new__" ||
+    (!projectFilesLoading && projectFiles.length === 0);
+
   const canStartScan =
     !isViewer &&
     (isTeamMode
@@ -1334,6 +1387,9 @@ const NewScan = () => {
         // Upload tab (personal): need a name + files
         : effectiveProjectName !== "" && hasFilesToScan
     );
+
+  const queuedFileCount = branchFiles.length || uploadedFiles.length || selectedFileIds.size;
+  const isUploadScan = activeTab === "upload";
 
   // Determine GitHub tab behavior based on selected project / team mode
   const renderGitHubTab = () => {
@@ -1696,7 +1752,7 @@ const NewScan = () => {
               )}
             >
               {scanComplete && scanError ? (
-                <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+                <div ref={scanOutputRef} className="flex-1 overflow-y-auto p-4 lg:p-6">
                   <div className="mx-auto max-w-3xl">
                     <Card className="bg-card/80 border-destructive/40 p-6">
                       <div className="flex items-start gap-3">
@@ -1741,18 +1797,18 @@ const NewScan = () => {
                       </Card>
                     </div>
 
-                    {((streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? []).length > 0) && (
+                    {displayedChunks.length > 0 && (
                       <Card className="bg-card/70 border-border/50 overflow-hidden">
                         <div className="p-4 border-b border-border/50">
                           <h2 className="text-lg font-semibold text-foreground">
-                            {getChunkReportTitle(streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? [])}
+                            {getChunkReportTitle(displayedChunks)}
                           </h2>
                           <p className="text-sm text-muted-foreground mt-1">
-                            Expand a chunk to review its code, vulnerabilities, and corrected code.
+                            Source chunks open as results stream in.
                           </p>
                         </div>
-                        <Accordion type="multiple" className="divide-y divide-border/40">
-                          {(streamingChunks.length ? streamingChunks : scanResult.chunk_outputs ?? []).map((chunk) => (
+                        <Accordion type="multiple" value={openChunkItems} className="divide-y divide-border/40">
+                          {displayedChunks.map((chunk) => (
                             <AccordionItem key={`${chunk.file_path}-${chunk.chunk_index}`} value={`${chunk.file_path}-${chunk.chunk_index}`} className="border-0 px-4">
                               <AccordionTrigger className="hover:no-underline">
                                 <div className="flex flex-wrap items-center gap-2 text-left">
@@ -2000,7 +2056,9 @@ const NewScan = () => {
                                 Source files are being reviewed
                               </h2>
                               <p className="mt-1 text-sm text-muted-foreground">
-                                The analyzer is collecting files, chunking code, and preparing the report stream.
+                                {isUploadScan
+                                  ? `Preparing ${queuedFileCount || 1} uploaded source file${(queuedFileCount || 1) === 1 ? "" : "s"}, chunking code, and streaming results.`
+                                  : "Discovering repository files, chunking code, and streaming results."}
                               </p>
                             </div>
                             {branchFiles.length > 0 ? (
@@ -2030,7 +2088,9 @@ const NewScan = () => {
                                 <div className="h-2 overflow-hidden rounded-full bg-muted">
                                   <div className="h-full w-1/2 animate-global-scan-progress rounded-full bg-primary" />
                                 </div>
-                                <p className="text-xs text-muted-foreground">Waiting for GitHub file discovery...</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {isUploadScan ? "Waiting for uploaded source stream..." : "Waiting for source discovery..."}
+                                </p>
                               </div>
                             )}
                           </div>
@@ -2215,6 +2275,8 @@ const NewScan = () => {
                               setSelectedProjectId("__new__");
                               setSelectedProjectName("");
                               setIsCreatingProject(true);
+                              setUploadedFiles([]);
+                              setFileContent("");
                               setProjectDropdownOpen(false);
                               setProjectSearch("");
                             }}
@@ -2239,6 +2301,9 @@ const NewScan = () => {
                                   setSelectedProjectId(p.id);
                                   setSelectedProjectName(p.name);
                                   setIsCreatingProject(false);
+                                  setNewProjectName("");
+                                  setUploadedFiles([]);
+                                  setFileContent("");
                                   setBranch("main");
                                   setProjectDropdownOpen(false);
                                   setProjectSearch("");
@@ -2264,7 +2329,41 @@ const NewScan = () => {
                       value={newProjectName}
                       onChange={(e) => setNewProjectName(e.target.value)}
                       autoFocus
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleCreateInlineProject();
+                        }
+                      }}
                     />
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedProjectId("");
+                          setSelectedProjectName("");
+                          setNewProjectName("");
+                          setIsCreatingProject(false);
+                        }}
+                        disabled={isProjectSubmitting}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={handleCreateInlineProject}
+                        disabled={isProjectSubmitting || !newProjectName.trim()}
+                      >
+                        {isProjectSubmitting ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          "Create"
+                        )}
+                      </Button>
+                    </div>
                     {detectedProjectLanguage && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                         Project will be created as
@@ -2428,7 +2527,7 @@ const NewScan = () => {
                 </Card>
               )}
 
-            {/* ── Upload New File ─────────────────────────────────────────── */}
+            {shouldShowUploadCard && (
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
               <CardContent className="pt-6">
                 {/* Language lock notice */}
@@ -2461,6 +2560,7 @@ const NewScan = () => {
                   onFileSelect={handleFileSelect}
                   onRemoveFile={handleRemoveFile}
                   lockedLanguage={effectiveLanguage}
+                  compactSelected
                 />
 
                 {/* "Save to project" toggles — show whenever a project is selected or being created */}
@@ -2511,6 +2611,7 @@ const NewScan = () => {
                   )}
               </CardContent>
             </Card>
+            )}
           </TabsContent>
 
           {/* GitHub Tab */}

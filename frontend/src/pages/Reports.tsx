@@ -72,7 +72,7 @@ const Reports = () => {
       { label: "Total Reports", value: String(filteredReports.length), icon: FileText },
       { label: "This Month", value: String(filteredReports.filter((r) => isThisMonth(r.created_at)).length), icon: Calendar },
       { label: "Team Reports", value: "0", icon: Users },
-      { label: "Stored Files", value: String(filteredReports.filter((r) => r.file_path).length), icon: FileBarChart },
+      { label: "Stored Files", value: String(filteredReports.filter((r) => r.file_path || r.scan_id).length), icon: FileBarChart },
     ];
   }, [filteredReports]);
 
@@ -102,18 +102,16 @@ const Reports = () => {
 
   const handleDelete = async (report: ReportItem) => {
     const confirmed = window.confirm(
-      `Delete "${report.name}"? This also removes its linked scan from Scan History and Dashboard.`
+      `Delete "${report.name}"? This removes only the generated report file. The scan history stays available.`
     );
     if (!confirmed) return;
     setBusyDeleteId(report.id);
     try {
       await deleteReport(report.id);
       setReports((current) =>
-        current.filter((item) =>
-          report.scan_id ? item.scan_id !== report.scan_id : item.id !== report.id
-        )
+        current.filter((item) => item.id !== report.id)
       );
-      toast.success("Report and linked scan removed");
+      toast.success("Report deleted");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Delete failed");
     } finally {

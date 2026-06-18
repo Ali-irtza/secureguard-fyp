@@ -1,6 +1,5 @@
 import io
 import json
-import io
 import os
 import re
 import time
@@ -16,22 +15,20 @@ from app.services.scans.scan_storage_service import (
     create_scan_record,
     create_failed_scan_record,
     save_vulnerabilities,
-    save_report_artifact,
-    get_scans_for_user,
-    get_scan_with_vulnerabilities,
-    list_reports_for_user,
-    create_manual_report,
-    get_report_for_user,
-    delete_report_scan_for_user,
-    delete_scan_for_user,
-    build_code_zip_for_report,
 )
-from app.services.scans.report_storage_service import (
-    build_pdf_report,
-    build_vulnerability_csv,
-    load_pdf_from_zip,
-    load_report_from_zip,
-    load_source_files_from_report_artifact,
+from app.services.scans.personal_scan_persistence_service import (
+    build_scan_pdf_for_user,
+    create_scan_started,
+    create_on_demand_report,
+    delete_on_demand_report,
+    delete_scan_for_user_new,
+    download_corrected_code_zip,
+    download_on_demand_report,
+    get_scan_detail_new,
+    get_scans_for_user_new,
+    list_on_demand_reports,
+    mark_scan_failed,
+    save_scan_success,
 )
 from app.services.project_files.file_service import save_scanned_sources_zip
 
@@ -204,7 +201,6 @@ async def start_scan(
         }
         scan_id = create_scan_record(supabase, current_user.id, body.project_id, scan_data)
         save_vulnerabilities(supabase, scan_id, result["vulnerabilities"])
-        save_report_artifact(supabase, current_user.id, scan_id, {**scan_data, **result}, result["vulnerabilities"])
         result["scan_id"] = scan_id
     except Exception as e:
         print(f"[scans] Failed to save scan to DB: {e}")
@@ -268,7 +264,6 @@ async def scan_uploaded_file(
         }
         scan_id = create_scan_record(supabase, current_user.id, body.project_id, scan_data)
         save_vulnerabilities(supabase, scan_id, result["vulnerabilities"])
-        save_report_artifact(supabase, current_user.id, scan_id, {**scan_data, **result}, result["vulnerabilities"])
         result["scan_id"] = scan_id
     except Exception as e:
         print(f"[scans] Failed to save scan to DB: {e}")
@@ -328,7 +323,6 @@ async def scan_uploaded_files(
         }
         scan_id = create_scan_record(supabase, current_user.id, project_id, scan_data)
         save_vulnerabilities(supabase, scan_id, result["vulnerabilities"])
-        save_report_artifact(supabase, current_user.id, scan_id, {**scan_data, **result}, result["vulnerabilities"])
         result["scan_id"] = scan_id
     except Exception as e:
         print(f"[scans] Failed to save scan to DB: {e}")
@@ -352,6 +346,7 @@ async def scan_uploaded_files_stream(
     start_time = time.time()
     files_dict = await _extract_upload_files(files)
     save_scanned_sources_zip(project_id, current_user.id, files_dict, supabase)
+    scan_id = create_scan_started(supabase, current_user.id, project_id, files_dict, "upload")
 
     def line(event: dict) -> str:
         return json.dumps(event, ensure_ascii=False) + "\n"
@@ -360,40 +355,27 @@ async def scan_uploaded_files_stream(
         final_result = None
         for event in scanner_service.iter_vulnerability_scanner_events(files_dict):
             if event.get("event") == "error":
-                status_code = int(event.get("status_code") or status.HTTP_500_INTERNAL_SERVER_ERROR)
-                if status_code != status.HTTP_422_UNPROCESSABLE_ENTITY:
-                    duration = int(time.time() - start_time)
-                    create_failed_scan_record(
-                        supabase,
-                        current_user.id,
-                        project_id,
-                        {
-                            "project_name": project_name,
-                            "scan_type": "upload",
-                            "file_name": ", ".join(files_dict.keys())[:500],
-                            "duration_secs": duration,
-                        },
-                        event.get("message", "Scan failed"),
-                    )
+                mark_scan_failed(supabase, scan_id, event.get("message", "Scan failed"))
                 yield line(event)
                 return
             if event.get("event") == "scan_result":
                 final_result = event["result"]
                 duration = int(time.time() - start_time)
                 try:
-                    scan_data = {
-                        **final_result,
-                        "project_name": project_name,
-                        "scan_type": "upload",
-                        "file_name": ", ".join(files_dict.keys())[:500],
-                        "duration_secs": duration,
-                    }
-                    scan_id = create_scan_record(supabase, current_user.id, project_id, scan_data)
-                    save_vulnerabilities(supabase, scan_id, final_result["vulnerabilities"])
-                    save_report_artifact(supabase, current_user.id, scan_id, {**scan_data, **final_result}, final_result["vulnerabilities"])
+                    persisted = save_scan_success(
+                        supabase,
+                        current_user.id,
+                        project_id,
+                        scan_id,
+                        files_dict,
+                        final_result,
+                        duration,
+                    )
                     final_result["scan_id"] = scan_id
+                    final_result["scan_persistence"] = persisted
                 except Exception as exc:
                     print(f"[scans] Failed to save streamed scan to DB: {exc}")
+                    mark_scan_failed(supabase, scan_id, str(exc))
                     final_result["scan_id"] = None
                 yield line({"event": "scan_result", "result": final_result})
                 return
@@ -416,7 +398,7 @@ async def get_scan_history(
     """
     Returns all past scans for the current authenticated user.
     """
-    scans = get_scans_for_user(supabase, current_user.id)
+    scans = get_scans_for_user_new(supabase, current_user.id)
     return scans
 
 
@@ -428,7 +410,7 @@ async def delete_scan_history(
 ):
     """Delete one scan history row and its linked reports for the current user."""
     try:
-        delete_scan_for_user(supabase, scan_id, current_user.id)
+        delete_scan_for_user_new(supabase, scan_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -440,7 +422,7 @@ async def get_reports(
     supabase: Client = Depends(get_supabase),
 ):
     """Returns generated report metadata for the authenticated user."""
-    return list_reports_for_user(supabase, current_user.id)
+    return list_on_demand_reports(supabase, current_user.id)
 
 
 @router.post("/reports", response_model=list[dict])
@@ -463,7 +445,7 @@ async def generate_report(
         raise HTTPException(status_code=422, detail="Report format must be pdf, csv, or both.")
 
     try:
-        return create_manual_report(
+        return create_on_demand_report(
             supabase,
             current_user.id,
             project_id,
@@ -482,51 +464,15 @@ async def download_report(
     current_user=Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    """Download a stored report as its actual PDF/CSV file, not the internal ZIP."""
+    """Download an on-demand stored PDF/CSV report."""
     try:
-        report = get_report_for_user(supabase, report_id, current_user.id)
+        content, filename, media_type = download_on_demand_report(supabase, report_id, current_user.id, format)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-
-    storage_path = report.get("file_path")
-    report_format = format or report.get("format") or "pdf"
-    if format in {"pdf", "csv"}:
-        scan_id = report.get("scan_id")
-        if not scan_id:
-            raise HTTPException(status_code=404, detail="Report is not linked to a scan.")
-        try:
-            detail = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
-        if report_format == "csv":
-            source_files = detail.get("source_files") or []
-            if not source_files:
-                source_files = load_source_files_from_report_artifact(supabase, report.get("file_path"))
-            content = build_vulnerability_csv(
-                detail["scan"],
-                detail.get("vulnerabilities") or [],
-                source_files,
-            )
-            media_type = "text/csv; charset=utf-8"
-        else:
-            content = build_pdf_report(detail["scan"], detail.get("vulnerabilities") or [])
-            media_type = "application/pdf"
-        safe_name = f"secureguard-{report.get('name') or 'report'}-{report_id}.{report_format}".replace("/", "-").replace("\\", "-")
-        return Response(
-            content=content,
-            media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
-        )
-
-    if not storage_path:
-        raise HTTPException(status_code=404, detail="Report artifact is not available or has expired.")
-    content, filename, media_type = load_report_from_zip(supabase, storage_path, report_format)
-    extension = "csv" if report_format == "csv" else "pdf"
-    safe_name = f"secureguard-{report.get('name') or 'report'}-{report_id}.{extension}".replace("/", "-").replace("\\", "-")
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -538,12 +484,7 @@ async def download_report_code(
 ):
     """Download original scanned code and corrected code as a ZIP."""
     try:
-        report = get_report_for_user(supabase, report_id, current_user.id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    try:
-        content, filename = build_code_zip_for_report(supabase, report, current_user.id)
+        content, filename = download_corrected_code_zip(supabase, report_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -560,9 +501,9 @@ async def delete_report(
     current_user=Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    """Delete the report's linked scan so report, scan history, dashboard, and vulnerabilities stay synced."""
+    """Delete one generated report artifact for the current user."""
     try:
-        delete_report_scan_for_user(supabase, report_id, current_user.id)
+        delete_on_demand_report(supabase, report_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -578,7 +519,7 @@ async def get_scan_detail(
     Returns a single scan with its full vulnerability list.
     """
     try:
-        scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)
+        scan = get_scan_detail_new(supabase, scan_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return scan
@@ -591,13 +532,9 @@ async def get_scan_report_pdf(
     supabase: Client = Depends(get_supabase),
 ):
     try:
-        scan = get_scan_with_vulnerabilities(supabase, scan_id, current_user.id)["scan"]
+        pdf_bytes = build_scan_pdf_for_user(supabase, scan_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    storage_path = scan.get("report_storage_path")
-    if not storage_path:
-        raise HTTPException(status_code=404, detail="Report artifact is not available or has expired.")
-    pdf_bytes = load_pdf_from_zip(supabase, storage_path)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

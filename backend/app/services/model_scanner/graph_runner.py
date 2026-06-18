@@ -890,6 +890,7 @@ def iter_analysis_events(file_name: str, source_code: str):
 
         vulnerabilities: list[dict] = []
         chunk_outputs: list[dict] = []
+        corrected_chunks: list[str] = []
         seen = set()
         for chunk in chunks:
             yield {
@@ -923,9 +924,6 @@ def iter_analysis_events(file_name: str, source_code: str):
             }
             chunk_outputs.append(chunk_output)
             yield {"event": "chunk_result", "file_path": file_name, "chunk": chunk_output}
-
-        corrected_chunks: list[str] = []
-        for chunk_output, chunk in zip(chunk_outputs, chunks):
             yield {
                 "event": "correction_started",
                 "file_path": file_name,

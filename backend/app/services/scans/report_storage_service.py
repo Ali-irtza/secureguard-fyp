@@ -256,7 +256,7 @@ def _path_matches(candidate: str, target: str) -> bool:
 
 
 def _source_line_for_issue(issue: Dict, source_files: List[Dict]) -> str:
-    line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    line_number = int(issue.get("absolute_line") or issue.get("line_number") or 0)
     issue_path = str(issue.get("file_path") or "").strip()
     candidates: list[Dict] = []
     for source in source_files:
@@ -300,7 +300,7 @@ def _looks_like_non_code_value(value: str) -> bool:
 def _affected_code_for_issue(issue: Dict, chunks: List[Dict], source_files: List[Dict] | None = None) -> str:
     direct = str(issue.get("affected_code") or issue.get("code_snippet") or "").strip()
     file_path = issue.get("file_path") or ""
-    line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    line_number = int(issue.get("absolute_line") or issue.get("line_number") or 0)
     source_line = _source_line_for_issue(issue, source_files or [])
     if source_line.strip():
         return source_line
@@ -341,7 +341,7 @@ def _chunk_issues(chunk: Dict, vulnerabilities: List[Dict]) -> list[Dict]:
     matched: list[Dict] = []
     for issue in vulnerabilities:
         issue_file = issue.get("file_path") or ""
-        line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+        line_number = int(issue.get("absolute_line") or issue.get("line_number") or 0)
         same_file = not file_path or not issue_file or issue_file == file_path
         in_range = line_number <= 0 or line_number >= start_line and (not end_line or line_number <= end_line)
         if same_file and in_range:
@@ -391,7 +391,7 @@ def _issue_card(issue: Dict, chunk: Dict, index: int, styles: dict) -> list:
     severity = str(issue.get("severity") or "Medium").title()
     sev_bg, sev_text, sev_border = _severity_colors(severity)
     cwe = issue.get("cwe_id") or issue.get("cwe_name") or issue.get("type") or "CWE"
-    line_number = int(issue.get("line_number") or issue.get("absolute_line") or 0)
+    line_number = int(issue.get("absolute_line") or issue.get("line_number") or 0)
     affected_code = _affected_code_for_issue(issue, [chunk])
 
     badge = Table(
