@@ -9,6 +9,8 @@ class ProjectCreateRequest(BaseModel):
     language: Optional[str] = None
     type: Literal["personal", "team"] = "personal"
     team_id: Optional[str] = None
+    upload_type: Literal["upload", "github"] = "upload"
+    github_repo: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -28,6 +30,7 @@ class ProjectUpdateRequest(BaseModel):
     type: Optional[Literal["personal", "team"]] = None
     team_id: Optional[str] = None
     github_repo: Optional[str] = None
+    upload_type: Optional[Literal["upload", "github"]] = None
 
     @field_validator("name")
     @classmethod
@@ -52,6 +55,7 @@ class ProjectResponse(BaseModel):
     type: str
     owner_id: str
     team_id: Optional[str] = None
+    upload_type: Optional[str] = None
     github_repo: Optional[str] = None
     github_branches: List[str] = []
     created_at: datetime

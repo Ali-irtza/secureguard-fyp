@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -16,11 +16,15 @@ import {
   listProjects,
   createProject,
   deleteProject,
-  fetchProjectBranchFiles,
+  getPersonalGithubAuthorizeUrl,
+  listPersonalGithubRepos,
+  listPersonalGithubBranches,
+  fetchPersonalGithubFiles,
   triggerProjectScan,
+  type GitHubRepoSummary,
 } from "@/lib/projects-api";
-import { getTeam, listTeams } from "@/lib/teams-api";
-import type { Team as ApiTeam } from "@/lib/teams-api";
+import { listTeams } from "@/lib/teams-api";
+import type { Team as ApiTeam, BranchFileItem } from "@/lib/teams-api";
 import {
   listProjectFiles,
   listProjectSourceFiles,
@@ -73,6 +77,10 @@ import {
   Radar,
   Sparkles,
   Loader2,
+  Star,
+  GitFork,
+  Filter,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
@@ -106,6 +114,33 @@ const splitSourceLines = (source: string): string[] => {
 
 const ZIP_NO_SOURCE_MESSAGE =
   "This ZIP does not contain any C or C++ source files. Please upload a ZIP with .c, .cpp, .h, .hpp, .cc, .cxx, or .hxx files.";
+
+const SOURCE_EXTENSIONS = [".c", ".h", ".cpp", ".cxx", ".cc", ".hpp", ".hxx"];
+const C_EXTENSIONS = [".c", ".h"];
+const CPP_EXTENSIONS = [".cpp", ".cxx", ".cc", ".hpp", ".hxx"];
+
+const extensionOf = (filename: string): string => {
+  const dotIndex = filename.lastIndexOf(".");
+  return dotIndex === -1 ? "" : filename.slice(dotIndex).toLowerCase();
+};
+
+const isGithubSourcePath = (path: string): boolean => SOURCE_EXTENSIONS.includes(extensionOf(path));
+
+const githubLanguageLabel = (path: string): string => {
+  const ext = extensionOf(path);
+  if (C_EXTENSIONS.includes(ext)) return "C";
+  if (CPP_EXTENSIONS.includes(ext)) return "C++";
+  if (ext === ".md") return "Markdown";
+  if (ext === ".py") return "Python";
+  if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) return "JS";
+  return "Other";
+};
+
+const githubLanguageBadgeClass = (label: string): string => {
+  if (label === "C") return "bg-purple-500/20 text-purple-300 border-purple-500/30";
+  if (label === "C++") return "bg-pink-500/20 text-pink-300 border-pink-500/30";
+  return "bg-muted text-muted-foreground border-border/50";
+};
 
 const friendlyScanError = (message: string): string => {
   if (message.toLowerCase().includes("does not contain any c or c++ source files")) {
@@ -241,7 +276,6 @@ const NewScan = () => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [fileContent, setFileContent] = useState<string>("");
-  const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("main");
   
   // New state for team-aware scanning
@@ -267,6 +301,19 @@ const NewScan = () => {
   // Set of file IDs that are checked for scanning
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
   const [saveToProject, setSaveToProject] = useState<Record<number, boolean>>({});
+  const [githubInstallationId, setGithubInstallationId] = useState<number | null>(null);
+  const [githubRepos, setGithubRepos] = useState<GitHubRepoSummary[]>([]);
+  const [githubReposLoading, setGithubReposLoading] = useState(false);
+  const [githubReposError, setGithubReposError] = useState("");
+  const [selectedGithubRepoName, setSelectedGithubRepoName] = useState("");
+  const [githubBranches, setGithubBranches] = useState<string[]>([]);
+  const [githubBranchesLoading, setGithubBranchesLoading] = useState(false);
+  const [githubFiles, setGithubFiles] = useState<BranchFileItem[]>([]);
+  const [githubFilesLoading, setGithubFilesLoading] = useState(false);
+  const [githubFilesError, setGithubFilesError] = useState("");
+  const [githubFileSearch, setGithubFileSearch] = useState("");
+  const [githubFileFilter, setGithubFileFilter] = useState<"all" | "source">("all");
+  const [selectedGithubFiles, setSelectedGithubFiles] = useState<Set<string>>(new Set());
   // Per-uploaded-file "save to project" toggle: index → boolean
 
   // Fetch projects for the selector
@@ -283,14 +330,51 @@ const NewScan = () => {
 
   // The selected project object (if any)
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
+  const selectedGithubRepo = githubRepos.find((repo) => repo.full_name === selectedGithubRepoName) ?? null;
 
-  // If the selected project belongs to a team, fetch that team's GitHub info
-  const { data: projectTeam = null } = useQuery({
-    queryKey: ["team", selectedProject?.team_id],
-    queryFn: () => getTeam(selectedProject!.team_id!),
-    enabled: !!selectedProject?.team_id,
+  const githubSourceFiles = githubFiles.filter((file) => file.type === "file" && isGithubSourcePath(file.path));
+  const filteredGithubFiles = githubFiles.filter((file) => {
+    const matchesSearch = !githubFileSearch.trim() || file.path.toLowerCase().includes(githubFileSearch.trim().toLowerCase());
+    const matchesFilter = githubFileFilter === "all" || isGithubSourcePath(file.path);
+    return matchesSearch && matchesFilter;
   });
 
+  const selectedGithubLanguage: "C" | "C++" | "C, C++" | null = (() => {
+    const selected = githubFiles.filter((file) => selectedGithubFiles.has(file.path));
+    const hasC = selected.some((file) => C_EXTENSIONS.includes(extensionOf(file.path)));
+    const hasCpp = selected.some((file) => CPP_EXTENSIONS.includes(extensionOf(file.path)));
+    if (hasC && hasCpp) return "C, C++";
+    if (hasCpp) return "C++";
+    if (hasC) return "C";
+    return null;
+  })();
+
+  const loadGithubRepos = useCallback(async (installationId: number) => {
+    setGithubReposLoading(true);
+    setGithubReposError("");
+    try {
+      const repos = await listPersonalGithubRepos(installationId);
+      setGithubRepos(repos);
+      if (!selectedGithubRepoName && repos.length > 0) {
+        setSelectedGithubRepoName(repos[0].full_name);
+      }
+    } catch (err: any) {
+      setGithubReposError(err.message || "Failed to load GitHub repositories");
+    } finally {
+      setGithubReposLoading(false);
+    }
+  }, [selectedGithubRepoName]);
+
+  const handleConnectGithub = async () => {
+    try {
+      const url = await getPersonalGithubAuthorizeUrl();
+      window.location.href = url;
+    } catch (err: any) {
+      toast.error("Failed to start GitHub connection", { description: err.message || "Please try again." });
+    }
+  };
+
+  // If the selected project belongs to a team, fetch that team's GitHub info
   // ── Fetch project files whenever a real project is selected ──────────────
   const fetchProjectFiles = useCallback(async (projectId: string) => {
     if (!projectId || projectId === "__new__") return;
@@ -317,6 +401,97 @@ const NewScan = () => {
       setSelectedFileIds(new Set());
     }
   }, [selectedProjectId, fetchProjectFiles]);
+
+  useEffect(() => {
+    const installationFromUrl = searchParams.get("github_installation_id");
+    const storedInstallation = window.sessionStorage.getItem("secureguard_personal_github_installation_id");
+    const rawInstallation = installationFromUrl || storedInstallation;
+    const parsedInstallation = rawInstallation ? Number(rawInstallation) : NaN;
+    if (Number.isFinite(parsedInstallation) && parsedInstallation > 0) {
+      setGithubInstallationId(parsedInstallation);
+      window.sessionStorage.setItem("secureguard_personal_github_installation_id", String(parsedInstallation));
+      setActiveTab("github");
+      if (installationFromUrl) {
+        toast.success("GitHub connected", {
+          description: "Select a repository, branch, and files to scan.",
+        });
+      }
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const githubError = searchParams.get("github_error");
+    if (!githubError) return;
+    setActiveTab("github");
+    toast.error("GitHub connection failed", {
+      description: githubError === "no_installation"
+        ? "SecureGuard Pro could not find an installed GitHub App for this account."
+        : "Please try connecting GitHub again.",
+    });
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!githubInstallationId) return;
+    loadGithubRepos(githubInstallationId);
+  }, [githubInstallationId, loadGithubRepos]);
+
+  useEffect(() => {
+    if (!githubInstallationId || !selectedGithubRepo) {
+      setGithubBranches([]);
+      setGithubFiles([]);
+      setSelectedGithubFiles(new Set());
+      return;
+    }
+    let cancelled = false;
+    setGithubBranchesLoading(true);
+    listPersonalGithubBranches(githubInstallationId, selectedGithubRepo.full_name)
+      .then((branches) => {
+        if (cancelled) return;
+        setGithubBranches(branches);
+        const nextBranch = branches.includes(selectedGithubRepo.default_branch || "")
+          ? selectedGithubRepo.default_branch!
+          : branches[0] || "main";
+        setBranch(nextBranch);
+      })
+      .catch((err: any) => {
+        if (!cancelled) toast.error("Failed to load branches", { description: err.message || "Please try again." });
+      })
+      .finally(() => {
+        if (!cancelled) setGithubBranchesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [githubInstallationId, selectedGithubRepo]);
+
+  useEffect(() => {
+    if (!githubInstallationId || !selectedGithubRepo || !branch) return;
+    let cancelled = false;
+    setGithubFilesLoading(true);
+    setGithubFilesError("");
+    fetchPersonalGithubFiles(githubInstallationId, selectedGithubRepo.full_name, branch)
+      .then((response) => {
+        if (cancelled) return;
+        setGithubFiles(response.files);
+        const sourcePaths = response.files
+          .filter((file) => file.type === "file" && isGithubSourcePath(file.path))
+          .map((file) => file.path);
+        setSelectedGithubFiles(new Set(sourcePaths));
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setGithubFilesError(err.message || "Failed to load GitHub files");
+          setGithubFiles([]);
+          setSelectedGithubFiles(new Set());
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGithubFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [githubInstallationId, selectedGithubRepo, branch]);
 
   useEffect(() => {
     const rescanProjectId = searchParams.get("projectId");
@@ -354,7 +529,9 @@ const NewScan = () => {
       const created = await createProject({
         name: trimmedName,
         type: "personal",
-        language: detectedProjectLanguage ?? undefined,
+        language: activeTab === "github" ? selectedGithubLanguage ?? undefined : detectedProjectLanguage ?? undefined,
+        upload_type: activeTab === "github" ? "github" : "upload",
+        github_repo: activeTab === "github" ? selectedGithubRepo?.url : undefined,
       });
       setSelectedProjectId(created.id);
       setSelectedProjectName(created.name);
@@ -835,7 +1012,9 @@ const NewScan = () => {
         const created = await createProject({
           name: trimmedName,
           type: scanMode,
-          language: detectedProjectLanguage ?? undefined,
+          language: activeTab === "github" ? selectedGithubLanguage ?? undefined : detectedProjectLanguage ?? undefined,
+          upload_type: activeTab === "github" ? "github" : "upload",
+          github_repo: activeTab === "github" ? selectedGithubRepo?.url : undefined,
           team_id: scanMode === "team" ? selectedTeamId : undefined,
         });
         resolvedProjectId = created.id;
@@ -1041,7 +1220,7 @@ const NewScan = () => {
     }
 
     // ── GITHUB MODE — personal project with directly-connected repo ─────────
-    if (activeTab === "github" && !isTeamMode && selectedProject?.github_repo) {
+    if (activeTab === "github" && !isTeamMode) {
       const startTime = Date.now();
       const timerInterval = setInterval(() => {
         setStats(prev => ({ ...prev, elapsedTime: Math.floor((Date.now() - startTime) / 1000) }));
@@ -1052,25 +1231,26 @@ const NewScan = () => {
       sourceLineCountsRef.current = {};
 
       try {
+        if (!githubInstallationId || !selectedGithubRepo) {
+          throw new Error("Connect GitHub and select a repository first.");
+        }
+        const files = Array.from(selectedGithubFiles);
+        if (files.length === 0) {
+          throw new Error("Select at least one C or C++ file from GitHub.");
+        }
         globalScanActivityId = startGlobalScanActivity({
-          title: resolvedProjectName || selectedProject?.name || "GitHub scan",
-          detail: `Fetching source files from ${branch}. You can move around SecureGuard while analysis continues.`,
+          title: resolvedProjectName || selectedGithubRepo.full_name || "GitHub scan",
+          detail: `Fetching ${files.length} GitHub file${files.length === 1 ? "" : "s"} from ${branch}. You can keep working while analysis runs.`,
         });
         addLog("Preparing source package...", "info");
         setCurrentPhase(1);
 
-        addLog(`Fetching files from branch: ${branch}...`, "info");
-        const filesResponse = await fetchProjectBranchFiles(resolvedProjectId, branch);
-        // Filter to C/C++ files only (mirrors team scan behaviour)
-        const C_CPP_EXTS = [".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"];
-        const files = filesResponse.files
-          .filter((f) => f.type === "file" && C_CPP_EXTS.some((ext) => f.path.toLowerCase().endsWith(ext)))
-          .map((f) => f.path);
+        addLog(`Fetching selected files from ${selectedGithubRepo.full_name}:${branch}...`, "info");
         setBranchFiles(files);
         updateGlobalScanActivity(globalScanActivityId, {
-          detail: `Reviewing ${files.length} C/C++ file${files.length === 1 ? "" : "s"} from ${branch}. The report will appear in Reports.`,
+          detail: `Reviewing ${files.length} selected GitHub file${files.length === 1 ? "" : "s"} from ${branch}. The report will appear in Reports.`,
         });
-        addLog(`Found ${files.length} C/C++ file${files.length === 1 ? "" : "s"}`, "success");
+        addLog(`Selected ${files.length} GitHub file${files.length === 1 ? "" : "s"}`, "success");
 
         setCurrentPhase(2);
         addLog("Reviewing files for vulnerabilities...", "info");
@@ -1083,6 +1263,8 @@ const NewScan = () => {
           {
             project_id: resolvedProjectId ?? "",
             project_name: resolvedProjectName ?? "",
+            installation_id: githubInstallationId,
+            repo_full_name: selectedGithubRepo.full_name,
           }
         );
 
@@ -1108,12 +1290,12 @@ const NewScan = () => {
         addLog("Assembling report...", "info");
         await new Promise(r => setTimeout(r, 500));
         setCurrentPhase(5);
-        notifyScanFinished(resolvedProjectName || selectedProject?.name || "Security scan", result);
+        notifyScanFinished(resolvedProjectName || selectedGithubRepo.full_name || "Security scan", result);
         completeGlobalScanActivity(globalScanActivityId, {
           scanId: result.scan_id,
           issueCount: result.total_vulnerabilities,
           riskLevel: result.overall_risk_level,
-          title: resolvedProjectName || selectedProject?.name || "GitHub scan",
+          title: resolvedProjectName || selectedGithubRepo.full_name || "GitHub scan",
         });
         addLog(`Found ${result.total_vulnerabilities} vulnerabilities — Risk: ${result.overall_risk_level}`, result.total_vulnerabilities > 0 ? "warning" : "success");
         addLog("Scan complete!", "success");
@@ -1138,9 +1320,7 @@ const NewScan = () => {
     // ── GITHUB MODE — team project ───────────────────────────────────────────
     // Team mode uses the selected team directly; personal mode uses the
     // project's team if it has one.
-    const effectiveTeamId = isTeamMode
-      ? selectedTeamId
-      : (projectTeam?.id ?? "");
+    const effectiveTeamId = isTeamMode ? selectedTeamId : "";
 
     if (activeTab === "github" && effectiveTeamId) {
       const startTime = Date.now();
@@ -1328,7 +1508,6 @@ const NewScan = () => {
     setCodeLines([]);
     setUploadedFiles([]);
     setFileContent("");
-    setRepoUrl("");
     setProjectName("");
     setSelectedProjectId("");
     setSelectedProjectName("");
@@ -1344,6 +1523,12 @@ const NewScan = () => {
     setProjectFiles([]);
     setSelectedFileIds(new Set());
     setSaveToProject({});
+    setSelectedGithubRepoName("");
+    setGithubBranches([]);
+    setGithubFiles([]);
+    setGithubFileSearch("");
+    setGithubFileFilter("all");
+    setSelectedGithubFiles(new Set());
     setStats({
       linesScanned: 0,
       totalLines: 0,
@@ -1352,13 +1537,9 @@ const NewScan = () => {
     });
   };
 
-  // For GitHub tab: valid when there's a team with a connected repo + branch selected,
-  // or a personal project with a directly-connected github_repo + branch selected.
   const githubReady = isTeamMode
     ? !!(selectedApiTeam?.github_repo && branch)
-    : selectedProject?.team_id
-      ? !!(projectTeam?.github_repo && branch)
-      : !!(selectedProject?.github_repo && branch);
+    : !!(githubInstallationId && selectedGithubRepo && branch && selectedGithubFiles.size > 0);
 
   // Resolve the effective project name for validation
   const effectiveProjectName = selectedProjectId === "__new__"
@@ -1382,17 +1563,237 @@ const NewScan = () => {
     (isTeamMode
       ? !!(selectedTeamId && canScanInTeam) && (activeTab === "upload" ? uploadedFiles.length > 0 : githubReady)
       : activeTab === "github"
-        // GitHub tab (personal): need a real project with a connected repo + branch
-        ? !!(selectedProjectId && selectedProjectId !== "__new__" && githubReady)
-        // Upload tab (personal): need a name + files
+        ? effectiveProjectName !== "" && githubReady
         : effectiveProjectName !== "" && hasFilesToScan
     );
 
-  const queuedFileCount = branchFiles.length || uploadedFiles.length || selectedFileIds.size;
+  const queuedFileCount = activeTab === "github" ? selectedGithubFiles.size : branchFiles.length || uploadedFiles.length || selectedFileIds.size;
   const isUploadScan = activeTab === "upload";
 
   // Determine GitHub tab behavior based on selected project / team mode
   const renderGitHubTab = () => {
+    if (!isTeamMode) {
+      const selectedSourceCount = selectedGithubFiles.size;
+      const allVisibleSourceSelected = githubSourceFiles.length > 0 && githubSourceFiles.every((file) => selectedGithubFiles.has(file.path));
+      const githubSteps = [
+        { number: "1", label: "Connect GitHub", active: !githubInstallationId, done: !!githubInstallationId },
+        { number: "2", label: "Select Repository", active: !!githubInstallationId && !selectedGithubRepo, done: !!selectedGithubRepo },
+        { number: "3", label: "Select Files", active: !!selectedGithubRepo, done: selectedSourceCount > 0 },
+      ];
+
+      return (
+        <CardContent className="pt-6 space-y-6">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Github className="h-6 w-6" />
+              <h3 className="text-xl font-semibold">Import from GitHub</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Connect your GitHub account, select a repository, and choose C/C++ files to scan.
+            </p>
+          </div>
+
+          <div className="border-t border-border/60 pt-5">
+            <div className="flex items-center gap-4">
+              {githubSteps.map((step, index) => (
+                <Fragment key={step.number}>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <span
+                      className={cn(
+                        "grid h-8 w-8 place-items-center rounded-full text-sm font-semibold",
+                        step.done || step.active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      {step.number}
+                    </span>
+                    <span className="text-sm font-medium">{step.label}</span>
+                  </div>
+                  {index < githubSteps.length - 1 && <span className="h-px flex-1 bg-border" />}
+                </Fragment>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border/50 bg-muted/15 p-5 text-center">
+            <p className="mb-4 text-sm text-muted-foreground">
+              {githubInstallationId ? "GitHub is connected. Refresh repositories if you changed app access." : "Connect your GitHub account to import repositories."}
+            </p>
+            <Button className="min-w-64 gap-2" onClick={handleConnectGithub}>
+              <Github className="h-4 w-4" />
+              {githubInstallationId ? "Reconnect GitHub" : "Connect GitHub"}
+            </Button>
+            <div className="mt-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              <Lock className="h-3.5 w-3.5 text-amber-400" />
+              We never store your GitHub credentials.
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border/50 bg-muted/10 p-5">
+            <div className="grid gap-4 md:grid-cols-[1fr_1fr]">
+              <div className="space-y-2">
+                <Label>Repository *</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={selectedGithubRepoName}
+                    onValueChange={setSelectedGithubRepoName}
+                    disabled={!githubInstallationId || githubReposLoading}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={githubReposLoading ? "Loading repositories..." : "Select a repository"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {githubRepos.map((repo) => (
+                        <SelectItem key={repo.full_name} value={repo.full_name}>
+                          {repo.full_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => githubInstallationId && loadGithubRepos(githubInstallationId)}
+                    disabled={!githubInstallationId || githubReposLoading}
+                  >
+                    <RefreshCw className={cn("h-4 w-4", githubReposLoading && "animate-spin")} />
+                  </Button>
+                </div>
+                {githubReposError && <p className="text-xs text-destructive">{githubReposError}</p>}
+              </div>
+
+              <div className="space-y-2">
+                <Label>Branch</Label>
+                <Select value={branch} onValueChange={setBranch} disabled={!selectedGithubRepo || githubBranchesLoading}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={githubBranchesLoading ? "Loading branches..." : "Select branch"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {githubBranches.map((branchName) => (
+                      <SelectItem key={branchName} value={branchName}>
+                        {branchName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {selectedGithubRepo && (
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold">{selectedGithubRepo.full_name.split("/")[1]}</p>
+                    <Badge variant="outline">{selectedGithubRepo.private ? "Private" : "Public"}</Badge>
+                  </div>
+                  <a href={selectedGithubRepo.url} target="_blank" rel="noreferrer" className="text-sm text-muted-foreground hover:text-primary">
+                    {selectedGithubRepo.url}
+                  </a>
+                </div>
+                <div className="flex gap-2">
+                  <Badge variant="secondary" className="gap-1"><GitFork className="h-3.5 w-3.5" />{branch}</Badge>
+                  <Badge variant="secondary" className="gap-1"><Star className="h-3.5 w-3.5" />{selectedGithubRepo.stars ?? 0}</Badge>
+                  <Badge variant="secondary" className="gap-1"><GitFork className="h-3.5 w-3.5" />{selectedGithubRepo.forks ?? 0}</Badge>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-border/50 bg-muted/10 p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="font-medium">Select files to scan</h4>
+                <p className="text-xs text-muted-foreground">Only C and C++ files are selectable for analysis.</p>
+              </div>
+              {githubFilesLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+            </div>
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="relative max-w-md flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={githubFileSearch}
+                  onChange={(event) => setGithubFileSearch(event.target.value)}
+                  placeholder="Search files..."
+                  className="pl-9"
+                />
+              </div>
+              <Select value={githubFileFilter} onValueChange={(value: "all" | "source") => setGithubFileFilter(value)}>
+                <SelectTrigger className="w-44">
+                  <Filter className="mr-2 h-4 w-4" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Filter: All Files</SelectItem>
+                  <SelectItem value="source">Filter: C/C++</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {githubFilesError && <p className="mb-3 text-sm text-destructive">{githubFilesError}</p>}
+
+            <div className="overflow-hidden rounded-md border border-border/60">
+              <div className="grid grid-cols-[44px_1fr_120px] items-center bg-muted/30 px-3 py-2 text-xs font-medium text-muted-foreground">
+                <Checkbox
+                  checked={allVisibleSourceSelected}
+                  onCheckedChange={(checked) => {
+                    setSelectedGithubFiles(checked ? new Set(githubSourceFiles.map((file) => file.path)) : new Set());
+                  }}
+                  disabled={githubSourceFiles.length === 0}
+                />
+                <span>File Name</span>
+                <span>Language</span>
+              </div>
+              <div className="max-h-72 overflow-auto">
+                {filteredGithubFiles.length === 0 ? (
+                  <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                    {githubFilesLoading ? "Loading files..." : "No files found."}
+                  </div>
+                ) : (
+                  filteredGithubFiles.map((file) => {
+                    const isSource = isGithubSourcePath(file.path);
+                    const language = githubLanguageLabel(file.path);
+                    return (
+                      <div
+                        key={file.path}
+                        className={cn(
+                          "grid grid-cols-[44px_1fr_120px] items-center border-t border-border/50 px-3 py-2 text-sm",
+                          !isSource && "opacity-45"
+                        )}
+                      >
+                        <Checkbox
+                          checked={selectedGithubFiles.has(file.path)}
+                          disabled={!isSource}
+                          onCheckedChange={(checked) => {
+                            setSelectedGithubFiles((prev) => {
+                              const next = new Set(prev);
+                              if (checked) next.add(file.path);
+                              else next.delete(file.path);
+                              return next;
+                            });
+                          }}
+                        />
+                        <div className="flex min-w-0 items-center gap-2">
+                          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <span className="truncate font-medium">{file.path}</span>
+                        </div>
+                        <Badge variant="outline" className={cn("w-fit", githubLanguageBadgeClass(language))}>
+                          {language}
+                        </Badge>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              <div className="flex items-center justify-between border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                <span>{selectedSourceCount} file{selectedSourceCount === 1 ? "" : "s"} selected</span>
+                <span>Showing {filteredGithubFiles.length} of {githubFiles.length} files</span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      );
+    }
+
     // ── Team mode: use the selected team's connected repo ───────────────────
     if (isTeamMode && selectedApiTeam) {
       if (!selectedApiTeam.github_repo) {
@@ -1448,183 +1849,13 @@ const NewScan = () => {
       );
     }
 
-    // ── Personal mode: project with a connected team repo ───────────────────
-    if (selectedProject?.team_id) {
-      if (!projectTeam) {
-        return (
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Loading repository info...</p>
-          </CardContent>
-        );
-      }
-
-      if (!projectTeam.github_repo) {
-        return (
-          <CardContent className="pt-6">
-            <div className="flex flex-col items-center gap-4 py-8">
-              <Info className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground text-center">
-                No repository connected to this project's team.
-              </p>
-              <p className="text-xs text-muted-foreground text-center">
-                Ask a team admin to connect a GitHub repository first.
-              </p>
-            </div>
-          </CardContent>
-        );
-      }
-
-      return (
-        <CardContent className="pt-6 space-y-6">
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Repository</Label>
-            <div className="relative">
-              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                value={projectTeam.github_repo}
-                readOnly
-                className="pl-10 pr-10 opacity-75 bg-muted/30"
-              />
-              <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Connected repository for <span className="font-medium">{selectedProject.name}</span>
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="branch" className="text-sm font-medium">Branch</Label>
-            {projectTeam.github_branches.length > 0 ? (
-              <Select value={branch} onValueChange={setBranch}>
-                <SelectTrigger id="branch">
-                  <SelectValue placeholder="Select a branch" />
-                </SelectTrigger>
-                <SelectContent>
-                  {projectTeam.github_branches.map((b) => (
-                    <SelectItem key={b} value={b}>{b}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                No branches found. Try syncing the repository from team settings.
-              </p>
-            )}
-          </div>
-        </CardContent>
-      );
-    }
-
-    // ── Personal project with directly-connected GitHub repo ────────────────
-    if (!isTeamMode && selectedProject && !selectedProject.team_id) {
-      // Project has no GitHub repo connected
-      if (!selectedProject.github_repo) {
-        return (
-          <CardContent className="pt-6">
-            <div className="flex flex-col items-center gap-4 py-8">
-              <Github className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground text-center">
-                No GitHub repository connected to{" "}
-                <span className="font-medium">{selectedProject.name}</span>.
-              </p>
-              <p className="text-xs text-muted-foreground text-center">
-                Connect a repository from the project settings page, then come back to scan.
-              </p>
-            </div>
-          </CardContent>
-        );
-      }
-
-      // Project has a connected repo — show read-only repo + branch selector
-      return (
-        <CardContent className="pt-6 space-y-6">
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Repository</Label>
-            <div className="relative">
-              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                value={selectedProject.github_repo}
-                readOnly
-                className="pl-10 pr-10 opacity-75 bg-muted/30"
-              />
-              <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Connected repository for{" "}
-              <span className="font-medium">{selectedProject.name}</span>
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="branch" className="text-sm font-medium">Branch</Label>
-            {selectedProject.github_branches.length > 0 ? (
-              <Select value={branch} onValueChange={setBranch}>
-                <SelectTrigger id="branch">
-                  <SelectValue placeholder="Select a branch" />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedProject.github_branches.map((b) => (
-                    <SelectItem key={b} value={b}>{b}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                No branches found. Try refreshing the repository from project settings.
-              </p>
-            )}
-          </div>
-        </CardContent>
-      );
-    }
-
-    // ── Personal project or no project selected — free-text entry ───────────
-    const noProject = !selectedProjectId || selectedProjectId === "__new__";
     return (
-      <CardContent className="pt-6 space-y-6">
-        {noProject && (
-          <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
-            <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-            <p className="text-xs text-muted-foreground">
-              Select a team project above to auto-fill the connected repository and branches.
-            </p>
-          </div>
-        )}
-        <div className="space-y-2">
-          <Label
-            htmlFor="repo-url"
-            className={cn("text-sm font-medium", noProject && "opacity-40")}
-          >
-            Repository URL
-          </Label>
-          <div className="relative">
-            <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              id="repo-url"
-              placeholder="https://github.com/username/repository"
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              disabled={noProject}
-              className="pl-10"
-            />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <Label
-            htmlFor="branch"
-            className={cn("text-sm font-medium", noProject && "opacity-40")}
-          >
-            Branch
-          </Label>
-          <Select value={branch} onValueChange={setBranch} disabled={noProject}>
-            <SelectTrigger id="branch">
-              <SelectValue placeholder="Select branch" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="main">main</SelectItem>
-              <SelectItem value="master">master</SelectItem>
-              <SelectItem value="develop">develop</SelectItem>
-              <SelectItem value="staging">staging</SelectItem>
-            </SelectContent>
-          </Select>
+      <CardContent className="pt-6">
+        <div className="flex flex-col items-center gap-4 py-8">
+          <Info className="h-8 w-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground text-center">
+            Select a team before importing from GitHub in team scan mode.
+          </p>
         </div>
       </CardContent>
     );

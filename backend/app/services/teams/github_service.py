@@ -215,8 +215,20 @@ async def sync_branches(team_id: str, user_id: str, supabase: Client) -> TeamRes
 async def refresh_branches(team_id: str, repo_url: str, pat: str, user_id: str, supabase: Client) -> TeamResponse:
     return await connect_github_repo(team_id, repo_url, pat, user_id, supabase)
 
-async def process_github_callback(installation_id: int | None, state: str | None, supabase: Client) -> RedirectResponse:
+async def process_github_callback(installation_id: int | None, state: str | None, supabase: Client, code: str | None = None) -> RedirectResponse:
     frontend_team_url = _frontend_team_url()
+    if state == "personal-github-import":
+        resolved_installation_id = installation_id
+        if not resolved_installation_id and code:
+            from app.services.projects.project_github_service import resolve_personal_installation_id_from_oauth_code
+
+            resolved_installation_id = await resolve_personal_installation_id_from_oauth_code(code)
+        if resolved_installation_id:
+            return RedirectResponse(
+                f"{settings.frontend_base_url.rstrip('/')}/new-scan"
+                f"?github_connected=true&github_installation_id={resolved_installation_id}"
+            )
+        return RedirectResponse(f"{settings.frontend_base_url.rstrip('/')}/new-scan?github_error=no_installation")
 
     if not state or not installation_id:
         return RedirectResponse(f"{frontend_team_url}?github_error=missing_params")

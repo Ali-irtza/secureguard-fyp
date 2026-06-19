@@ -22,11 +22,11 @@ from app.models.projects import (
 from app.models.scans import ScanRequest, ScanResponse
 from app.models.teams import ConnectGithubRequest, BranchFilesResponse, FileContentResponse, GithubAuthorizeResponse
 from app.services.projects import project_service, project_github_service
-from app.services.scans.scan_storage_service import (
-    create_scan_record,
-    create_failed_scan_record,
-    save_vulnerabilities,
-    save_report_artifact,
+from app.services.project_files.file_service import save_github_source_metadata
+from app.services.scans.personal_scan_persistence_service import (
+    create_scan_started,
+    mark_scan_failed,
+    save_scan_success,
 )
 from app.services.scans import scanner_service
 
@@ -78,8 +78,40 @@ async def github_callback(
     Routes project callback based on the state prefix "project:…".
     """
     return await project_github_service.process_github_callback(
-        installation_id, state, supabase
+        installation_id, state, supabase, code
     )
+
+
+@router.get("/github/personal/authorize", response_model=GithubAuthorizeResponse)
+async def personal_github_authorize():
+    return project_github_service.generate_personal_github_authorize_url()
+
+
+@router.get("/github/personal/repos")
+async def personal_github_repos(
+    installation_id: int = Query(...),
+    current_user=Depends(get_current_user),
+):
+    return await project_github_service.list_runtime_repos(installation_id)
+
+
+@router.get("/github/personal/branches")
+async def personal_github_branches(
+    installation_id: int = Query(...),
+    repo: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    return await project_github_service.list_runtime_branches(installation_id, repo)
+
+
+@router.get("/github/personal/files", response_model=BranchFilesResponse)
+async def personal_github_files(
+    installation_id: int = Query(...),
+    repo: str = Query(...),
+    branch: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    return await project_github_service.list_runtime_files(installation_id, repo, branch)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -277,13 +309,33 @@ async def start_project_scan(
 ):
     """
     Fetch selected files from GitHub and run the vulnerability scanner.
-    Prefers the stored installation token (no PAT needed after OAuth connect).
-    Falls back to PAT if supplied.
     """
     start_time = time.time()
+    scan_id = None
 
-    # Prefer installation token; fall back to PAT if supplied
-    if pat:
+    if body.installation_id and body.repo_full_name:
+        files_dict = await project_github_service.fetch_selected_code_runtime(
+            body.installation_id,
+            body.repo_full_name,
+            body.branch,
+            body.selected_files,
+        )
+        repo_url = f"https://github.com/{body.repo_full_name}"
+        project_service.update_project(
+            project_id,
+            ProjectUpdateRequest(github_repo=repo_url, upload_type="github"),
+            current_user.id,
+            supabase,
+        )
+        save_github_source_metadata(
+            project_id,
+            current_user.id,
+            body.repo_full_name,
+            body.branch,
+            files_dict,
+            supabase,
+        )
+    elif pat:
         files_dict = await project_github_service.fetch_selected_code_with_pat(
             project_id,
             body.branch,
@@ -301,46 +353,31 @@ async def start_project_scan(
             supabase,
         )
 
-    # Run the scanner (same pipeline used by team scans)
+    scan_id = create_scan_started(
+        supabase,
+        current_user.id,
+        project_id,
+        files_dict,
+        "github",
+    )
+
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
     except Exception as exc:
-        duration = int(time.time() - start_time)
-        create_failed_scan_record(
-            supabase,
-            current_user.id,
-            project_id,
-            {
-                "project_name": body.project_name,
-                "scan_type":    "github",
-                "branch":       body.branch,
-                "duration_secs": duration,
-            },
-            str(exc),
-        )
+        if scan_id:
+            mark_scan_failed(supabase, scan_id, str(exc))
         raise
 
     duration = int(time.time() - start_time)
-
-    # Persist scan results
-    try:
-        scan_data = {
-            **result,
-            "project_name":  body.project_name,
-            "scan_type":     "github",
-            "branch":        body.branch,
-            "duration_secs": duration,
-        }
-        scan_id = create_scan_record(supabase, current_user.id, project_id, scan_data)
-        save_vulnerabilities(supabase, scan_id, result["vulnerabilities"])
-        save_report_artifact(
-            supabase, current_user.id, scan_id,
-            {**scan_data, **result},
-            result["vulnerabilities"],
-        )
-        result["scan_id"] = scan_id
-    except Exception as exc:
-        print(f"[projects/scans] Failed to save scan to DB: {exc}")
-        result["scan_id"] = None
+    persistence = save_scan_success(
+        supabase,
+        current_user.id,
+        project_id,
+        scan_id,
+        files_dict,
+        result,
+        duration,
+    )
+    result["scan_id"] = persistence["scan_id"]
 
     return ScanResponse(**result)

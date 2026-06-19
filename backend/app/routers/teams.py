@@ -107,7 +107,7 @@ async def github_callback(
     code: str | None = None,
     supabase: Client = Depends(get_supabase),
 ):
-    return await github_service.process_github_callback(installation_id, state, supabase)
+    return await github_service.process_github_callback(installation_id, state, supabase, code)
 
 @router.get("/{team_id}/github/authorize", response_model=GithubAuthorizeResponse)
 async def github_authorize(

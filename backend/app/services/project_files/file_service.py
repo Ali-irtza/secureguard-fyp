@@ -122,6 +122,8 @@ def _find_active_duplicate(
 
 
 def _make_signed_url(storage_path: str, supabase: Client) -> str:
+    if storage_path.startswith("github://"):
+        return ""
     signed = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
         storage_path,
         SIGNED_URL_EXPIRY_SECONDS,
@@ -157,7 +159,7 @@ def _row_to_response(row: dict, supabase: Client) -> ProjectFileResponse:
         url=_make_signed_url(row["file_path"], supabase),
         uploaded_at=uploaded_at,
         uploaded_by=row.get("uploaded_by"),
-        source=FILE_SOURCE_LOCAL,
+        source="github" if str(row.get("file_path") or "").startswith("github://") else FILE_SOURCE_LOCAL,
         github_branch=row.get("github_branch"),
     )
 
@@ -342,6 +344,57 @@ def save_scanned_sources_zip(
             )
         )
         languages.add(_language_from_filename(relative_path))
+    _update_project_language(project, languages, supabase)
+    return rows
+
+
+def save_github_source_metadata(
+    project_id: str,
+    user_id: str,
+    repo_full_name: str,
+    branch: str,
+    files_dict: dict[str, str],
+    supabase: Client,
+) -> list[dict]:
+    if not files_dict:
+        return []
+    project = _require_project(project_id, user_id, supabase)
+    rows: list[dict] = []
+    languages: set[str] = set()
+
+    for file_path, source_code in files_dict.items():
+        relative_path = _safe_relative_path(file_path)
+        digest = hashlib.sha256(source_code.encode("utf-8")).hexdigest()
+        duplicate = _find_active_duplicate(project_id, user_id, relative_path, digest, supabase)
+        if duplicate:
+            rows.append(duplicate)
+        else:
+            github_path = f"github://{repo_full_name}/{branch}/{relative_path}"
+            inserted = (
+                supabase.table("project_files")
+                .insert(
+                    {
+                        "project_id": project_id,
+                        "uploaded_by": user_id,
+                        "file_names": relative_path,
+                        "file_path": github_path,
+                        "file_size": len(source_code.encode("utf-8")),
+                        "content_type": "text/plain; charset=utf-8",
+                        "github_branch": branch,
+                        "sha256": digest,
+                        "is_active": True,
+                    }
+                )
+                .execute()
+            )
+            if not inserted.data:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to save GitHub file metadata.",
+                )
+            rows.append(inserted.data[0])
+        languages.add(_language_from_filename(relative_path))
+
     _update_project_language(project, languages, supabase)
     return rows
 

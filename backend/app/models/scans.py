@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 
 class BranchFilesResponse(BaseModel):
     """
@@ -17,6 +17,8 @@ class ScanRequest(BaseModel):
     selected_files: List[str] = Field(..., description="List of file paths selected by the user to scan.")
     project_id: str = Field(..., description="Project ID this scan belongs to")
     project_name: str = Field(default="", description="Display name for the project")
+    installation_id: Optional[int] = None
+    repo_full_name: Optional[str] = None
 
 class UploadScanRequest(BaseModel):
     """Request model for POST /scan/upload — direct source code submission."""

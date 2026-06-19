@@ -23,6 +23,7 @@ import base64
 import io
 import secrets
 import zipfile
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import HTTPException, status
@@ -226,6 +227,7 @@ async def process_github_callback(
     installation_id: int | None,
     state: str | None,
     supabase: Client,
+    code: str | None = None,
 ) -> RedirectResponse:
     """
     Step 2 of the OAuth flow — GitHub redirects here after the user installs
@@ -234,7 +236,21 @@ async def process_github_callback(
     """
     frontend_project_base_url = _frontend_project_base_url()
 
-    if not state or not installation_id:
+    if not state:
+        return RedirectResponse(f"{frontend_project_base_url}?github_error=missing_params")
+
+    if state == "personal-github-import":
+        resolved_installation_id = installation_id
+        if not resolved_installation_id and code:
+            resolved_installation_id = await resolve_personal_installation_id_from_oauth_code(code)
+        if resolved_installation_id:
+            return RedirectResponse(
+                f"{settings.frontend_base_url.rstrip('/')}/new-scan"
+                f"?github_connected=true&github_installation_id={resolved_installation_id}"
+            )
+        return RedirectResponse(f"{settings.frontend_base_url.rstrip('/')}/new-scan?github_error=no_installation")
+
+    if not installation_id:
         return RedirectResponse(f"{frontend_project_base_url}?github_error=missing_params")
 
     try:
@@ -945,4 +961,207 @@ async def fetch_selected_code_oauth(
                     with zf.open(entry) as f:
                         files_content[actual_path] = f.read().decode("utf-8", errors="replace")
 
+    return files_content
+
+
+def generate_personal_github_authorize_url() -> GithubAuthorizeResponse:
+    state = "personal-github-import"
+    params = urlencode(
+        {
+            "client_id": settings.github_client_id,
+            "redirect_uri": settings.github_callback_url,
+            "state": state,
+        }
+    )
+    return GithubAuthorizeResponse(
+        authorization_url=f"https://github.com/login/oauth/authorize?{params}"
+    )
+
+
+async def resolve_personal_installation_id_from_oauth_code(code: str) -> int | None:
+    if not settings.github_client_id or not settings.github_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub OAuth is not configured on this server",
+        )
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        token_response = await client.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": settings.github_client_id,
+                "client_secret": settings.github_client_secret,
+                "code": code,
+                "redirect_uri": settings.github_callback_url,
+            },
+        )
+        if token_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to complete GitHub authorization: {token_response.status_code}",
+            )
+
+        token_data = token_response.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=token_data.get("error_description") or "GitHub did not return an access token",
+            )
+
+        installations_response = await client.get(
+            f"{GITHUB_API}/user/installations",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+
+    if installations_response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to read GitHub installations: {installations_response.status_code}",
+        )
+
+    expected_app_id = str(settings.github_app_id)
+    for installation in installations_response.json().get("installations", []):
+        app_slug = installation.get("app_slug") or installation.get("app", {}).get("slug")
+        app_id = installation.get("app_id") or installation.get("app", {}).get("id")
+        if app_slug == GITHUB_APP_SLUG or str(app_id) == expected_app_id:
+            installation_id = installation.get("id")
+            return int(installation_id) if installation_id else None
+
+    return None
+
+
+async def list_runtime_repos(installation_id: int) -> dict:
+    token = await _get_installation_token(installation_id)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(f"{GITHUB_API}/installation/repositories", headers=headers)
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch GitHub repositories: {response.status_code}",
+        )
+    repos = []
+    for item in response.json().get("repositories", []):
+        repos.append(
+            {
+                "full_name": item.get("full_name"),
+                "private": bool(item.get("private")),
+                "url": item.get("html_url"),
+                "default_branch": item.get("default_branch") or "main",
+                "stars": item.get("stargazers_count") or 0,
+                "forks": item.get("forks_count") or 0,
+            }
+        )
+    return {"repos": repos}
+
+
+async def list_runtime_branches(installation_id: int, repo_full_name: str) -> dict:
+    token = await _get_installation_token(installation_id)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(f"{GITHUB_API}/repos/{repo_full_name}/branches?per_page=100", headers=headers)
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch GitHub branches: {response.status_code}",
+        )
+    return {"branches": [item.get("name") for item in response.json() if item.get("name")]}
+
+
+async def list_runtime_files(installation_id: int, repo_full_name: str, branch: str) -> BranchFilesResponse:
+    token = await _get_installation_token(installation_id)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(
+            f"{GITHUB_API}/repos/{repo_full_name}/git/trees/{branch}?recursive=1",
+            headers=headers,
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch GitHub file tree: {response.status_code}",
+        )
+    files = [
+        BranchFileItem(
+            path=item["path"],
+            type="file",
+            size=item.get("size"),
+        )
+        for item in response.json().get("tree", [])
+        if item.get("type") == "blob"
+    ]
+    return BranchFilesResponse(branch=branch, files=files)
+
+
+async def fetch_selected_code_runtime(
+    installation_id: int,
+    repo_full_name: str,
+    branch: str,
+    selected_files: List[str],
+) -> Dict[str, str]:
+    if not selected_files:
+        return {}
+
+    token = await _get_installation_token(installation_id)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    files_content: Dict[str, str] = {}
+
+    if len(selected_files) < 50:
+        owner, repo = repo_full_name.split("/", 1)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            tasks = [
+                _fetch_blob_content_pat(client, owner, repo, file_path, branch, headers)
+                for file_path in selected_files
+            ]
+            results = await asyncio.gather(*tasks)
+        for file_path, content in results:
+            if content:
+                files_content[file_path] = content
+        return files_content
+
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        response = await client.get(
+            f"{GITHUB_API}/repos/{repo_full_name}/zipball/{branch}",
+            headers=headers,
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to download repository zip: {response.status_code}",
+        )
+
+    selected_set = set(selected_files)
+    with zipfile.ZipFile(io.BytesIO(response.content), "r") as archive:
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            parts = entry.filename.split("/", 1)
+            if len(parts) < 2:
+                continue
+            actual_path = parts[1]
+            if actual_path in selected_set:
+                with archive.open(entry) as file_obj:
+                    files_content[actual_path] = file_obj.read().decode("utf-8", errors="replace")
     return files_content

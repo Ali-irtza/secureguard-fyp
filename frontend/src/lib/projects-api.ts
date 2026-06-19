@@ -15,6 +15,7 @@ export interface Project {
   type: "personal" | "team";
   owner_id: string;
   team_id: string | null;
+  upload_type: "upload" | "github" | null;
   github_repo: string | null;
   github_branches: string[];
   created_at: string;
@@ -26,6 +27,8 @@ export interface CreateProjectPayload {
   language?: string;
   type?: "personal" | "team";
   team_id?: string;
+  upload_type?: "upload" | "github";
+  github_repo?: string;
 }
 
 export interface UpdateProjectPayload {
@@ -34,12 +37,21 @@ export interface UpdateProjectPayload {
   health_score?: number;
   type?: "personal" | "team";
   team_id?: string;
-  /** Set to "" to disconnect the GitHub repo */
   github_repo?: string;
+  upload_type?: "upload" | "github";
 }
 
 // Re-export for consumers that import everything from projects-api
 export type { BranchFilesResponse, FileContentResponse };
+
+export interface GitHubRepoSummary {
+  full_name: string;
+  private: boolean;
+  url: string;
+  default_branch?: string;
+  stars?: number;
+  forks?: number;
+}
 
 // ---------------------------------------------------------------------------
 // Projects Cache — avoids re-fetching on every page navigation
@@ -150,6 +162,45 @@ export async function getProjectGithubAuthorizeUrl(projectId: string): Promise<s
     `/projects/${projectId}/github/authorize`
   );
   return data.authorization_url;
+}
+
+export async function getPersonalGithubAuthorizeUrl(): Promise<string> {
+  const data = await apiFetch<{ authorization_url: string }>("/projects/github/personal/authorize");
+  return data.authorization_url;
+}
+
+export async function listPersonalGithubRepos(
+  installationId: number
+): Promise<GitHubRepoSummary[]> {
+  const data = await apiFetch<{ repos: GitHubRepoSummary[] }>(
+    `/projects/github/personal/repos?installation_id=${encodeURIComponent(String(installationId))}`
+  );
+  return data.repos;
+}
+
+export async function listPersonalGithubBranches(
+  installationId: number,
+  repoFullName: string
+): Promise<string[]> {
+  const params = new URLSearchParams({
+    installation_id: String(installationId),
+    repo: repoFullName,
+  });
+  const data = await apiFetch<{ branches: string[] }>(`/projects/github/personal/branches?${params.toString()}`);
+  return data.branches;
+}
+
+export async function fetchPersonalGithubFiles(
+  installationId: number,
+  repoFullName: string,
+  branch: string
+): Promise<BranchFilesResponse> {
+  const params = new URLSearchParams({
+    installation_id: String(installationId),
+    repo: repoFullName,
+    branch,
+  });
+  return apiFetch<BranchFilesResponse>(`/projects/github/personal/files?${params.toString()}`);
 }
 
 /** GET /projects/:projectId/github/repos — list repos from stored installation token */
@@ -269,7 +320,7 @@ export async function triggerProjectScan(
   projectId: string,
   branch: string,
   selectedFiles: string[],
-  extra?: { project_id?: string; project_name?: string }
+  extra?: { project_id?: string; project_name?: string; installation_id?: number; repo_full_name?: string }
 ): Promise<ScanResult> {
   return apiFetch<ScanResult>(
     `/projects/${projectId}/scans`,
@@ -280,6 +331,8 @@ export async function triggerProjectScan(
         selected_files: selectedFiles,
         project_id: extra?.project_id ?? projectId,
         project_name: extra?.project_name ?? "",
+        installation_id: extra?.installation_id,
+        repo_full_name: extra?.repo_full_name,
       }),
     }
   );

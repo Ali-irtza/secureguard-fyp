@@ -19,6 +19,7 @@ def _to_project_response(row: dict) -> ProjectResponse:
         type=row.get("project_type") or "personal",
         owner_id=row["user_id"],
         team_id=None,
+        upload_type=row.get("upload_type"),
         github_repo=row.get("github_repo"),
         github_branches=[],
         created_at=row["created_at"],
@@ -71,10 +72,12 @@ def create_project(body: ProjectCreateRequest, user_id: str, supabase: Client) -
         "user_id": user_id,
         "project_name": body.name,
         "project_type": "personal",
-        "upload_type": "upload",
+        "upload_type": body.upload_type,
     }
     if body.language is not None:
         payload["project_language"] = body.language
+    if body.github_repo is not None:
+        payload["github_repo"] = body.github_repo or None
 
     try:
         result = supabase.table("projects").insert(payload).execute()
@@ -111,6 +114,8 @@ def update_project(
         updates["health_score"] = body.health_score
     if body.github_repo is not None:
         updates["github_repo"] = body.github_repo or None
+    if body.upload_type is not None:
+        updates["upload_type"] = body.upload_type
 
     if not updates:
         return get_project_by_id(project_id, user_id, supabase)
