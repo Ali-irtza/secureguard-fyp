@@ -8,6 +8,8 @@ import { useContactFormContext } from "@/context/ContactFormContext";
 
 const ContactForm = () => {
   const { formData, setFormData, isLoading, submitContact } = useContactFormContext();
+  const messageLines = formData.message ? formData.message.split(/\r\n|\r|\n/).length : 0;
+  const messageTooLong = messageLines > 5;
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -59,15 +61,19 @@ const ContactForm = () => {
         <Textarea
           id="message"
           rows={5}
+          maxLength={2000}
           value={formData.message}
           onChange={(e) => setFormData({ ...formData, message: e.target.value })}
           placeholder="Tell us more about your inquiry..."
           required
-          className="bg-background/50 resize-none"
+          className={`bg-background/50 resize-none ${messageTooLong ? "border-destructive focus-visible:ring-destructive" : ""}`}
         />
+        <p className={messageTooLong ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+          {messageLines}/5 lines
+        </p>
       </div>
 
-      <Button type="submit" className="w-full gap-2" disabled={isLoading}>
+      <Button type="submit" className="w-full gap-2" disabled={isLoading || messageTooLong}>
         {isLoading ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

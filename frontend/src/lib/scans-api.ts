@@ -60,6 +60,8 @@ export interface ChunkOutput {
   summary?: string;
   vulnerabilities: VulnerabilityDetail[];
   corrected_code?: string;
+  model_output?: string;
+  analysis_complete?: boolean;
 }
 
 export interface BranchFilesResponse {
@@ -175,11 +177,12 @@ export interface ReportItem {
 }
 
 export type ScanStreamEvent =
-  | { event: "scan_started"; total_files: number }
+  | { event: "scan_started"; total_files: number; scan_id?: string }
   | { event: "file_started"; file_path: string }
   | { event: "node"; file_path?: string; message: string }
   | { event: "chunks_ready"; file_path: string; total_chunks: number; source_lines?: number; chunker_version?: string; chunks: ChunkOutput[] }
   | { event: "chunk_started"; file_path: string; chunk_index: number; message: string }
+  | { event: "model_delta"; file_path: string; chunk_index: number; text: string }
   | { event: "chunk_result"; file_path: string; chunk: ChunkOutput }
   | { event: "correction_started"; file_path: string; chunk_index: number; message: string }
   | { event: "correction_result"; file_path: string; chunk_index: number; corrected_code: string }
@@ -272,7 +275,8 @@ export async function triggerUploadedFileScan(
 export async function triggerUploadedFileScanStream(
   files: File[],
   extra: { project_id?: string; project_name?: string } | undefined,
-  onEvent: (event: ScanStreamEvent) => void
+  onEvent: (event: ScanStreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<ScanResult> {
   const { supabase } = await import("@/lib/supabase");
   const {
@@ -293,6 +297,7 @@ export async function triggerUploadedFileScanStream(
       Authorization: `Bearer ${session.access_token}`,
     },
     body: formData,
+    signal,
   });
 
   if (!response.ok || !response.body) {
@@ -343,6 +348,10 @@ export async function getScanHistory(): Promise<ScanHistoryItem[]> {
 
 export async function deleteScanHistory(scanId: string): Promise<void> {
   return apiFetch<void>(`/scans/${scanId}`, { method: "DELETE" });
+}
+
+export async function cancelScan(scanId: string): Promise<void> {
+  return apiFetch<void>(`/scans/${scanId}/cancel`, { method: "POST" });
 }
 
 /**

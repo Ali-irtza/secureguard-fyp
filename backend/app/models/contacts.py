@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from typing import Literal
 from datetime import datetime
 
@@ -39,11 +39,14 @@ class ContactCreateRequest(BaseModel):
     @field_validator("message")
     @classmethod
     def message_must_not_be_blank(cls, v: str) -> str:
-        if not v.strip():
+        message = v.strip()
+        if not message:
             raise ValueError("Message cannot be blank")
-        if len(v.strip()) > 10000:
-            raise ValueError("Message cannot exceed 10000 characters")
-        return v.strip()
+        if len(message.splitlines()) > 5:
+            raise ValueError("Message cannot be more than 5 lines")
+        if len(message) > 2000:
+            raise ValueError("Message cannot exceed 2000 characters")
+        return message
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +66,13 @@ class ContactResponse(BaseModel):
     status: Literal["new", "in-progress", "resolved"]
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_contact_id(cls, data):
+        if isinstance(data, dict) and "id" not in data and "contact_id" in data:
+            return {**data, "id": data["contact_id"]}
+        return data
 
     class Config:
         from_attributes = True  # Allow ORM model conversion

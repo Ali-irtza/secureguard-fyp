@@ -11,6 +11,7 @@ export interface GlobalScanActivity {
   issueCount?: number;
   riskLevel?: string;
   reportPath?: string;
+  activePath?: string;
 }
 
 const STORAGE_KEY = "secureguard.activeScan";
@@ -77,6 +78,7 @@ export const subscribeToGlobalScanActivity = (
 export const startGlobalScanActivity = (input: {
   title: string;
   detail?: string;
+  activePath?: string;
 }): string => {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -88,13 +90,14 @@ export const startGlobalScanActivity = (input: {
     startedAt: now,
     updatedAt: now,
     reportPath: "/reports",
+    activePath: input.activePath ?? "/new-scan?resumeScan=1",
   });
   return id;
 };
 
 export const updateGlobalScanActivity = (
   id: string | null | undefined,
-  patch: Partial<Pick<GlobalScanActivity, "detail" | "title">>
+  patch: Partial<Pick<GlobalScanActivity, "detail" | "title" | "scanId" | "activePath">>
 ) => {
   if (!id) return;
   const current = getGlobalScanActivity();

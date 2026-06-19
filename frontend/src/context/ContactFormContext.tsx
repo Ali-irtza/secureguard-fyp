@@ -31,6 +31,21 @@ export const ContactFormProvider = ({ children }: PropsWithChildren<{}>) => {
   const [isLoading, setIsLoading] = useState(false);
 
   const submitContact = async (): Promise<boolean> => {
+    const name = formData.name.trim();
+    const email = formData.email.trim();
+    const subject = formData.subject.trim();
+    const message = formData.message.trim();
+    const messageLineCount = message ? message.split(/\r\n|\r|\n/).length : 0;
+
+    if (!name || !email || !subject || !message) {
+      toast.error("Name, email, subject, and message are required.");
+      return false;
+    }
+    if (messageLineCount > 5) {
+      toast.error("Message cannot be more than 5 lines.");
+      return false;
+    }
+
     setIsLoading(true);
 
     try {
@@ -39,7 +54,7 @@ export const ContactFormProvider = ({ children }: PropsWithChildren<{}>) => {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ name, email, subject, message }),
       });
 
       const json = await response.json().catch(() => ({}));

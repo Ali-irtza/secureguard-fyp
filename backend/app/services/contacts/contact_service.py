@@ -5,6 +5,31 @@ from datetime import datetime
 from typing import Optional
 
 
+def _profile_exists_for_email(email: str, supabase: Client) -> bool:
+    normalized_email = email.strip().lower()
+    for user_id_column in ("user_id", "id"):
+        try:
+            result = (
+                supabase.table("profiles")
+                .select(user_id_column)
+                .ilike("email", normalized_email)
+                .limit(1)
+                .execute()
+            )
+            return bool(result.data)
+        except Exception:
+            continue
+    return False
+
+
+def _contact_id_column(supabase: Client) -> str:
+    try:
+        supabase.table("contacts").select("contact_id").limit(1).execute()
+        return "contact_id"
+    except Exception:
+        return "id"
+
+
 def create_contact(
     request: ContactCreateRequest,
     supabase: Client
@@ -23,11 +48,17 @@ def create_contact(
         HTTPException: If database insert fails
     """
     try:
+        if not _profile_exists_for_email(str(request.email), supabase):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This email is not registered with SecureGuard.",
+            )
+
         result = (
             supabase.table("contacts")
             .insert({
                 "name": request.name,
-                "email": request.email,
+                "email": str(request.email).strip().lower(),
                 "subject": request.subject,
                 "message": request.message,
                 "status": "new",
@@ -71,10 +102,11 @@ def get_contact(
         HTTPException: If contact not found or database error
     """
     try:
+        id_column = _contact_id_column(supabase)
         result = (
             supabase.table("contacts")
             .select("*")
-            .eq("id", contact_id)
+            .eq(id_column, contact_id)
             .single()
             .execute()
         )

@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -43,6 +44,18 @@ class Settings(BaseSettings):
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_model_name: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     groq_api_key: str = ""
+
+    @field_validator(
+        "security_model_base_url",
+        "security_model_name",
+        "groq_base_url",
+        "groq_model_name",
+        "groq_api_key",
+        mode="before",
+    )
+    @classmethod
+    def strip_model_config(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
     # Optional SMTP email notifications for team invites
     smtp_host: str = ""

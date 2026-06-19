@@ -355,36 +355,62 @@ async def scan_uploaded_files_stream(
 
     def event_stream():
         final_result = None
-        for event in scanner_service.iter_vulnerability_scanner_events(files_dict):
-            if event.get("event") == "error":
-                mark_scan_failed(supabase, scan_id, event.get("message", "Scan failed"))
+        terminal_status_saved = False
+        try:
+            for event in scanner_service.iter_vulnerability_scanner_events(files_dict):
+                if event.get("event") == "scan_started":
+                    event = {**event, "scan_id": scan_id}
+                if event.get("event") == "error":
+                    mark_scan_failed(supabase, scan_id, event.get("message", "Scan failed"))
+                    terminal_status_saved = True
+                    yield line(event)
+                    return
+                if event.get("event") == "scan_result":
+                    final_result = event["result"]
+                    duration = int(time.time() - start_time)
+                    try:
+                        current_scan = (
+                            supabase.table("scan")
+                            .select("completion_status,error_message")
+                            .eq("scan_id", scan_id)
+                            .limit(1)
+                            .execute()
+                        )
+                        current_scan_row = (current_scan.data or [{}])[0]
+                        if (
+                            current_scan_row.get("completion_status") == "failed"
+                            and "cancelled by user" in str(current_scan_row.get("error_message") or "").lower()
+                        ):
+                            terminal_status_saved = True
+                            return
+                        persisted = save_scan_success(
+                            supabase,
+                            current_user.id,
+                            project_id,
+                            scan_id,
+                            files_dict,
+                            final_result,
+                            duration,
+                        )
+                        final_result["scan_id"] = scan_id
+                        final_result["scan_persistence"] = persisted
+                        terminal_status_saved = True
+                    except Exception as exc:
+                        print(f"[scans] Failed to save streamed scan to DB: {exc}")
+                        mark_scan_failed(supabase, scan_id, str(exc))
+                        terminal_status_saved = True
+                        final_result["scan_id"] = None
+                    yield line({"event": "scan_result", "result": final_result})
+                    return
                 yield line(event)
-                return
-            if event.get("event") == "scan_result":
-                final_result = event["result"]
-                duration = int(time.time() - start_time)
-                try:
-                    persisted = save_scan_success(
-                        supabase,
-                        current_user.id,
-                        project_id,
-                        scan_id,
-                        files_dict,
-                        final_result,
-                        duration,
-                    )
-                    final_result["scan_id"] = scan_id
-                    final_result["scan_persistence"] = persisted
-                except Exception as exc:
-                    print(f"[scans] Failed to save streamed scan to DB: {exc}")
-                    mark_scan_failed(supabase, scan_id, str(exc))
-                    final_result["scan_id"] = None
-                yield line({"event": "scan_result", "result": final_result})
-                return
-            yield line(event)
 
-        if final_result is None:
-            yield line({"event": "error", "message": "Scan ended before a report was produced."})
+            if final_result is None:
+                mark_scan_failed(supabase, scan_id, "Scan ended before a report was produced.")
+                terminal_status_saved = True
+                yield line({"event": "error", "message": "Scan ended before a report was produced."})
+        finally:
+            if not terminal_status_saved:
+                mark_scan_failed(supabase, scan_id, "Scan cancelled by user.")
 
     return StreamingResponse(
         event_stream(),
@@ -415,6 +441,26 @@ async def delete_scan_history(
         delete_scan_for_user_new(supabase, scan_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/scans/{scan_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_scan(
+    scan_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    scan_result = (
+        supabase.table("scan")
+        .select("scan_id")
+        .eq("scan_id", scan_id)
+        .eq("user_id", current_user.id)
+        .limit(1)
+        .execute()
+    )
+    if not scan_result.data:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+    mark_scan_failed(supabase, scan_id, "Scan cancelled by user.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

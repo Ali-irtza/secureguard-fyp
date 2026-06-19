@@ -9,19 +9,15 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 const faqs = [
   {
     question: "How do I run my first security scan?",
-    answer: "Navigate to 'New Scan' from the sidebar, enter your repository URL or upload your code, select the scan type (Quick, Full, or Dependency), and click 'Start Scan'. The scan will analyze your codebase for vulnerabilities and generate a detailed report.",
+    answer: "Open New Scan, choose Personal Scan or Team Scan, then upload C/C++ files or import supported files from GitHub. For team scans, select an active team and a team project, choose the allowed branch files, and start the security analysis.",
   },
   {
     question: "What do the severity levels mean?",
-    answer: "Critical (red) - Immediate action required, exploitable vulnerabilities. High (orange) - Serious issues that should be fixed soon. Medium (yellow) - Moderate risk, schedule for fixing. Low (green) - Minor issues, fix when convenient.",
+    answer: "Critical issues need immediate attention because they may expose unsafe memory, input, or execution behavior. High issues are serious and should be fixed soon. Medium issues should be scheduled for cleanup. Low issues are lower-risk findings that still improve code quality when fixed.",
   },
   {
     question: "How do I interpret scan results?",
-    answer: "Each vulnerability is listed with its severity, location in code, description, and recommended fix. Click on any vulnerability to see detailed information including affected code lines and remediation steps.",
-  },
-  {
-    question: "How do I generate and use API keys?",
-    answer: "Go to Settings > API Keys to view your personal access token. Use this token to authenticate API requests from external tools and CI/CD pipelines. Keep your key secure and regenerate it if compromised.",
+    answer: "Open the report from Reports, Recent Scans, or Scan History. Each finding shows the affected file, line, severity, vulnerable code, explanation, and recommended fix. The dashboard summarizes total scans, critical issues, trends, alerts, and health scores.",
   }
 ];
 

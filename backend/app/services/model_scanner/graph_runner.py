@@ -47,7 +47,7 @@ class SyntaxValidationError(Exception):
 
 
 def _chat_url() -> str:
-    base_url = getattr(settings, "security_model_base_url", "")
+    base_url = (getattr(settings, "security_model_base_url", "") or "").strip()
     if not base_url:
         return ""
     return f"{base_url.rstrip('/')}/chat/completions"
@@ -405,7 +405,7 @@ def coverage(findings: str, vulnerabilities: list[dict]) -> tuple[float, list[st
     return score, missing, "\n\n".join(missing_blocks)
 
 
-def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
+def iter_model_response(system_prompt: str, user_prompt: str, required_key: str | None = None):
     payload = {
         "model": MODEL_NAME,
         "messages": [
@@ -416,11 +416,11 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
         "top_p": 1.0,
         "repeat_penalty": 1.05,
         "max_tokens": 2048,
-        "stream": False,
+        "stream": True,
     }
 
-    groq_base = getattr(settings, "groq_base_url", "") or ""
-    groq_key = getattr(settings, "groq_api_key", "") or ""
+    groq_base = (getattr(settings, "groq_base_url", "") or "").strip()
+    groq_key = (getattr(settings, "groq_api_key", "") or "").strip()
     has_groq_fallback = bool(groq_base and groq_key)
 
     # Try primary configured model endpoint first. If it fails and Groq is
@@ -429,12 +429,14 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     primary_error = "Security model endpoint is not configured."
     if primary_url:
         try:
+            print(f"[model_scanner] primary endpoint attempt: url={primary_url} model={MODEL_NAME}")
             started_at = time.monotonic()
             response = requests.post(
                 primary_url,
                 json=payload,
                 timeout=(10, MODEL_PASS_TIMEOUT_SECONDS),
                 headers={"ngrok-skip-browser-warning": "true"},
+                stream=True,
             )
             if time.monotonic() - started_at > MODEL_PASS_TIMEOUT_SECONDS:
                 primary_error = "Request timeout exceeded. Please try again."
@@ -443,13 +445,41 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
                 primary_error = f"Model API error: {response.status_code} - {response.text}"
                 print(f"[model_scanner] primary endpoint fallback: status={response.status_code} url={primary_url}")
             else:
-                data = response.json()
-                choices = data.get("choices") or []
-                content = choices[0].get("message", {}).get("content", "") if choices else ""
-                if content:
+                content_parts: list[str] = []
+                # The requests default is a 512-byte read buffer. LM Studio emits
+                # small SSE frames, so that default hides tokens for a long time.
+                for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
+                    line = (raw_line or "").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if line == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {}).get("content")
+                    if delta is None:
+                        delta = choices[0].get("message", {}).get("content")
+                    if delta:
+                        content_parts.append(delta)
+                        yield {"event": "model_delta", "text": delta}
+                content = "".join(content_parts)
+                parsed_content = extract_json_object(content) if required_key else {}
+                if content and (not required_key or required_key in parsed_content):
+                    print(f"[model_scanner] primary endpoint success: url={primary_url} model={MODEL_NAME}")
                     return content, ""
-                primary_error = "Security model returned an empty response."
-                print(f"[model_scanner] primary endpoint fallback: empty response url={primary_url}")
+                primary_error = (
+                    f"Security model returned invalid JSON without '{required_key}'."
+                    if content and required_key
+                    else "Security model returned an empty response."
+                )
+                print(f"[model_scanner] primary endpoint fallback: invalid response url={primary_url}")
         except requests.Timeout:
             primary_error = "Request timeout exceeded. Please try again."
             print(f"[model_scanner] primary endpoint fallback: timeout url={primary_url}")
@@ -462,9 +492,9 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     # Primary failed — attempt Groq fallback if configured
     if groq_base and groq_key:
         groq_url = f"{groq_base.rstrip('/')}/chat/completions"
-        groq_model = getattr(settings, "groq_model_name", "meta-llama/llama-4-scout-17b-16e-instruct") or "meta-llama/llama-4-scout-17b-16e-instruct"
+        groq_model = (getattr(settings, "groq_model_name", "meta-llama/llama-4-scout-17b-16e-instruct") or "meta-llama/llama-4-scout-17b-16e-instruct").strip()
         headers = {"Authorization": f"Bearer {groq_key}"}
-        groq_payload = {**payload, "model": groq_model}
+        groq_payload = {**payload, "model": groq_model, "stream": False}
         groq_payload.pop("repeat_penalty", None)
         for attempt in range(2):
             try:
@@ -491,9 +521,14 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
                 data = response.json()
                 choices = data.get("choices") or []
                 content = choices[0].get("message", {}).get("content", "") if choices else ""
-                if content:
+                parsed_content = extract_json_object(content) if required_key else {}
+                if content and (not required_key or required_key in parsed_content):
                     print(f"[model_scanner] groq success: model={groq_model}")
+                    yield {"event": "model_delta", "text": content}
                     return content, ""
+                if content and required_key:
+                    print(f"[model_scanner] groq invalid response: missing={required_key} model={groq_model}")
+                    return "", f"GROQ API returned invalid JSON without '{required_key}'."
                 print(f"[model_scanner] groq empty response: model={groq_model}")
                 return "", "GROQ API returned an empty response."
             except requests.Timeout:
@@ -507,9 +542,36 @@ def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
     return "", primary_error
 
 
+def call_model(system_prompt: str, user_prompt: str) -> tuple[str, str]:
+    stream = iter_model_response(system_prompt, user_prompt)
+    while True:
+        try:
+            next(stream)
+        except StopIteration as done:
+            return done.value or ("", "Security model did not return a response.")
+
+
 def analyze_chunk_with_model(state: AnalyzerState, chunk: dict, total_chunks: int) -> tuple[list[dict], str]:
+    response = ""
+    error = ""
+    for event in iter_analyze_chunk_with_model_events(state, chunk, total_chunks):
+        if event.get("event") == "_chunk_analysis_complete":
+            response = event.get("response", "")
+            error = event.get("error", "")
+            break
+    if error:
+        if "timeout" in error.lower():
+            raise TimeoutError(error)
+        raise RuntimeError(error)
+    parsed = extract_json_object(response)
     chunk_findings = filter_findings_for_range(state["static_findings"], chunk["start_line"], chunk["end_line"])
     static_vulnerabilities = vulnerabilities_from_static_findings(chunk_findings, state, chunk)
+    model_vulnerabilities = normalize_chunk_vulnerabilities(parsed.get("vulnerabilities", []), state, chunk)
+    return merge_unique_vulnerabilities(static_vulnerabilities, model_vulnerabilities), f"Reviewed lines {chunk['start_line']}-{chunk['end_line']}"
+
+
+def iter_analyze_chunk_with_model_events(state: AnalyzerState, chunk: dict, total_chunks: int):
+    chunk_findings = filter_findings_for_range(state["static_findings"], chunk["start_line"], chunk["end_line"])
     system_prompt = f"""# Role
 You review one C/C++ source chunk for security vulnerabilities.
 
@@ -537,17 +599,22 @@ You review one C/C++ source chunk for security vulnerabilities.
   ]
 }}
 """
-    response, error = call_model(
-        system_prompt,
-        f"Review chunk {chunk['index']} of {total_chunks}: lines {chunk['start_line']}-{chunk['end_line']}.\n\n```{state['language'].lower()}\n{chunk['content']}\n```",
-    )
-    if error:
-        if "timeout" in error.lower():
-            raise TimeoutError(error)
-        raise RuntimeError(error)
-    parsed = extract_json_object(response)
-    model_vulnerabilities = normalize_chunk_vulnerabilities(parsed.get("vulnerabilities", []), state, chunk)
-    return merge_unique_vulnerabilities(static_vulnerabilities, model_vulnerabilities), f"Reviewed lines {chunk['start_line']}-{chunk['end_line']}"
+    user_prompt = f"Review chunk {chunk['index']} of {total_chunks}: lines {chunk['start_line']}-{chunk['end_line']}.\n\n```{state['language'].lower()}\n{chunk['content']}\n```"
+    stream = iter_model_response(system_prompt, user_prompt, required_key="vulnerabilities")
+    while True:
+        try:
+            event = next(stream)
+            if event.get("event") == "model_delta":
+                yield {
+                    "event": "model_delta",
+                    "file_path": state.get("file_name"),
+                    "chunk_index": chunk["index"],
+                    "text": event.get("text", ""),
+                }
+        except StopIteration as done:
+            response, error = done.value or ("", "Security model did not return a response.")
+            yield {"event": "_chunk_analysis_complete", "response": response, "error": error}
+            return
 
 
 def generate_corrected_code_for_file(state: AnalyzerState, vulnerabilities: list[dict], source_code: str | None = None) -> tuple[str, str]:
@@ -775,7 +842,25 @@ def run_analysis(file_name: str, source_code: str) -> dict:
         chunk_outputs: list[dict] = []
         seen = set()
         for chunk in chunks:
-            chunk_vulns, summary = analyze_chunk_with_model(state, chunk, len(chunks))
+            model_response = ""
+            model_error = ""
+            for model_event in iter_analyze_chunk_with_model_events(state, chunk, len(chunks)):
+                if model_event.get("event") == "model_delta":
+                    model_response += model_event.get("text", "")
+                    yield model_event
+                elif model_event.get("event") == "_chunk_analysis_complete":
+                    model_response = model_event.get("response", model_response)
+                    model_error = model_event.get("error", "")
+            if model_error:
+                if "timeout" in model_error.lower():
+                    raise TimeoutError(model_error)
+                raise RuntimeError(model_error)
+            parsed = extract_json_object(model_response)
+            chunk_findings = filter_findings_for_range(static_findings, chunk["start_line"], chunk["end_line"])
+            static_vulnerabilities = vulnerabilities_from_static_findings(chunk_findings, state, chunk)
+            model_vulnerabilities = normalize_chunk_vulnerabilities(parsed.get("vulnerabilities", []), state, chunk)
+            chunk_vulns = merge_unique_vulnerabilities(static_vulnerabilities, model_vulnerabilities)
+            summary = f"Reviewed lines {chunk['start_line']}-{chunk['end_line']}"
             unique_chunk_vulns = []
             for vuln in chunk_vulns:
                 key = vulnerability_key(vuln)
@@ -873,6 +958,8 @@ def iter_analysis_events(file_name: str, source_code: str):
                     "code": chunk.get("display_code", chunk.get("content", "")),
                     "vulnerabilities": [],
                     "corrected_code": "Pending...",
+                    "model_output": "",
+                    "analysis_complete": False,
                     "summary": "Waiting for model review.",
                     "file_path": file_name,
                 }
@@ -899,7 +986,26 @@ def iter_analysis_events(file_name: str, source_code: str):
                 "chunk_index": chunk["index"],
                 "message": f"Reviewing {file_name}: chunk {chunk['index']} of {len(chunks)}",
             }
-            chunk_vulns, summary = analyze_chunk_with_model(state, chunk, len(chunks))
+            model_response = ""
+            model_error = ""
+            for model_event in iter_analyze_chunk_with_model_events(state, chunk, len(chunks)):
+                if model_event.get("event") == "model_delta":
+                    model_response += model_event.get("text", "")
+                    yield model_event
+                elif model_event.get("event") == "_chunk_analysis_complete":
+                    model_response = model_event.get("response", model_response)
+                    model_error = model_event.get("error", "")
+            if model_error:
+                if "timeout" in model_error.lower():
+                    raise TimeoutError(model_error)
+                raise RuntimeError(model_error)
+
+            parsed = extract_json_object(model_response)
+            chunk_findings = filter_findings_for_range(static_findings, chunk["start_line"], chunk["end_line"])
+            static_vulnerabilities = vulnerabilities_from_static_findings(chunk_findings, state, chunk)
+            model_vulnerabilities = normalize_chunk_vulnerabilities(parsed.get("vulnerabilities", []), state, chunk)
+            chunk_vulns = merge_unique_vulnerabilities(static_vulnerabilities, model_vulnerabilities)
+            summary = f"Reviewed lines {chunk['start_line']}-{chunk['end_line']}"
             unique_chunk_vulns = []
             for vuln in chunk_vulns:
                 key = vulnerability_key(vuln)
@@ -920,6 +1026,8 @@ def iter_analysis_events(file_name: str, source_code: str):
                 "summary": summary,
                 "vulnerabilities": unique_chunk_vulns,
                 "corrected_code": "Pending...",
+                "model_output": model_response,
+                "analysis_complete": True,
                 "file_path": file_name,
             }
             chunk_outputs.append(chunk_output)

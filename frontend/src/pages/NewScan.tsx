@@ -324,6 +324,7 @@ const NewScan = () => {
   const [activeTab, setActiveTab] = useState("upload");
   const [isScanning, setIsScanning] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
+  const [showLiveScan, setShowLiveScan] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [fileContent, setFileContent] = useState<string>("");
@@ -730,6 +731,8 @@ const NewScan = () => {
   
   // Abort ref for stopping scan
   const scanAbortRef = useRef(false);
+  const scanAbortControllerRef = useRef<AbortController | null>(null);
+  const globalScanActivityIdRef = useRef<string | null>(null);
   const sourceLineCountsRef = useRef<Record<string, number>>({});
   const scanStartedAtRef = useRef<number | null>(null);
   const scanOutputRef = useRef<HTMLDivElement | null>(null);
@@ -942,6 +945,9 @@ const NewScan = () => {
     switch (event.event) {
       case "scan_started":
         addLog(`Streaming scan started for ${event.total_files} file${event.total_files === 1 ? "" : "s"}`, "info");
+        if (event.scan_id) {
+          updateGlobalScanActivity(globalScanActivityIdRef.current, { scanId: event.scan_id });
+        }
         break;
       case "file_started":
         addLog(`Preparing ${event.file_path}`, "info");
@@ -994,8 +1000,23 @@ const NewScan = () => {
       case "chunk_started":
         addLog(event.message, "info");
         break;
+      case "model_delta":
+        setStreamingChunks((prev) => prev.map((chunk) =>
+          chunk.file_path === event.file_path && chunk.chunk_index === event.chunk_index
+            ? { ...chunk, model_output: `${chunk.model_output ?? ""}${event.text}`, analysis_complete: false }
+            : chunk
+        ));
+        setScanResult((prev) => prev ? {
+          ...prev,
+          chunk_outputs: (prev.chunk_outputs ?? []).map((chunk) =>
+            chunk.file_path === event.file_path && chunk.chunk_index === event.chunk_index
+              ? { ...chunk, model_output: `${chunk.model_output ?? ""}${event.text}`, analysis_complete: false }
+              : chunk
+          ),
+        } : prev);
+        break;
       case "chunk_result":
-        upsertStreamingChunk(event.chunk);
+        upsertStreamingChunk({ ...event.chunk, analysis_complete: true });
         setScanResult((prev) => {
           const previousChunks = prev?.chunk_outputs ?? [];
           const key = `${event.chunk.file_path ?? ""}-${event.chunk.chunk_index}`;
@@ -1117,20 +1138,36 @@ const NewScan = () => {
 
   const handleStopScan = () => {
     scanAbortRef.current = true;
+    scanAbortControllerRef.current?.abort();
+    scanAbortControllerRef.current = null;
     clearCorrectionTimers();
     setIsScanning(false);
+    failGlobalScanActivity(globalScanActivityIdRef.current, "Scan cancelled by user.");
     addLog("Scan cancelled by user", "warning");
   };
+
+  useEffect(() => {
+    const resume = () => setShowLiveScan(true);
+    const cancel = () => handleStopScan();
+    window.addEventListener("secureguard:resume-scan-view", resume);
+    window.addEventListener("secureguard:cancel-active-scan", cancel);
+    return () => {
+      window.removeEventListener("secureguard:resume-scan-view", resume);
+      window.removeEventListener("secureguard:cancel-active-scan", cancel);
+    };
+  });
 
   const handleStartScan = async () => {
     const isAutoRescan = searchParams.get("autoStart") === "1";
     let globalScanActivityId: string | null = null;
     scanAbortRef.current = false;
+    scanAbortControllerRef.current = new AbortController();
     scanStartedAtRef.current = Date.now();
     clearCorrectionTimers();
     setAutoRescanPreparing(isAutoRescan);
     setIsScanning(true);
     setScanComplete(false);
+    setShowLiveScan(true);
     setScanResult(null);
     setScanError("");
     setStreamingChunks([]);
@@ -1255,6 +1292,7 @@ const NewScan = () => {
         title: resolvedProjectName || primaryFile?.name || "Security scan",
         detail: `Scanning ${pendingUploadCount} source item${pendingUploadCount === 1 ? "" : "s"}. You can keep working while the report is prepared.`,
       });
+      globalScanActivityIdRef.current = globalScanActivityId;
       addLog(
         zipUploadCount > 0
           ? `Reviewing ${pendingUploadCount} upload${pendingUploadCount === 1 ? "" : "s"}; ZIP archives will be filtered on the backend.`
@@ -1292,7 +1330,8 @@ const NewScan = () => {
               project_id: resolvedProjectId ?? "",
               project_name: resolvedProjectName ?? "",
             },
-            handleScanStreamEvent
+            handleScanStreamEvent,
+            scanAbortControllerRef.current.signal
           );
         } else {
           const rescanFiles = filesToScan.map(
@@ -1304,7 +1343,8 @@ const NewScan = () => {
               project_id: resolvedProjectId ?? "",
               project_name: resolvedProjectName ?? "",
             },
-            handleScanStreamEvent
+            handleScanStreamEvent,
+            scanAbortControllerRef.current.signal
           );
         }
 
@@ -1416,6 +1456,7 @@ const NewScan = () => {
           title: resolvedProjectName || selectedGithubRepo.full_name || "GitHub scan",
           detail: `Fetching ${files.length} GitHub file${files.length === 1 ? "" : "s"} from ${branch}. You can keep working while analysis runs.`,
         });
+        globalScanActivityIdRef.current = globalScanActivityId;
         addLog("Preparing source package...", "info");
         setCurrentPhase(1);
 
@@ -1483,7 +1524,9 @@ const NewScan = () => {
           await deleteProject(resolvedProjectId).catch(() => undefined);
           await refetchProjects();
         }
-        const message = friendlyScanError(err.message || "Scan failed");
+        const message = err?.name === "AbortError"
+          ? "Scan cancelled by user."
+          : friendlyScanError(err.message || "Scan failed");
         setScanError(message);
         setCurrentPhase(5);
         failGlobalScanActivity(globalScanActivityId, message);
@@ -1491,6 +1534,7 @@ const NewScan = () => {
       }
 
       setIsScanning(false);
+      scanAbortControllerRef.current = null;
       setScanComplete(true);
       return;
     }
@@ -1571,6 +1615,7 @@ const NewScan = () => {
           vulnerabilitiesFound: result.total_vulnerabilities,
           elapsedTime: Math.floor((Date.now() - startTime) / 1000),
         });
+        globalScanActivityIdRef.current = globalScanActivityId;
         setCodeLines((prev) => prev.map((line) => ({ ...line, status: "safe" })));
 
         setScanResult(result);
@@ -2121,7 +2166,7 @@ const NewScan = () => {
   };
 
   // If scanning or complete, show split-screen view
-  if (isScanning || scanComplete) {
+  if ((isScanning || scanComplete) && showLiveScan) {
     if (autoRescanPreparing) {
       return (
         <DashboardLayout>
@@ -2156,7 +2201,12 @@ const NewScan = () => {
           {/* Compact Header with Inline Progress */}
           <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/50 bg-background h-14 shrink-0">
             <div className="flex items-center gap-3 min-w-0">
-              <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={handleReset}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 h-8 w-8"
+                onClick={() => isScanning ? setShowLiveScan(false) : handleReset()}
+              >
                 <ArrowLeft className="h-4 w-4" />
               </Button>
               <div className="flex items-center gap-2 min-w-0">
@@ -2333,9 +2383,18 @@ const NewScan = () => {
                                   <div className="space-y-3">
                                     <p className="text-xs font-medium uppercase text-muted-foreground">Vulnerabilities</p>
                                     {chunk.vulnerabilities.length === 0 ? (
-                                      <p className="rounded-md border border-border/50 bg-background/60 p-3 text-sm text-muted-foreground">
-                                        No vulnerabilities were reported in this chunk.
-                                      </p>
+                                      chunk.analysis_complete ? (
+                                        <p className="rounded-md border border-border/50 bg-background/60 p-3 text-sm text-muted-foreground">
+                                          No vulnerabilities were reported after this chunk was fully reviewed.
+                                        </p>
+                                      ) : (
+                                        <div className="rounded-md border border-primary/25 bg-primary/5 p-3">
+                                          <p className="text-sm font-medium text-primary">Model analysis is streaming...</p>
+                                          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+                                            {chunk.model_output || "Waiting for the first model token..."}
+                                          </pre>
+                                        </div>
+                                      )
                                     ) : (
                                       chunk.vulnerabilities.map((vulnerability, index) => (
                                         <div key={`${chunk.chunk_index}-${vulnerability.cwe_id}-${index}`} className="rounded-md border border-border/50 bg-background/70 p-4">
