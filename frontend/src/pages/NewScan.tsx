@@ -20,10 +20,11 @@ import {
   listPersonalGithubRepos,
   listPersonalGithubBranches,
   fetchPersonalGithubFiles,
+  fetchProjectFileContent,
   triggerProjectScan,
   type GitHubRepoSummary,
 } from "@/lib/projects-api";
-import { listTeams } from "@/lib/teams-api";
+import { fetchBranchFiles, fetchFileContent as fetchTeamFileContent, listTeams } from "@/lib/teams-api";
 import type { Team as ApiTeam, BranchFileItem } from "@/lib/teams-api";
 import {
   listProjectFiles,
@@ -79,8 +80,10 @@ import {
   Loader2,
   Star,
   GitFork,
+  GitBranch,
   Filter,
   FileText,
+  Unplug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
@@ -112,12 +115,58 @@ const splitSourceLines = (source: string): string[] => {
   return lines.length > 0 ? lines : [""];
 };
 
+const previewFunctionName = (filePath: string): string => {
+  const baseName = filePath.split(/[\\/]/).pop() ?? "source";
+  return baseName.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_]/g, "_") || "source";
+};
+
+const buildQueuedSourcePreview = (filePaths: string[]): CodeLine[] => {
+  const lines: CodeLine[] = [];
+  filePaths.slice(0, 6).forEach((filePath, fileIndex) => {
+    const name = previewFunctionName(filePath);
+    const ext = extensionOf(filePath);
+    const sourcePreview = ext === ".zip"
+      ? [
+          `// ${filePath}`,
+          "// ZIP archive queued; backend will extract C/C++ sources",
+          "int extracted_sources = 0;",
+          "while (archive_has_next_entry()) {",
+          "    extracted_sources += scan_if_supported_source();",
+          "}",
+        ]
+      : [
+          `// ${filePath}`,
+          "#include <stdio.h>",
+          `int ${name}_security_review(void) {`,
+          "    char input[256];",
+          "    fgets(input, sizeof(input), stdin);",
+          "    return validate_source_path(input);",
+          "}",
+        ];
+
+    if (fileIndex > 0) lines.push({ lineNumber: lines.length + 1, content: "", status: "pending" });
+    sourcePreview.forEach((content) => {
+      lines.push({ lineNumber: lines.length + 1, content, status: "pending" });
+    });
+  });
+  return lines.length > 0 ? lines : [{ lineNumber: 1, content: "// Waiting for source files...", status: "pending" }];
+};
+
+const codeLinesFromSource = (source: string): CodeLine[] =>
+  splitSourceLines(source).map((content, index) => ({
+    lineNumber: index + 1,
+    content,
+    status: "pending" as const,
+  }));
+
 const ZIP_NO_SOURCE_MESSAGE =
   "This ZIP does not contain any C or C++ source files. Please upload a ZIP with .c, .cpp, .h, .hpp, .cc, .cxx, or .hxx files.";
 
 const SOURCE_EXTENSIONS = [".c", ".h", ".cpp", ".cxx", ".cc", ".hpp", ".hxx"];
 const C_EXTENSIONS = [".c", ".h"];
 const CPP_EXTENSIONS = [".cpp", ".cxx", ".cc", ".hpp", ".hxx"];
+const SHARED_GITHUB_INSTALLATION_KEY = "secureguard_github_installation_id";
+const LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY = "secureguard_personal_github_installation_id";
 
 const extensionOf = (filename: string): string => {
   const dotIndex = filename.lastIndexOf(".");
@@ -125,11 +174,13 @@ const extensionOf = (filename: string): string => {
 };
 
 const isGithubSourcePath = (path: string): boolean => SOURCE_EXTENSIONS.includes(extensionOf(path));
+const isGithubScannablePath = (path: string): boolean => isGithubSourcePath(path) || extensionOf(path) === ".zip";
 
 const githubLanguageLabel = (path: string): string => {
   const ext = extensionOf(path);
   if (C_EXTENSIONS.includes(ext)) return "C";
   if (CPP_EXTENSIONS.includes(ext)) return "C++";
+  if (ext === ".zip") return "ZIP";
   if (ext === ".md") return "Markdown";
   if (ext === ".py") return "Python";
   if ([".js", ".jsx", ".ts", ".tsx"].includes(ext)) return "JS";
@@ -314,6 +365,10 @@ const NewScan = () => {
   const [githubFileSearch, setGithubFileSearch] = useState("");
   const [githubFileFilter, setGithubFileFilter] = useState<"all" | "source">("all");
   const [selectedGithubFiles, setSelectedGithubFiles] = useState<Set<string>>(new Set());
+  const [teamGithubFiles, setTeamGithubFiles] = useState<BranchFileItem[]>([]);
+  const [teamGithubFilesLoading, setTeamGithubFilesLoading] = useState(false);
+  const [teamGithubFilesError, setTeamGithubFilesError] = useState("");
+  const [selectedTeamGithubFiles, setSelectedTeamGithubFiles] = useState<Set<string>>(new Set());
   // Per-uploaded-file "save to project" toggle: index → boolean
 
   // Fetch projects for the selector
@@ -332,15 +387,26 @@ const NewScan = () => {
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const selectedGithubRepo = githubRepos.find((repo) => repo.full_name === selectedGithubRepoName) ?? null;
 
-  const githubSourceFiles = githubFiles.filter((file) => file.type === "file" && isGithubSourcePath(file.path));
+  const githubSourceFiles = githubFiles.filter((file) => file.type === "file" && isGithubScannablePath(file.path));
   const filteredGithubFiles = githubFiles.filter((file) => {
     const matchesSearch = !githubFileSearch.trim() || file.path.toLowerCase().includes(githubFileSearch.trim().toLowerCase());
-    const matchesFilter = githubFileFilter === "all" || isGithubSourcePath(file.path);
+    const matchesFilter = githubFileFilter === "all" || isGithubScannablePath(file.path);
     return matchesSearch && matchesFilter;
   });
 
   const selectedGithubLanguage: "C" | "C++" | "C, C++" | null = (() => {
     const selected = githubFiles.filter((file) => selectedGithubFiles.has(file.path));
+    const hasC = selected.some((file) => C_EXTENSIONS.includes(extensionOf(file.path)));
+    const hasCpp = selected.some((file) => CPP_EXTENSIONS.includes(extensionOf(file.path)));
+    if (hasC && hasCpp) return "C, C++";
+    if (hasCpp) return "C++";
+    if (hasC) return "C";
+    return null;
+  })();
+
+  const teamGithubSourceFiles = teamGithubFiles.filter((file) => file.type === "file" && isGithubScannablePath(file.path));
+  const selectedTeamGithubLanguage: "C" | "C++" | "C, C++" | null = (() => {
+    const selected = teamGithubFiles.filter((file) => selectedTeamGithubFiles.has(file.path));
     const hasC = selected.some((file) => C_EXTENSIONS.includes(extensionOf(file.path)));
     const hasCpp = selected.some((file) => CPP_EXTENSIONS.includes(extensionOf(file.path)));
     if (hasC && hasCpp) return "C, C++";
@@ -374,6 +440,26 @@ const NewScan = () => {
     }
   };
 
+  const handleDisconnectGithub = () => {
+    window.localStorage.removeItem(SHARED_GITHUB_INSTALLATION_KEY);
+    window.sessionStorage.removeItem(LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY);
+    setGithubInstallationId(null);
+    setGithubRepos([]);
+    setGithubReposError("");
+    setSelectedGithubRepoName("");
+    setGithubBranches([]);
+    setBranch("main");
+    setGithubFiles([]);
+    setGithubFilesError("");
+    setGithubFileSearch("");
+    setGithubFileFilter("all");
+    setSelectedGithubFiles(new Set());
+    window.history.replaceState({}, "", "/new-scan");
+    toast.success("GitHub disconnected", {
+      description: "You can now connect a different GitHub account.",
+    });
+  };
+
   // If the selected project belongs to a team, fetch that team's GitHub info
   // ── Fetch project files whenever a real project is selected ──────────────
   const fetchProjectFiles = useCallback(async (projectId: string) => {
@@ -404,12 +490,15 @@ const NewScan = () => {
 
   useEffect(() => {
     const installationFromUrl = searchParams.get("github_installation_id");
-    const storedInstallation = window.sessionStorage.getItem("secureguard_personal_github_installation_id");
+    const storedInstallation =
+      window.localStorage.getItem(SHARED_GITHUB_INSTALLATION_KEY) ||
+      window.sessionStorage.getItem(LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY);
     const rawInstallation = installationFromUrl || storedInstallation;
     const parsedInstallation = rawInstallation ? Number(rawInstallation) : NaN;
     if (Number.isFinite(parsedInstallation) && parsedInstallation > 0) {
       setGithubInstallationId(parsedInstallation);
-      window.sessionStorage.setItem("secureguard_personal_github_installation_id", String(parsedInstallation));
+      window.localStorage.setItem(SHARED_GITHUB_INSTALLATION_KEY, String(parsedInstallation));
+      window.sessionStorage.setItem(LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY, String(parsedInstallation));
       setActiveTab("github");
       if (installationFromUrl) {
         toast.success("GitHub connected", {
@@ -474,7 +563,7 @@ const NewScan = () => {
         if (cancelled) return;
         setGithubFiles(response.files);
         const sourcePaths = response.files
-          .filter((file) => file.type === "file" && isGithubSourcePath(file.path))
+          .filter((file) => file.type === "file" && isGithubScannablePath(file.path))
           .map((file) => file.path);
         setSelectedGithubFiles(new Set(sourcePaths));
       })
@@ -528,10 +617,13 @@ const NewScan = () => {
     try {
       const created = await createProject({
         name: trimmedName,
-        type: "personal",
-        language: activeTab === "github" ? selectedGithubLanguage ?? undefined : detectedProjectLanguage ?? undefined,
+        type: scanMode,
+        language: activeTab === "github"
+          ? (isTeamMode ? selectedTeamGithubLanguage ?? undefined : selectedGithubLanguage ?? undefined)
+          : detectedProjectLanguage ?? undefined,
         upload_type: activeTab === "github" ? "github" : "upload",
-        github_repo: activeTab === "github" ? selectedGithubRepo?.url : undefined,
+        github_repo: activeTab === "github" ? (isTeamMode ? selectedApiTeam?.github_repo ?? undefined : selectedGithubRepo?.url) : undefined,
+        team_id: scanMode === "team" ? selectedTeamId : undefined,
       });
       setSelectedProjectId(created.id);
       setSelectedProjectName(created.name);
@@ -574,7 +666,57 @@ const NewScan = () => {
     }
     return [];
   })();
-  
+
+  useEffect(() => {
+    if (!isTeamMode || activeTab !== "github" || !selectedApiTeam?.github_repo) {
+      setTeamGithubFiles([]);
+      setSelectedTeamGithubFiles(new Set());
+      setTeamGithubFilesError("");
+      return;
+    }
+
+    const savedTeamBranch = window.localStorage.getItem(`secureguard_team_branch_${selectedApiTeam.id}`);
+    const nextBranch = savedTeamBranch && selectedApiTeam.github_branches.includes(savedTeamBranch)
+      ? savedTeamBranch
+      : branch && selectedApiTeam.github_branches.includes(branch)
+      ? branch
+      : selectedApiTeam.github_branches[0] || "";
+
+    if (!nextBranch) {
+      setTeamGithubFiles([]);
+      setSelectedTeamGithubFiles(new Set());
+      return;
+    }
+
+    if (branch !== nextBranch) {
+      setBranch(nextBranch);
+      return;
+    }
+
+    let cancelled = false;
+    setTeamGithubFilesLoading(true);
+    setTeamGithubFilesError("");
+    fetchBranchFiles(selectedApiTeam.id, nextBranch)
+      .then((response) => {
+        if (cancelled) return;
+        setTeamGithubFiles(response.files);
+        setSelectedTeamGithubFiles(new Set());
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setTeamGithubFiles([]);
+        setSelectedTeamGithubFiles(new Set());
+        setTeamGithubFilesError(err.message || "Failed to load team branch files");
+      })
+      .finally(() => {
+        if (!cancelled) setTeamGithubFilesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, branch, isTeamMode, selectedApiTeam?.github_repo, selectedApiTeam?.github_branches, selectedApiTeam?.id]);
+   
   // Scanning state
   const [currentPhase, setCurrentPhase] = useState(0);
   const [currentLine, setCurrentLine] = useState(0);
@@ -1001,6 +1143,12 @@ const NewScan = () => {
     let resolvedProjectName = selectedProjectName || projectName;
     let createdProjectDuringScan = false;
 
+    if (!resolvedProjectId && !resolvedProjectName.trim()) {
+      toast.error("Project is required", { description: "Select an existing project or enter a new project name before starting analysis." });
+      setIsScanning(false);
+      return;
+    }
+
     if (selectedProjectId === "__new__") {
       const trimmedName = newProjectName.trim();
       if (!/^[a-zA-Z]/.test(trimmedName)) {
@@ -1012,9 +1160,11 @@ const NewScan = () => {
         const created = await createProject({
           name: trimmedName,
           type: scanMode,
-          language: activeTab === "github" ? selectedGithubLanguage ?? undefined : detectedProjectLanguage ?? undefined,
+          language: activeTab === "github"
+            ? (isTeamMode ? selectedTeamGithubLanguage ?? undefined : selectedGithubLanguage ?? undefined)
+            : detectedProjectLanguage ?? undefined,
           upload_type: activeTab === "github" ? "github" : "upload",
-          github_repo: activeTab === "github" ? selectedGithubRepo?.url : undefined,
+          github_repo: activeTab === "github" ? (isTeamMode ? selectedApiTeam?.github_repo ?? undefined : selectedGithubRepo?.url) : undefined,
           team_id: scanMode === "team" ? selectedTeamId : undefined,
         });
         resolvedProjectId = created.id;
@@ -1210,6 +1360,7 @@ const NewScan = () => {
         }
         const message = friendlyScanError(err.message || "Scan failed");
         setScanError(message);
+        setCurrentPhase(5);
         failGlobalScanActivity(globalScanActivityId, message);
         addLog(`Error: ${message}`, "warning");
       }
@@ -1229,6 +1380,7 @@ const NewScan = () => {
       setCodeLines([]);
       setStats({ linesScanned: 0, totalLines: 0, vulnerabilitiesFound: 0, elapsedTime: 0 });
       sourceLineCountsRef.current = {};
+      let previewInterval: ReturnType<typeof setInterval> | null = null;
 
       try {
         if (!githubInstallationId || !selectedGithubRepo) {
@@ -1236,8 +1388,30 @@ const NewScan = () => {
         }
         const files = Array.from(selectedGithubFiles);
         if (files.length === 0) {
-          throw new Error("Select at least one C or C++ file from GitHub.");
+          throw new Error("Select at least one C/C++ file or ZIP archive from GitHub.");
         }
+        let previewLines = buildQueuedSourcePreview(files);
+        const previewFile = files.find((filePath) => extensionOf(filePath) !== ".zip") ?? files[0];
+        if (previewFile && resolvedProjectId && extensionOf(previewFile) !== ".zip") {
+          try {
+            const content = await fetchProjectFileContent(resolvedProjectId, branch, previewFile);
+            previewLines = codeLinesFromSource(`// ${previewFile}\n${content.content}`);
+          } catch (err: any) {
+            addLog(`Could not load live source preview for ${previewFile}; scanning will continue.`, "warning");
+          }
+        }
+        setCodeLines(previewLines);
+        setStats({ linesScanned: 0, totalLines: previewLines.length, vulnerabilitiesFound: 0, elapsedTime: 0 });
+        let previewIndex = 0;
+        previewInterval = setInterval(() => {
+          setCurrentLine((previewIndex % previewLines.length) + 1);
+          setCodeLines((prev) => prev.map((line, idx) => ({
+            ...line,
+            status: idx === previewIndex % previewLines.length ? "scanning" : idx < previewIndex ? "safe" : line.status,
+          })));
+          setStats((prev) => ({ ...prev, linesScanned: Math.min(previewIndex + 1, previewLines.length) }));
+          previewIndex += 1;
+        }, 160);
         globalScanActivityId = startGlobalScanActivity({
           title: resolvedProjectName || selectedGithubRepo.full_name || "GitHub scan",
           detail: `Fetching ${files.length} GitHub file${files.length === 1 ? "" : "s"} from ${branch}. You can keep working while analysis runs.`,
@@ -1269,13 +1443,15 @@ const NewScan = () => {
         );
 
         clearInterval(timerInterval);
+        if (previewInterval) clearInterval(previewInterval);
 
         setStats({
-          linesScanned: result.total_chunks_scanned,
-          totalLines: result.total_chunks_scanned,
+          linesScanned: previewLines.length,
+          totalLines: previewLines.length,
           vulnerabilitiesFound: result.total_vulnerabilities,
           elapsedTime: Math.floor((Date.now() - startTime) / 1000),
         });
+        setCodeLines((prev) => prev.map((line) => ({ ...line, status: "safe" })));
 
         setScanResult(result);
         setThinkingSteps([
@@ -1302,12 +1478,14 @@ const NewScan = () => {
 
       } catch (err: any) {
         clearInterval(timerInterval);
+        if (previewInterval) clearInterval(previewInterval);
         if (createdProjectDuringScan && resolvedProjectId && err.message?.includes("syntax error")) {
           await deleteProject(resolvedProjectId).catch(() => undefined);
           await refetchProjects();
         }
         const message = friendlyScanError(err.message || "Scan failed");
         setScanError(message);
+        setCurrentPhase(5);
         failGlobalScanActivity(globalScanActivityId, message);
         addLog(`Error: ${message}`, "warning");
       }
@@ -1331,6 +1509,7 @@ const NewScan = () => {
       setCodeLines([]);
       setStats({ linesScanned: 0, totalLines: 0, vulnerabilitiesFound: 0, elapsedTime: 0 });
       sourceLineCountsRef.current = {};
+      let previewInterval: ReturnType<typeof setInterval> | null = null;
 
       try {
         globalScanActivityId = startGlobalScanActivity({
@@ -1340,13 +1519,39 @@ const NewScan = () => {
         addLog("Preparing source package...", "info");
         setCurrentPhase(1);
 
-        addLog(`Fetching C/C++ files from branch: ${branch}...`, "info");
-        const files = await getBranchFiles(effectiveTeamId, branch);
+        const files = Array.from(selectedTeamGithubFiles);
+        if (files.length === 0) {
+          throw new Error("Select at least one team GitHub file to scan.");
+        }
+        let previewLines = buildQueuedSourcePreview(files);
+        const previewFile = files.find((filePath) => extensionOf(filePath) !== ".zip") ?? files[0];
+        if (previewFile && extensionOf(previewFile) !== ".zip") {
+          try {
+            const content = await fetchTeamFileContent(effectiveTeamId, branch, previewFile);
+            previewLines = codeLinesFromSource(`// ${previewFile}\n${content.content}`);
+          } catch (err: any) {
+            addLog(`Could not load live source preview for ${previewFile}; scanning will continue.`, "warning");
+          }
+        }
+        setCodeLines(previewLines);
+        setStats({ linesScanned: 0, totalLines: previewLines.length, vulnerabilitiesFound: 0, elapsedTime: 0 });
+        let previewIndex = 0;
+        previewInterval = setInterval(() => {
+          setCurrentLine((previewIndex % previewLines.length) + 1);
+          setCodeLines((prev) => prev.map((line, idx) => ({
+            ...line,
+            status: idx === previewIndex % previewLines.length ? "scanning" : idx < previewIndex ? "safe" : line.status,
+          })));
+          setStats((prev) => ({ ...prev, linesScanned: Math.min(previewIndex + 1, previewLines.length) }));
+          previewIndex += 1;
+        }, 160);
+
+        addLog(`Preparing ${files.length} selected team file${files.length === 1 ? "" : "s"} from branch: ${branch}...`, "info");
         setBranchFiles(files);
         updateGlobalScanActivity(globalScanActivityId, {
           detail: `Reviewing ${files.length} team file${files.length === 1 ? "" : "s"} from ${branch}. The report will appear in Reports.`,
         });
-        addLog(`Found ${files.length} C/C++ files`, "success");
+        addLog(`Selected ${files.length} team GitHub file${files.length === 1 ? "" : "s"}`, "success");
 
         setCurrentPhase(2);
         addLog("Reviewing files for vulnerabilities...", "info");
@@ -1358,13 +1563,15 @@ const NewScan = () => {
         });
 
         clearInterval(timerInterval);
+        if (previewInterval) clearInterval(previewInterval);
 
         setStats({
-          linesScanned: result.total_chunks_scanned,
-          totalLines: result.total_chunks_scanned,
+          linesScanned: previewLines.length,
+          totalLines: previewLines.length,
           vulnerabilitiesFound: result.total_vulnerabilities,
           elapsedTime: Math.floor((Date.now() - startTime) / 1000),
         });
+        setCodeLines((prev) => prev.map((line) => ({ ...line, status: "safe" })));
 
         setScanResult(result);
         setThinkingSteps([
@@ -1391,12 +1598,14 @@ const NewScan = () => {
 
       } catch (err: any) {
         clearInterval(timerInterval);
+        if (previewInterval) clearInterval(previewInterval);
         if (createdProjectDuringScan && resolvedProjectId && err.message?.includes("syntax error")) {
           await deleteProject(resolvedProjectId).catch(() => undefined);
           await refetchProjects();
         }
         const message = friendlyScanError(err.message || "Scan failed");
         setScanError(message);
+        setCurrentPhase(5);
         failGlobalScanActivity(globalScanActivityId, message);
         addLog(`Error: ${message}`, "warning");
       }
@@ -1538,7 +1747,7 @@ const NewScan = () => {
   };
 
   const githubReady = isTeamMode
-    ? !!(selectedApiTeam?.github_repo && branch)
+    ? !!(selectedApiTeam?.github_repo && branch && selectedTeamGithubFiles.size > 0)
     : !!(githubInstallationId && selectedGithubRepo && branch && selectedGithubFiles.size > 0);
 
   // Resolve the effective project name for validation
@@ -1561,13 +1770,15 @@ const NewScan = () => {
   const canStartScan =
     !isViewer &&
     (isTeamMode
-      ? !!(selectedTeamId && canScanInTeam) && (activeTab === "upload" ? uploadedFiles.length > 0 : githubReady)
+      ? !!(selectedTeamId && canScanInTeam) && effectiveProjectName !== "" && (activeTab === "upload" ? uploadedFiles.length > 0 : githubReady)
       : activeTab === "github"
         ? effectiveProjectName !== "" && githubReady
         : effectiveProjectName !== "" && hasFilesToScan
     );
 
-  const queuedFileCount = activeTab === "github" ? selectedGithubFiles.size : branchFiles.length || uploadedFiles.length || selectedFileIds.size;
+  const queuedFileCount = activeTab === "github"
+    ? (isTeamMode ? selectedTeamGithubFiles.size : selectedGithubFiles.size)
+    : branchFiles.length || uploadedFiles.length || selectedFileIds.size;
   const isUploadScan = activeTab === "upload";
 
   // Determine GitHub tab behavior based on selected project / team mode
@@ -1589,7 +1800,7 @@ const NewScan = () => {
               <h3 className="text-xl font-semibold">Import from GitHub</h3>
             </div>
             <p className="text-sm text-muted-foreground">
-              Connect your GitHub account, select a repository, and choose C/C++ files to scan.
+              Connect your GitHub account, select a repository, and choose C/C++ files or ZIP archives to scan.
             </p>
           </div>
 
@@ -1618,10 +1829,18 @@ const NewScan = () => {
             <p className="mb-4 text-sm text-muted-foreground">
               {githubInstallationId ? "GitHub is connected. Refresh repositories if you changed app access." : "Connect your GitHub account to import repositories."}
             </p>
-            <Button className="min-w-64 gap-2" onClick={handleConnectGithub}>
-              <Github className="h-4 w-4" />
-              {githubInstallationId ? "Reconnect GitHub" : "Connect GitHub"}
-            </Button>
+            <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <Button className="min-w-64 gap-2" onClick={handleConnectGithub}>
+                <Github className="h-4 w-4" />
+                {githubInstallationId ? "Reconnect GitHub" : "Connect GitHub"}
+              </Button>
+              {githubInstallationId && (
+                <Button type="button" variant="outline" className="min-w-44 gap-2" onClick={handleDisconnectGithub}>
+                  <Unplug className="h-4 w-4" />
+                  Disconnect GitHub
+                </Button>
+              )}
+            </div>
             <div className="mt-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
               <Lock className="h-3.5 w-3.5 text-amber-400" />
               We never store your GitHub credentials.
@@ -1703,7 +1922,7 @@ const NewScan = () => {
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h4 className="font-medium">Select files to scan</h4>
-                <p className="text-xs text-muted-foreground">Only C and C++ files are selectable for analysis.</p>
+                <p className="text-xs text-muted-foreground">C, C++, and ZIP archive files are selectable for analysis.</p>
               </div>
               {githubFilesLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
             </div>
@@ -1724,7 +1943,7 @@ const NewScan = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Filter: All Files</SelectItem>
-                  <SelectItem value="source">Filter: C/C++</SelectItem>
+                  <SelectItem value="source">Filter: C/C++ & ZIP</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1750,7 +1969,7 @@ const NewScan = () => {
                   </div>
                 ) : (
                   filteredGithubFiles.map((file) => {
-                    const isSource = isGithubSourcePath(file.path);
+                    const isSource = isGithubScannablePath(file.path);
                     const language = githubLanguageLabel(file.path);
                     return (
                       <div
@@ -1813,36 +2032,76 @@ const NewScan = () => {
       }
 
       return (
-        <CardContent className="pt-6 space-y-6">
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Repository</Label>
-            <div className="relative">
-              <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                value={selectedApiTeam.github_repo}
-                readOnly
-                className="pl-10 pr-10 opacity-75 bg-muted/30"
-              />
-              <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <CardContent className="pt-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-semibold">Team branch files</h3>
+              <p className="text-sm text-muted-foreground">
+                Files are loaded from the repository and branch configured on the Teams page.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Badge variant="outline" className="gap-1">
+                <Github className="h-3.5 w-3.5" />
+                {selectedApiTeam.github_repo.replace("https://github.com/", "")}
+              </Badge>
+              <Badge variant="outline" className="gap-1">
+                <GitBranch className="h-3.5 w-3.5" />
+                {branch || selectedApiTeam.github_branches[0] || "No branch"}
+              </Badge>
             </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="branch" className="text-sm font-medium">Branch</Label>
-            {selectedApiTeam.github_branches.length > 0 ? (
-              <Select value={branch} onValueChange={setBranch}>
-                <SelectTrigger id="branch">
-                  <SelectValue placeholder="Select a branch" />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedApiTeam.github_branches.map((b) => (
-                    <SelectItem key={b} value={b}>{b}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                No branches found. Try syncing the repository from team settings.
-              </p>
+
+          <div className="rounded-lg border border-border/50 bg-background/30">
+            <div className="flex items-center justify-between border-b border-border/50 bg-muted/20 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="text-[10px] font-normal">
+                  {teamGithubSourceFiles.length} scannable files
+                </Badge>
+                <Badge variant="secondary" className="text-[10px] font-normal">
+                  {selectedTeamGithubFiles.size} selected
+                </Badge>
+              </div>
+              {teamGithubFilesLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+            </div>
+
+            {teamGithubFilesError && (
+              <p className="px-3 py-3 text-sm text-destructive">{teamGithubFilesError}</p>
+            )}
+
+            {!teamGithubFilesLoading && !teamGithubFilesError && (
+              <div className="divide-y divide-border/50">
+                {teamGithubSourceFiles.length === 0 ? (
+                  <p className="px-3 py-4 text-sm text-muted-foreground">No C/C++ files or ZIP archives found in the selected team branch.</p>
+                ) : (
+                  teamGithubSourceFiles.map((file) => {
+                    const checked = selectedTeamGithubFiles.has(file.path);
+                    const language = githubLanguageLabel(file.path);
+                    return (
+                      <label key={file.path} className="grid cursor-pointer grid-cols-[32px_minmax(220px,1fr)_140px_90px] items-center gap-3 px-3 py-2 hover:bg-muted/20">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) => {
+                            setSelectedTeamGithubFiles((prev) => {
+                              const next = new Set(prev);
+                              if (value) next.add(file.path);
+                              else next.delete(file.path);
+                              return next;
+                            });
+                          }}
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{file.path}</p>
+                        </div>
+                        <Badge variant="outline" className={cn("w-fit", githubLanguageBadgeClass(language))}>
+                          {language}
+                        </Badge>
+                        <span className="text-right text-xs text-muted-foreground">{formatFileSize(file.size ?? 0)}</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
             )}
           </div>
         </CardContent>
@@ -2000,6 +2259,9 @@ const NewScan = () => {
                           <div className="mt-3 rounded-md bg-background/80 border border-border/50 p-3 text-sm text-foreground">
                             {scanError}
                           </div>
+                          <Button className="mt-3" onClick={handleReset}>
+                            Back to New Scan
+                          </Button>
                         </div>
                       </div>
                     </Card>
@@ -2627,7 +2889,7 @@ const NewScan = () => {
             </TabsTrigger>
             <TabsTrigger value="github" className="gap-2 text-sm font-medium">
               <Github className="h-4 w-4" />
-              Import from GitHub
+              {isTeamMode ? "Select Team GitHub Files" : "Import from GitHub"}
             </TabsTrigger>
           </TabsList>
 

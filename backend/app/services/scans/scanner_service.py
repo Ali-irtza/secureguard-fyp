@@ -35,7 +35,13 @@ def _corrected_code_from_chunks(chunk_outputs: list[dict]) -> str:
 
 async def _get_token_for_team(team_id: str, supabase: Client) -> str:
     """Helper to get a fresh installation token for a team."""
-    team_result = supabase.table("teams").select("github_installation_id").eq("id", team_id).single().execute()
+    team_result = (
+        supabase.table("team")
+        .select("github_installation_id")
+        .eq("team_id", team_id)
+        .single()
+        .execute()
+    )
     installation_id = team_result.data.get("github_installation_id") if team_result.data else None
 
     if not installation_id:
@@ -51,7 +57,13 @@ async def fetch_branch_files(team_id: str, branch_name: str, user_id: str, supab
     """
     require_member(team_id, user_id, supabase)
     
-    team_result = supabase.table("teams").select("github_repo").eq("id", team_id).single().execute()
+    team_result = (
+        supabase.table("team")
+        .select("github_repo")
+        .eq("team_id", team_id)
+        .single()
+        .execute()
+    )
     repo_url = team_result.data.get("github_repo")
     if not repo_url:
         raise HTTPException(status_code=400, detail="Team has no connected GitHub repository.")
@@ -90,11 +102,19 @@ async def fetch_branch_files(team_id: str, branch_name: str, user_id: str, supab
         
         return c_cpp_files
 
-async def _fetch_blob_content(client: httpx.AsyncClient, owner: str, repo: str, file_path: str, headers: dict) -> tuple[str, str]:
+async def _fetch_blob_content(
+    client: httpx.AsyncClient,
+    owner: str,
+    repo: str,
+    file_path: str,
+    branch: str,
+    headers: dict,
+) -> tuple[str, str]:
     """Fetches a single file's content via the GitHub Contents API."""
     resp = await client.get(
         f"{GITHUB_API}/repos/{owner}/{repo}/contents/{file_path}",
-        headers=headers
+        headers=headers,
+        params={"ref": branch},
     )
     if resp.status_code == 200:
         data = resp.json()
@@ -114,7 +134,13 @@ async def fetch_selected_code_hybrid(team_id: str, branch_name: str, selected_fi
     if not selected_files:
         return {}
 
-    team_result = supabase.table("teams").select("github_repo").eq("id", team_id).single().execute()
+    team_result = (
+        supabase.table("team")
+        .select("github_repo")
+        .eq("team_id", team_id)
+        .single()
+        .execute()
+    )
     repo_url = team_result.data.get("github_repo")
     if not repo_url:
         raise HTTPException(status_code=400, detail="Team has no connected GitHub repository.")
@@ -136,7 +162,7 @@ async def fetch_selected_code_hybrid(team_id: str, branch_name: str, selected_fi
         # ---------------------------------------------------------
         async with httpx.AsyncClient(timeout=30.0) as client:
             tasks = [
-                _fetch_blob_content(client, owner, repo, path, headers)
+                _fetch_blob_content(client, owner, repo, path, branch_name, headers)
                 for path in selected_files
             ]
             results = await asyncio.gather(*tasks)

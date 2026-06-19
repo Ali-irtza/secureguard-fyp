@@ -2,12 +2,13 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   FolderOpen, FolderClosed, FileText, FileCode2, FileJson, FileImage,
   ChevronRight, ChevronDown, Loader2, GitBranch, X, ArrowLeft,
-  FileType, Info, Lock, Maximize2, RefreshCw,
+  FileType, Info, Lock, Maximize2, RefreshCw, Search, Filter,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -107,6 +108,25 @@ function getLanguageFromPath(path: string): string {
   return map[ext] ?? "text";
 }
 
+function getLanguageLabel(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const label = getLanguageFromPath(path);
+  if (ext === "cpp" || ext === "cc" || ext === "cxx" || ext === "hpp") return "C++";
+  if (ext === "c" || ext === "h") return "C";
+  if (ext === "zip") return "ZIP";
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function getLanguageBadgeClass(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (["cpp", "cc", "cxx", "hpp"].includes(ext)) return "bg-purple-500/20 text-purple-200 border-purple-500/30";
+  if (["c", "h"].includes(ext)) return "bg-violet-500/20 text-violet-200 border-violet-500/30";
+  if (ext === "zip") return "bg-amber-500/20 text-amber-200 border-amber-500/30";
+  if (["md", "mdx"].includes(ext)) return "bg-muted/20 text-muted-foreground border-border/60";
+  if (ext === "py") return "bg-blue-500/20 text-blue-200 border-blue-500/30";
+  return "bg-muted/20 text-muted-foreground border-border/60";
+}
+
 // ---------------------------------------------------------------------------
 // Tree Node Component
 // ---------------------------------------------------------------------------
@@ -199,12 +219,16 @@ interface BranchFileExplorerProps {
   team: Team;
   currentUserRole: TeamRole;
   currentUserBranches: string[] | null;
+  selectedBranch?: string;
+  onSelectedBranchChange?: (branch: string) => void;
 }
 
 export default function BranchFileExplorer({
   team,
   currentUserRole,
   currentUserBranches,
+  selectedBranch: externalSelectedBranch,
+  onSelectedBranchChange,
 }: BranchFileExplorerProps) {
   const isAdmin = currentUserRole === "admin";
   const isDeveloper = currentUserRole === "developer";
@@ -221,13 +245,26 @@ export default function BranchFileExplorer({
   const [loadingContent, setLoadingContent] = useState(false);
   const [fileSize, setFileSize] = useState<number>(0);
   const [expandedFile, setExpandedFile] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [languageFilter, setLanguageFilter] = useState("all");
+  const [zipPreviewPath, setZipPreviewPath] = useState<string | null>(null);
+
+  const handleSelectedBranchChange = useCallback((branch: string) => {
+    setSelectedBranch(branch);
+    onSelectedBranchChange?.(branch);
+  }, [onSelectedBranchChange]);
+
+  useEffect(() => {
+    if (!externalSelectedBranch || externalSelectedBranch === selectedBranch) return;
+    setSelectedBranch(externalSelectedBranch);
+  }, [externalSelectedBranch, selectedBranch]);
 
   // Auto-select branch for developers: pick first assigned branch
   // Load cached content if available
   useEffect(() => {
     if (isDeveloper && currentUserBranches && currentUserBranches.length > 0) {
       const firstBranch = currentUserBranches[0];
-      setSelectedBranch(firstBranch);
+      handleSelectedBranchChange(firstBranch);
       
       // Try to load cached files for this branch
       const cachedFiles = getCachedBranchFiles(team.id, firstBranch);
@@ -235,7 +272,7 @@ export default function BranchFileExplorer({
         setFiles(cachedFiles.files);
       }
     }
-  }, [isDeveloper, currentUserBranches, team.id]);
+  }, [handleSelectedBranchChange, isDeveloper, currentUserBranches, team.id]);
 
   // Fetch file tree when branch changes — stale-while-revalidate
   useEffect(() => {
@@ -298,8 +335,17 @@ export default function BranchFileExplorer({
 
   // Fetch file content when file is selected — module-level cache in teams-api.ts
   const handleFileClick = useCallback((path: string) => {
-    if (path === selectedFile) return;
+    if (path.toLowerCase().endsWith(".zip")) {
+      setZipPreviewPath(path);
+      return;
+    }
+
+    if (path === selectedFile) {
+      setExpandedFile(true);
+      return;
+    }
     setSelectedFile(path);
+    setExpandedFile(true);
 
     // Check module-level cache (survives navigation)
     const cached = getCachedFileContent(team.id, selectedBranch, path);
@@ -324,8 +370,24 @@ export default function BranchFileExplorer({
       .finally(() => setLoadingContent(false));
   }, [selectedBranch, selectedFile, team.id]);
 
+  const visibleFiles = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return files.filter(file => {
+      if (file.type !== "file") return false;
+      if (query && !file.path.toLowerCase().includes(query)) return false;
+      if (languageFilter === "all") return true;
+      const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
+      if (languageFilter === "c") return ext === "c";
+      if (languageFilter === "cpp") return ["cpp", "cc", "cxx", "hpp"].includes(ext);
+      if (languageFilter === "c-cpp") return ["c", "h", "cpp", "cc", "cxx", "hpp"].includes(ext);
+      if (languageFilter === "zip") return ext === "zip";
+      return true;
+    });
+  }, [files, languageFilter, searchQuery]);
+
   // Build tree from flat file list
-  const tree = useMemo(() => buildTree(files), [files]);
+  const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles]);
 
   // ── Viewer — no access ──────────────────────────────────────────────────
   if (isViewer) {
@@ -377,7 +439,7 @@ export default function BranchFileExplorer({
   // ── Main explorer ────────────────────────────────────────────────────────
   return (<>
     <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-      <CardHeader>
+      <CardHeader className="pb-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <CardTitle className="flex items-center gap-2">
             <GitBranch className="h-5 w-5" />
@@ -402,9 +464,9 @@ export default function BranchFileExplorer({
 
           {/* Branch selector — admin can select from all branches */}
           {isAdmin ? (
-            <div className="flex items-center gap-2">
+            <div className="hidden">
               <span className="text-sm text-muted-foreground">Branch:</span>
-              <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+              <Select value={selectedBranch} onValueChange={handleSelectedBranchChange}>
                 <SelectTrigger className="w-56 h-9 bg-background/50 border-border/50 text-sm">
                   <SelectValue placeholder="Select a branch…" />
                 </SelectTrigger>
@@ -422,10 +484,10 @@ export default function BranchFileExplorer({
             </div>
           ) : (
             /* Developer — dropdown of assigned branches */
-            <div className="flex items-center gap-2">
+            <div className="hidden">
               <span className="text-sm text-muted-foreground">Branch:</span>
               {currentUserBranches && currentUserBranches.length > 0 ? (
-                <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+                <Select value={selectedBranch} onValueChange={handleSelectedBranchChange}>
                   <SelectTrigger className="w-56 h-9 bg-background/50 border-border/50 text-sm">
                     <SelectValue placeholder="Select a branch…" />
                   </SelectTrigger>
@@ -447,6 +509,28 @@ export default function BranchFileExplorer({
               )}
             </div>
           )}
+          <Select value={languageFilter} onValueChange={setLanguageFilter}>
+            <SelectTrigger className="w-52 h-9 bg-background/50 border-border/50 text-sm">
+              <Filter className="mr-2 h-4 w-4 text-muted-foreground" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="c">Filter: C Files</SelectItem>
+              <SelectItem value="cpp">Filter: C++ Files</SelectItem>
+              <SelectItem value="c-cpp">Filter: C/C++ Files</SelectItem>
+              <SelectItem value="zip">Filter: ZIP Files</SelectItem>
+              <SelectItem value="all">Filter: All Files</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="relative mt-3 w-full max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={event => setSearchQuery(event.target.value)}
+            placeholder="Search files..."
+            className="h-9 bg-background/50 border-border/50 pl-9"
+          />
         </div>
       </CardHeader>
 
@@ -484,19 +568,56 @@ export default function BranchFileExplorer({
         )}
 
         {/* File explorer */}
-        {selectedBranch && !loadingFiles && !fileTreeError && files.length > 0 && (
+        {selectedBranch && !loadingFiles && !fileTreeError && visibleFiles.length > 0 && (
           <div className="border border-border/50 rounded-lg overflow-hidden bg-background/30">
             {/* Stats bar */}
             <div className="px-3 py-2 border-b border-border/50 bg-muted/20 flex items-center gap-3">
               <Badge variant="secondary" className="text-[10px] font-normal">
-                {files.filter(f => f.type === "file").length} files
+                {visibleFiles.filter(f => f.type === "file").length} files
               </Badge>
               <Badge variant="secondary" className="text-[10px] font-normal">
-                {files.filter(f => f.type === "directory").length} folders
+                {visibleFiles.filter(f => f.type === "directory").length} folders
               </Badge>
             </div>
 
-            <div className="flex flex-col lg:flex-row h-[500px]">
+            <div className="divide-y divide-border/50">
+              <div className="grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_150px_90px] items-center px-4 py-2 text-xs font-medium text-muted-foreground">
+                <span>File Name</span>
+                <span>Path</span>
+                <span>Language</span>
+                <span className="text-right">Size</span>
+              </div>
+              {visibleFiles.map(file => {
+                return (
+                  <div
+                    key={file.path}
+                    className="grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_150px_90px] items-center px-4 py-2 text-sm hover:bg-muted/20"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleFileClick(file.path)}
+                      className="flex min-w-0 items-center gap-2 text-left font-medium hover:text-primary"
+                    >
+                      {getFileIcon(file.path)}
+                      <span className="truncate">{file.path.split("/").pop()}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFileClick(file.path)}
+                      className="truncate text-left text-muted-foreground hover:text-foreground"
+                    >
+                      {file.path}
+                    </button>
+                    <Badge variant="outline" className={`w-fit ${getLanguageBadgeClass(file.path)}`}>
+                      {getLanguageLabel(file.path)}
+                    </Badge>
+                    <span className="text-right text-xs text-muted-foreground">{formatSize(file.size)}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden">
               {/* File tree panel */}
               <div className={`${selectedFile ? "lg:w-[320px] lg:border-r border-b lg:border-b-0" : "w-full"} border-border/50 shrink-0 overflow-hidden`}>
                 <ScrollArea className="h-full">
@@ -584,10 +705,12 @@ export default function BranchFileExplorer({
         )}
 
         {/* Empty state */}
-        {selectedBranch && !loadingFiles && !fileTreeError && files.length === 0 && (
+        {selectedBranch && !loadingFiles && !fileTreeError && visibleFiles.length === 0 && (
           <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-3">
             <FileText className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No files found in this branch</p>
+            <p className="text-sm text-muted-foreground">
+              {files.length === 0 ? "No files found in this branch" : "No files match the current filters"}
+            </p>
           </div>
         )}
       </CardContent>
@@ -637,5 +760,34 @@ export default function BranchFileExplorer({
         </DialogContent>
       </Dialog>
     )}
+
+    <Dialog open={!!zipPreviewPath} onOpenChange={(open) => !open && setZipPreviewPath(null)}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>ZIP archive contents</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {zipPreviewPath} is a ZIP file. Code preview is disabled for archives.
+          </p>
+          <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Files available from this branch:</p>
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {files
+                .filter(file => file.type === "file" && file.path !== zipPreviewPath)
+                .map(file => (
+                  <div key={file.path} className="flex items-center gap-2 rounded px-2 py-1 text-sm">
+                    {getFileIcon(file.path)}
+                    <span className="truncate">{file.path}</span>
+                  </div>
+                ))}
+              {files.filter(file => file.type === "file" && file.path !== zipPreviewPath).length === 0 && (
+                <p className="text-sm text-muted-foreground">No extracted file names are available for this archive.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   </>);
 }

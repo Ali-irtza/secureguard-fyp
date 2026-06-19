@@ -99,6 +99,14 @@ class ConnectGithubRequest(BaseModel):
         return v.strip()
 
 
+class AttachGithubInstallationRequest(BaseModel):
+    """
+    POST /teams/{team_id}/github/installation
+    Reuses an existing GitHub App installation for a team.
+    """
+    installation_id: int
+
+
 class InviteMemberRequest(BaseModel):
     """
     POST /teams/{team_id}/members

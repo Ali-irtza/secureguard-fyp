@@ -19,6 +19,18 @@ import type { AlertRecord } from "@/types/realtime";
 import { applyOptimisticInsert, applyOptimisticUpdate, applyOptimisticDelete } from "@/types/realtime";
 
 const emptySeverityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+const severityWeights = { critical: 10, high: 6, medium: 3, low: 1 };
+const maxWeightedRisk = 150;
+
+const healthScoreFromCounts = (counts: typeof emptySeverityCounts): number => {
+  const weightedRisk =
+    counts.critical * severityWeights.critical +
+    counts.high * severityWeights.high +
+    counts.medium * severityWeights.medium +
+    counts.low * severityWeights.low;
+  const riskPercent = Math.min(100, Math.round((weightedRisk / maxWeightedRisk) * 100));
+  return Math.max(0, 100 - riskPercent);
+};
 
 const formatTimeAgo = (isoString: string): string => {
   const diffMs = Date.now() - new Date(isoString).getTime();
@@ -71,6 +83,21 @@ const Dashboard = () => {
     enabled: isTeamView && !!selectedTeamId,
   });
 
+  const projectById = useMemo(() => {
+    return new Map(projects.map((project) => [project.id, project]));
+  }, [projects]);
+
+  const personalScans = useMemo(() => {
+    return rawScans.filter((scan) => {
+      if (!scan.project_id) return true;
+      const project = projectById.get(scan.project_id);
+      if (!project) {
+        return !String(scan.project_name || "").toLowerCase().includes("team");
+      }
+      return project.type === "personal" && !String(project.name || "").toLowerCase().includes("team");
+    });
+  }, [projectById, rawScans]);
+
   const { status: alertsStatus, connectionCount: alertsConnectionCount } = useRealtimeSync<AlertRecord>({
     table: "alerts",
     enabled: true,
@@ -86,7 +113,7 @@ const Dashboard = () => {
   });
 
   const personalRecentScans: Scan[] = useMemo(() => {
-    return rawScans
+    return personalScans
       .filter((scan) => Boolean(scan.project_name || scan.file_name || scan.branch))
       .slice()
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -98,10 +125,10 @@ const Dashboard = () => {
         status: (scan.status === "completed" ? "completed" : "failed") as Scan["status"],
         vulnerabilities: scan.severity_counts ?? { ...emptySeverityCounts, low: scan.total_vulns ?? 0 },
       }));
-  }, [rawScans]);
+  }, [personalScans]);
 
   const personalTrend = useMemo(() => {
-    const trend = rawScans
+    const trend = personalScans
       .filter((scan) => scan.status === "completed")
       .reduce((acc, scan) => {
         const date = new Date(scan.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -114,10 +141,10 @@ const Dashboard = () => {
       }, new Map<string, { date: string; critical: number; high: number; medium: number }>());
 
     return Array.from(trend.values()).slice(-7);
-  }, [rawScans]);
+  }, [personalScans]);
 
   const personalCriticalAlerts = useMemo(() => {
-    return rawScans
+    return personalScans
       .filter((scan) => (scan.severity_counts?.critical ?? 0) > 0)
       .map((scan) => ({
         id: scan.id,
@@ -126,7 +153,7 @@ const Dashboard = () => {
         timeAgo: formatTimeAgo(scan.created_at),
       }))
       .slice(0, 10);
-  }, [rawScans]);
+  }, [personalScans]);
 
   const teamRecentScans: Scan[] = useMemo(() => {
     return (teamDashboard?.recentScans ?? []).map((scan) => ({
@@ -150,11 +177,17 @@ const Dashboard = () => {
     }));
   }, [teamDashboard?.criticalAlerts]);
 
-  const totalScans = rawScans.length;
-  const criticalVulns = rawScans.reduce((sum, scan) => sum + (scan.severity_counts?.critical ?? 0), 0);
-  const healthScores = projects
+  const totalScans = personalScans.length;
+  const criticalVulns = personalScans.reduce((sum, scan) => sum + (scan.severity_counts?.critical ?? 0), 0);
+  const completedScanCounts = personalScans
+    .filter((scan) => scan.status === "completed" && scan.severity_counts)
+    .map((scan) => scan.severity_counts ?? emptySeverityCounts);
+  const scanHealthScores = completedScanCounts.map(healthScoreFromCounts);
+  const projectHealthScores = projects
+    .filter((project) => project.type === "personal")
     .map((project) => project.health_score)
     .filter((score): score is number => typeof score === "number" && !Number.isNaN(score));
+  const healthScores = scanHealthScores.length > 0 ? scanHealthScores : projectHealthScores;
 
   const personalMetrics = {
     totalScans,

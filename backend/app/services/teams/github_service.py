@@ -1,8 +1,11 @@
+import base64
+import hashlib
+import hmac
 import httpx
 import time
 import jwt
-import secrets
 from pathlib import Path
+from urllib.parse import urlencode
 from fastapi import HTTPException, status
 from fastapi.responses import RedirectResponse
 from supabase import Client
@@ -18,6 +21,29 @@ _installation_token_cache: dict[int, tuple[str, float]] = {}
 
 def _frontend_team_url() -> str:
     return f"{settings.frontend_base_url.rstrip('/')}/team"
+
+def _state_secret() -> bytes:
+    secret = (
+        getattr(settings, "github_client_secret", None)
+        or getattr(settings, "supabase_service_role_key", None)
+        or getattr(settings, "supabase_anon_key", None)
+        or "secureguard-team-state"
+    )
+    return str(secret).encode("utf-8")
+
+def _sign_team_state(team_id: str) -> str:
+    signature = hmac.new(_state_secret(), team_id.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"team:{team_id}:{signature}"
+
+def _verify_team_state(state: str) -> str | None:
+    parts = state.split(":")
+    if len(parts) != 3 or parts[0] != "team":
+        return None
+    team_id = parts[1]
+    expected = hmac.new(_state_secret(), team_id.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(parts[2], expected):
+        return None
+    return team_id
 
 def _load_private_key() -> str:
     pem_path = Path(settings.github_private_key_path)
@@ -146,12 +172,12 @@ async def connect_github_repo(team_id: str, repo_url: str, pat: str, user_id: st
             page += 1
 
     team_result = (
-        supabase.table("teams")
+        supabase.table("team")
         .update({
             "github_repo":     repo_url,
             "github_branches": branches,
         })
-        .eq("id", team_id)
+        .eq("team_id", team_id)
         .execute()
     )
     if not team_result.data:
@@ -200,9 +226,9 @@ async def sync_branches(team_id: str, user_id: str, supabase: Client) -> TeamRes
             page += 1
 
     team_result = (
-        supabase.table("teams")
+        supabase.table("team")
         .update({"github_branches": branches})
-        .eq("id", team_id)
+        .eq("team_id", team_id)
         .execute()
     )
     if not team_result.data:
@@ -230,34 +256,39 @@ async def process_github_callback(installation_id: int | None, state: str | None
             )
         return RedirectResponse(f"{settings.frontend_base_url.rstrip('/')}/new-scan?github_error=no_installation")
 
-    if not state or not installation_id:
+    if not state:
         return RedirectResponse(f"{frontend_team_url}?github_error=missing_params")
 
-    # Route project callbacks — state starts with "project:" when initiated
-    # from a personal project's GitHub authorize flow.
     if state.startswith("project:"):
         from app.services.projects.project_github_service import process_github_callback as project_callback
         return await project_callback(installation_id, state, supabase)
 
-    try:
-        team_id, csrf_token = state.split(":", 1)
-    except ValueError:
+    resolved_installation_id = installation_id
+    if not resolved_installation_id and code:
+        from app.services.projects.project_github_service import resolve_personal_installation_id_from_oauth_code
+
+        resolved_installation_id = await resolve_personal_installation_id_from_oauth_code(code)
+
+    if not resolved_installation_id:
+        return RedirectResponse(f"{frontend_team_url}?github_error=no_installation")
+
+    team_id = _verify_team_state(state)
+    if not team_id:
         return RedirectResponse(f"{frontend_team_url}?github_error=invalid_state")
 
-    team_result = supabase.table("teams").select("github_oauth_token").eq("id", team_id).single().execute()
+    team_result = supabase.table("team").select("team_id").eq("team_id", team_id).single().execute()
     if not team_result.data:
         return RedirectResponse(f"{frontend_team_url}?github_error=team_not_found")
 
-    stored = team_result.data.get("github_oauth_token", "")
-    if stored != f"pending:{csrf_token}":
-        return RedirectResponse(f"{frontend_team_url}?github_error=csrf_mismatch")
+    supabase.table("team").update({
+        "github_installation_id": resolved_installation_id,
+    }).eq("team_id", team_id).execute()
 
-    supabase.table("teams").update({
-        "github_installation_id": installation_id,
-        "github_oauth_token":     None,
-    }).eq("id", team_id).execute()
-
-    return RedirectResponse(f"{frontend_team_url}?github_connected=true&team_id={team_id}")
+    return RedirectResponse(
+        f"{frontend_team_url}?github_connected=true"
+        f"&team_id={team_id}"
+        f"&github_installation_id={resolved_installation_id}"
+    )
 
 def generate_github_authorize_url(team_id: str, user_id: str, supabase: Client) -> GithubAuthorizeResponse:
     if not settings.github_app_id or not settings.github_client_id:
@@ -268,21 +299,22 @@ def generate_github_authorize_url(team_id: str, user_id: str, supabase: Client) 
 
     require_admin(team_id, user_id, supabase)
 
-    csrf_token = secrets.token_urlsafe(32)
-    state = f"{team_id}:{csrf_token}"
-    supabase.table("teams").update({"github_oauth_token": f"pending:{csrf_token}"}).eq("id", team_id).execute()
-
-    authorization_url = (
-        f"https://github.com/apps/{GITHUB_APP_SLUG}/installations/new"
-        f"?state={state}"
+    params = urlencode(
+        {
+            "client_id": settings.github_client_id,
+            "redirect_uri": settings.github_callback_url,
+            "state": _sign_team_state(team_id),
+        }
     )
 
-    return GithubAuthorizeResponse(authorization_url=authorization_url)
+    return GithubAuthorizeResponse(
+        authorization_url=f"https://github.com/login/oauth/authorize?{params}"
+    )
 
 async def fetch_installation_repos(team_id: str, user_id: str, supabase: Client) -> dict:
     require_admin(team_id, user_id, supabase)
 
-    team_result = supabase.table("teams").select("github_installation_id").eq("id", team_id).single().execute()
+    team_result = supabase.table("team").select("github_installation_id").eq("team_id", team_id).single().execute()
     installation_id = team_result.data.get("github_installation_id") if team_result.data else None
 
     if not installation_id:
@@ -320,13 +352,42 @@ async def fetch_installation_repos(team_id: str, user_id: str, supabase: Client)
 
     return {"repos": repos}
 
+
+async def attach_installation_to_team(
+    team_id: str,
+    installation_id: int,
+    user_id: str,
+    supabase: Client,
+) -> TeamResponse:
+    require_admin(team_id, user_id, supabase)
+
+    if not installation_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="installation_id is required",
+        )
+
+    await _get_installation_token(installation_id)
+
+    team_result = (
+        supabase.table("team")
+        .update({"github_installation_id": installation_id})
+        .eq("team_id", team_id)
+        .execute()
+    )
+    if not team_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    members = fetch_members_for_team(team_id, supabase)
+    return build_team_response(team_result.data[0], members, user_id)
+
 async def select_installation_repo(team_id: str, repo_full_name: str, repo_url: str, user_id: str, supabase: Client) -> TeamResponse:
     require_admin(team_id, user_id, supabase)
 
     if not repo_full_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="repo_full_name is required")
 
-    team_result = supabase.table("teams").select("github_installation_id").eq("id", team_id).single().execute()
+    team_result = supabase.table("team").select("github_installation_id").eq("team_id", team_id).single().execute()
     installation_id = team_result.data.get("github_installation_id") if team_result.data else None
 
     if not installation_id:
@@ -358,11 +419,10 @@ async def select_installation_repo(team_id: str, repo_full_name: str, repo_url: 
                 break
             page += 1
 
-    team_upd = supabase.table("teams").update({
+    team_upd = supabase.table("team").update({
         "github_repo":     repo_url or f"https://github.com/{repo_full_name}",
         "github_branches": branches,
-        "github_oauth_token": None,
-    }).eq("id", team_id).execute()
+    }).eq("team_id", team_id).execute()
 
     members = fetch_members_for_team(team_id, supabase)
     return build_team_response(team_upd.data[0], members, user_id)
@@ -405,9 +465,9 @@ def _check_branch_access(team_id: str, user_id: str, branch: str, supabase: Clie
 
 def _get_repo_full_name(team_id: str, supabase: Client) -> tuple[str, int]:
     """Returns (repo_full_name, installation_id) for a team."""
-    team = supabase.table("teams").select(
+    team = supabase.table("team").select(
         "github_repo, github_installation_id"
-    ).eq("id", team_id).single().execute()
+    ).eq("team_id", team_id).single().execute()
 
     if not team.data or not team.data.get("github_repo"):
         raise HTTPException(

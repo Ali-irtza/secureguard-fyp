@@ -164,7 +164,7 @@ export async function apiFetch<T>(
 // next call to listTeams() fetches fresh data from the API.
 // ---------------------------------------------------------------------------
 
-const TEAMS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const TEAMS_CACHE_TTL_MS = 0;
 
 let _teamsCache: { data: Team[]; timestamp: number } | null = null;
 
@@ -184,7 +184,7 @@ export function invalidateTeamsCache(): void {
     .channel("teams-cache-invalidation")
     .on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "teams" },
+      { event: "*", schema: "public", table: "team" },
       () => { invalidateTeamsCache(); }
     )
     .on(
@@ -298,6 +298,18 @@ export async function listGithubRepos(teamId: string): Promise<{ full_name: stri
   return data.repos;
 }
 
+/** POST /teams/:id/github/installation — attach an existing GitHub App installation to this team */
+export async function attachGithubInstallation(
+  teamId: string,
+  installationId: number
+): Promise<Team> {
+  invalidateTeamsCache();
+  return apiFetch<Team>(`/teams/${teamId}/github/installation`, {
+    method: "POST",
+    body: JSON.stringify({ installation_id: installationId }),
+  });
+}
+
 /** POST /teams/:id/github/select-repo — connect a specific repo, fetch its branches */
 export async function selectGithubRepo(
   teamId: string,
@@ -321,6 +333,14 @@ export async function inviteMember(
   return apiFetch<TeamMember>(`/teams/${teamId}/members`, {
     method: "POST",
     body: JSON.stringify({ email, role }),
+  });
+}
+
+/** POST /teams/:id/members/accept — invited user accepts a pending team invite */
+export async function acceptTeamInvite(teamId: string): Promise<TeamMember> {
+  invalidateTeamsCache();
+  return apiFetch<TeamMember>(`/teams/${teamId}/members/accept`, {
+    method: "POST",
   });
 }
 

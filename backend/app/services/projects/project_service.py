@@ -8,9 +8,11 @@ from app.models.projects import (
     ProjectResponse,
     ProjectUpdateRequest,
 )
+from app.services.teams.team_service import require_member
 
 
 def _to_project_response(row: dict) -> ProjectResponse:
+    team_id = row.get("team_id")
     return ProjectResponse(
         id=row["project_id"],
         name=row["project_name"],
@@ -18,7 +20,7 @@ def _to_project_response(row: dict) -> ProjectResponse:
         health_score=row.get("health_score"),
         type=row.get("project_type") or "personal",
         owner_id=row["user_id"],
-        team_id=None,
+        team_id=team_id,
         upload_type=row.get("upload_type"),
         github_repo=row.get("github_repo"),
         github_branches=[],
@@ -41,6 +43,19 @@ def require_owner(project_id: str, user_id: str, supabase: Client) -> dict:
             detail="Project not found",
         )
     if result.data["user_id"] != user_id:
+        if result.data.get("project_type") == "team":
+            team_result = (
+                supabase.table("team")
+                .select("team_id")
+                .eq("project_id", project_id)
+                .limit(1)
+                .execute()
+            )
+            team = (team_result.data or [None])[0]
+            if team:
+                require_member(team["team_id"], user_id, supabase)
+                result.data["team_id"] = team["team_id"]
+                return result.data
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not own this project",
@@ -56,22 +71,68 @@ def list_user_projects(user_id: str, supabase: Client) -> ProjectListResponse:
         .order("created_at", desc=True)
         .execute()
     )
-    return ProjectListResponse(
-        projects=[_to_project_response(row) for row in (result.data or [])]
+    projects_by_id = {row["project_id"]: row for row in (result.data or [])}
+
+    memberships = (
+        supabase.table("team_members")
+        .select("team_id")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .execute()
     )
+    team_ids = [row["team_id"] for row in (memberships.data or [])]
+    team_links: dict[str, str] = {}
+    if team_ids:
+        teams_result = (
+            supabase.table("team")
+            .select("team_id, project_id")
+            .in_("team_id", team_ids)
+            .execute()
+        )
+        project_ids = []
+        for team in teams_result.data or []:
+            if team.get("project_id"):
+                team_links[team["project_id"]] = team["team_id"]
+                project_ids.append(team["project_id"])
+        missing_ids = [project_id for project_id in project_ids if project_id not in projects_by_id]
+        if missing_ids:
+            team_projects = (
+                supabase.table("projects")
+                .select("*")
+                .in_("project_id", missing_ids)
+                .execute()
+            )
+            for row in team_projects.data or []:
+                projects_by_id[row["project_id"]] = row
+
+    projects = []
+    for row in projects_by_id.values():
+        enriched = {**row}
+        if enriched["project_id"] in team_links:
+            enriched["team_id"] = team_links[enriched["project_id"]]
+        projects.append(_to_project_response(enriched))
+    projects.sort(key=lambda item: item.created_at, reverse=True)
+    return ProjectListResponse(projects=projects)
 
 
 def create_project(body: ProjectCreateRequest, user_id: str, supabase: Client) -> ProjectResponse:
-    if body.type != "personal":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Only personal projects are enabled in this step.",
-        )
+    if body.type == "team":
+        if not body.team_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Team project requires a team_id.",
+            )
+        membership = require_member(body.team_id, user_id, supabase)
+        if membership.get("role") == "viewer":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Viewers cannot create team scan projects.",
+            )
 
     payload = {
         "user_id": user_id,
         "project_name": body.name,
-        "project_type": "personal",
+        "project_type": body.type,
         "upload_type": body.upload_type,
     }
     if body.language is not None:
@@ -90,7 +151,12 @@ def create_project(body: ProjectCreateRequest, user_id: str, supabase: Client) -
             ) from exc
         raise
 
-    return _to_project_response(result.data[0])
+    project = result.data[0]
+    if body.type == "team" and body.team_id:
+        supabase.table("team").update({"project_id": project["project_id"]}).eq("team_id", body.team_id).execute()
+        project["team_id"] = body.team_id
+
+    return _to_project_response(project)
 
 
 def get_project_by_id(project_id: str, user_id: str, supabase: Client) -> ProjectResponse:

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Users, Crown, Pencil, Trash2, Lock, Github,
   Info, Eye, EyeOff, UserPlus, ExternalLink,
-  RefreshCw, Plus, Loader2, GitBranch, Check, ChevronsUpDown,
+  RefreshCw, Plus, Loader2, GitBranch, Check, ChevronsUpDown, Unplug,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -28,14 +29,15 @@ import {
 import {
   listTeams, createTeam, updateTeam, deleteTeam,
   connectGithub, refreshGithubBranches,
-  getGithubAuthorizeUrl, listGithubRepos, selectGithubRepo,
+  getGithubAuthorizeUrl, listGithubRepos, selectGithubRepo, attachGithubInstallation,
   syncBranches,
-  inviteMember, updateMember, removeMember,
+  inviteMember, updateMember, removeMember, acceptTeamInvite,
   type Team, type TeamRole, type TeamMember,
 } from "@/lib/teams-api";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { parsePgTextArray } from "@/types/realtime";
 import type { TeamMemberRecord } from "@/types/realtime";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // BranchAssignDropdown — matches the role Select dropdown in style
@@ -142,6 +144,9 @@ function BranchAssignDropdown({ branches, assigned, onSave }: BranchAssignDropdo
 // Helpers
 // ---------------------------------------------------------------------------
 
+const SHARED_GITHUB_INSTALLATION_KEY = "secureguard_github_installation_id";
+const LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY = "secureguard_personal_github_installation_id";
+
 function getRoleBadgeClasses(role: TeamRole) {
   switch (role) {
     case "admin":     return "bg-primary/15 text-primary border-primary/30";
@@ -162,6 +167,7 @@ function getInitials(name: string | null, email: string | null): string {
 
 const Team = () => {
   const { user } = useCurrentUser();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // ── Data state ────────────────────────────────────────────────────────────
   const [teams, setTeams]               = useState<Team[]>([]);
@@ -173,6 +179,8 @@ const Team = () => {
   const [repoSelectLoading, setRepoSelectLoading] = useState(false);
   const [selectedRepoLoading, setSelectedRepoLoading] = useState<string | null>(null);
   const [refreshing, setRefreshing]     = useState(false);
+  const autoAttachedTeamsRef = useRef<Set<string>>(new Set());
+  const acceptingInviteRef = useRef<string | null>(null);
 
   // ── Modal state ───────────────────────────────────────────────────────────
   const [createTeamOpen, setCreateTeamOpen]     = useState(false);
@@ -191,6 +199,7 @@ const Team = () => {
   const [repoPicker, setRepoPicker]             = useState(false);
   const [githubRepos, setGithubRepos]           = useState<{ full_name: string; private: boolean; url: string }[]>([]);
   const [reposLoading, setReposLoading]         = useState(false);
+  const [selectedGithubBranch, setSelectedGithubBranch] = useState("");
 
   // ── UI state ───────────────────────────────────────────────────────────────
 
@@ -198,6 +207,28 @@ const Team = () => {
   const selectedTeam    = teams.find(t => t.id === selectedTeamId);
   const currentUserRole = selectedTeam?.current_user_role ?? "viewer";
   const isAdmin         = currentUserRole === "admin";
+  const canManageRepo   = currentUserRole === "admin" || currentUserRole === "developer";
+  const selectedTeamRepoName = selectedTeam?.github_repo?.replace("https://github.com/", "") ?? "";
+  const selectedTeamRepo = githubRepos.find(repo => repo.full_name === selectedTeamRepoName) ?? null;
+
+  useEffect(() => {
+    const branches = selectedTeam?.github_branches ?? [];
+    if (!branches.length) {
+      setSelectedGithubBranch("");
+      return;
+    }
+    const savedBranch = window.localStorage.getItem(`secureguard_team_branch_${selectedTeam?.id}`);
+    setSelectedGithubBranch(prev => {
+      if (branches.includes(prev)) return prev;
+      if (savedBranch && branches.includes(savedBranch)) return savedBranch;
+      return branches[0];
+    });
+  }, [selectedTeam?.github_branches, selectedTeam?.id]);
+
+  useEffect(() => {
+    if (!selectedTeam?.id || !selectedGithubBranch) return;
+    window.localStorage.setItem(`secureguard_team_branch_${selectedTeam.id}`, selectedGithubBranch);
+  }, [selectedGithubBranch, selectedTeam?.id]);
 
   // ── Realtime: live team_members sync ─────────────────────────────────────
   // CDC events carry raw DB columns (id, user_id, role, branches, team_id).
@@ -265,6 +296,30 @@ const Team = () => {
   }, [selectedTeamId]);
 
   useEffect(() => { fetchTeams(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const inviteTeamId = searchParams.get("invite_team_id");
+    if (!inviteTeamId || acceptingInviteRef.current === inviteTeamId) return;
+
+    acceptingInviteRef.current = inviteTeamId;
+    (async () => {
+      try {
+        await acceptTeamInvite(inviteTeamId);
+        toast.success("Team invitation accepted");
+        await fetchTeams();
+        setSelectedTeamId(inviteTeamId);
+      } catch (err: any) {
+        toast.error("Could not accept invitation", {
+          description: err.message ?? "Open SecureGuard with the invited account and try again.",
+        });
+      } finally {
+        acceptingInviteRef.current = null;
+        const next = new URLSearchParams(searchParams);
+        next.delete("invite_team_id");
+        setSearchParams(next, { replace: true });
+      }
+    })();
+  }, [fetchTeams, searchParams, setSearchParams]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -337,8 +392,20 @@ const Team = () => {
     if (!selectedTeam) return;
     setGithubAuthLoading(true);
     try {
+      const storedInstallation =
+        window.localStorage.getItem(SHARED_GITHUB_INSTALLATION_KEY) ||
+        window.sessionStorage.getItem(LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY);
+      const parsedInstallation = storedInstallation ? Number(storedInstallation) : NaN;
+      if (Number.isFinite(parsedInstallation) && parsedInstallation > 0) {
+        const updated = await attachGithubInstallation(selectedTeam.id, parsedInstallation);
+        setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+        toast.success("GitHub connection reused. Choose a repository for this team.");
+        await openRepoPickerForTeam(selectedTeam.id);
+        setGithubAuthLoading(false);
+        return;
+      }
+
       const url = await getGithubAuthorizeUrl(selectedTeam.id);
-      // Redirect the browser to GitHub's authorization page
       window.location.href = url;
     } catch (err: any) {
       toast.error(err.message ?? "Failed to start GitHub authorization");
@@ -347,34 +414,12 @@ const Team = () => {
   };
 
   const openRepoPickerForTeam = useCallback(async (teamId: string) => {
-    // Called when user returns from GitHub OAuth — load their repos
     setReposLoading(true);
     try {
       const repos = await listGithubRepos(teamId);
       setGithubRepos(repos);
-      setRepoPicker(true);
-      return;
-      
-      if (repos.length === 1) {
-        // Auto-connect if exactly one repository is selected
-        setActionLoading(true);
-        try {
-          const updated = await selectGithubRepo(teamId, repos[0].full_name, repos[0].url);
-          setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
-          toast.success(`Connected ${repos[0].full_name} — ${updated.github_branches.length} branches synced`);
-        } catch (err: any) {
-          toast.error(err.message ?? "Failed to connect repository");
-        } finally {
-          setActionLoading(false);
-        }
-      } else {
-        // Multiple repos selected, show the picker modal
-        setGithubRepos(repos);
-        setRepoPicker(true);
-      }
     } catch (err: any) {
       toast.error(err.message ?? "Failed to load repositories");
-      setRepoPicker(false);
     } finally {
       setReposLoading(false);
     }
@@ -387,9 +432,7 @@ const Team = () => {
     try {
       const updated = await selectGithubRepo(selectedTeam.id, repoFullName, repoUrl);
       setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
-      toast.success(`Connected ${repoFullName} — ${updated.github_branches.length} branches synced`);
-      setRepoPicker(false);
-      setGithubRepos([]);
+      toast.success(`Connected ${repoFullName} - ${updated.github_branches.length} branches synced`);
     } catch (err: any) {
       toast.error(err.message ?? "Failed to connect repository");
     } finally {
@@ -398,7 +441,6 @@ const Team = () => {
     }
   };
 
-  // Handle OAuth redirect back from GitHub
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const githubConnected = params.get("github_connected");
@@ -407,30 +449,57 @@ const Team = () => {
 
     if (githubError) {
       toast.error(`GitHub connection failed: ${githubError.replace(/_/g, " ")}`);
-      // Clean URL
       window.history.replaceState({}, "", window.location.pathname);
       return;
     }
 
     if (githubConnected === "true" && teamId) {
-      // Clean URL first
+      const installationFromUrl = params.get("github_installation_id");
+      if (installationFromUrl) {
+        window.localStorage.setItem(SHARED_GITHUB_INSTALLATION_KEY, installationFromUrl);
+        window.sessionStorage.setItem(LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY, installationFromUrl);
+      }
       window.history.replaceState({}, "", window.location.pathname);
-      // Select the team that just connected
       setSelectedTeamId(teamId);
-      // Load repo picker
+      toast.success("GitHub connected. Choose a repository for this team.");
       openRepoPickerForTeam(teamId);
     }
   }, [openRepoPickerForTeam]);
+
+  useEffect(() => {
+    if (!selectedTeam?.github_installation_id || !isAdmin) return;
+    openRepoPickerForTeam(selectedTeam.id);
+  }, [isAdmin, openRepoPickerForTeam, selectedTeam?.github_installation_id, selectedTeam?.id]);
+
+  useEffect(() => {
+    if (!selectedTeam || !isAdmin || selectedTeam.github_installation_id) return;
+    if (autoAttachedTeamsRef.current.has(selectedTeam.id)) return;
+
+    const storedInstallation =
+      window.localStorage.getItem(SHARED_GITHUB_INSTALLATION_KEY) ||
+      window.sessionStorage.getItem(LEGACY_PERSONAL_GITHUB_INSTALLATION_KEY);
+    const parsedInstallation = storedInstallation ? Number(storedInstallation) : NaN;
+    if (!Number.isFinite(parsedInstallation) || parsedInstallation <= 0) return;
+
+    autoAttachedTeamsRef.current.add(selectedTeam.id);
+    attachGithubInstallation(selectedTeam.id, parsedInstallation)
+      .then((updated) => {
+        setTeams(prev => prev.map(t => t.id === updated.id ? updated : t));
+        toast.success("GitHub connection is available for this team. Choose a repository when ready.");
+      })
+      .catch(() => {
+        autoAttachedTeamsRef.current.delete(selectedTeam.id);
+      });
+  }, [isAdmin, selectedTeam]);
 
   const handleDisconnectGithub = async () => {
     if (!selectedTeam) return;
     setActionLoading(true);
     try {
       const updated = await updateTeam(selectedTeam.id, { github_repo: "" });
-      // Also clear branches locally
       setTeams(prev => prev.map(t =>
         t.id === selectedTeam.id
-          ? { ...updated, github_branches: [] }
+          ? { ...updated, github_branches: [], github_installation_id: null }
           : t
       ));
       toast.success("Repository disconnected");
@@ -446,13 +515,8 @@ const Team = () => {
     setActionLoading(true);
     try {
       const member = await inviteMember(selectedTeam.id, inviteEmail.trim(), inviteRole);
-      // Optimistically add the new member to local state
-      setTeams(prev => prev.map(t =>
-        t.id === selectedTeam.id
-          ? { ...t, members: [...t.members, member], member_count: t.member_count + 1 }
-          : t
-      ));
-      toast.success(`${member.profile.full_name ?? inviteEmail} added to team`);
+      toast.success(`Invitation sent to ${member.profile.full_name ?? inviteEmail}`);
+      await fetchTeams();
       setInviteEmail("");
       setInviteRole("developer");
       setInviteModalOpen(false);
@@ -650,6 +714,12 @@ const Team = () => {
               Create Team
             </Button>
           )}
+          {!loading && selectedTeam && isAdmin && (
+            <Button onClick={() => setInviteModalOpen(true)} className="ml-auto bg-primary hover:bg-primary/90 gap-2">
+              <UserPlus className="h-4 w-4" />
+              Invite Member
+            </Button>
+          )}
         </div>
 
         {!loading && teams.length === 1 && (
@@ -706,14 +776,6 @@ const Team = () => {
               </div>
             )}
 
-            {isAdmin && (
-              <div className="flex items-center gap-3 ml-auto">
-                <Button onClick={() => setInviteModalOpen(true)} className="bg-primary hover:bg-primary/90 gap-2">
-                  <UserPlus className="h-4 w-4" />
-                  Invite Member
-                </Button>
-              </div>
-            )}
           </div>
         )}
 
@@ -737,7 +799,7 @@ const Team = () => {
               )}
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pb-3">
             {loading ? (
               <div className="space-y-3">
                 {/* Table header */}
@@ -888,128 +950,193 @@ const Team = () => {
         </Card>
 
         {/* GitHub Repository card */}
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
-          <CardHeader>
-            <CardTitle>GitHub Repository</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Skeleton className="h-5 w-5 rounded-full" />
-                  <Skeleton className="h-4 w-64 rounded-md" />
-                  <Skeleton className="h-5 w-20 rounded-full" />
-                </div>
-                <Skeleton className="h-4 w-32 rounded-md" />
-                <div className="flex flex-wrap gap-1.5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} className="h-5 w-16 rounded-full" />
-                  ))}
+        {canManageRepo && (
+          <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+            <CardHeader>
+              <div className="flex items-start gap-3">
+                <Github className="mt-0.5 h-7 w-7 text-foreground" />
+                <div>
+                  <CardTitle>GitHub Repository</CardTitle>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Connect and manage the repository used for security analysis.
+                  </p>
                 </div>
               </div>
-            ) : selectedTeam?.github_repo ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <Github className="h-5 w-5 text-foreground" />
-                  <a
-                    href={selectedTeam.github_repo}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline text-sm flex items-center gap-1"
-                  >
-                    {selectedTeam.github_repo.replace("https://github.com/", "")}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <Badge className="bg-primary/15 text-primary border-primary/30 text-xs">Connected</Badge>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <span className="text-sm text-muted-foreground">{selectedTeam.github_branches.length} branches synced</span>
-                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-2">
-                    {selectedTeam.github_branches.map(branch => (
-                      <Badge key={branch} variant="secondary" className="text-[10px] font-normal bg-muted/50 hover:bg-muted/80">
-                        {branch}
-                      </Badge>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-5 w-5 rounded-full" />
+                    <Skeleton className="h-4 w-64 rounded-md" />
+                    <Skeleton className="h-5 w-20 rounded-full" />
+                  </div>
+                  <Skeleton className="h-4 w-32 rounded-md" />
+                  <div className="flex flex-wrap gap-1.5">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Skeleton key={i} className="h-5 w-16 rounded-full" />
                     ))}
                   </div>
                 </div>
-                {isAdmin && (
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <Button variant="ghost" size="sm" className="gap-2" onClick={handleRefreshBranches} disabled={refreshing}>
-                      {refreshing
-                        ? <Loader2 className="h-4 w-4 animate-spin" />
-                        : <RefreshCw className="h-4 w-4" />
-                      }
-                      Refresh Branches
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      onClick={() => openRepoPickerForTeam(selectedTeam.id)}
-                      disabled={reposLoading}
-                    >
-                      {reposLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                      Change Repository
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      onClick={handleGithubOAuth}
-                      disabled={githubAuthLoading}
-                    >
-                      {githubAuthLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                      Manage GitHub Access
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={actionLoading}
-                      className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
-                      onClick={handleDisconnectGithub}
-                    >
-                      Disconnect
-                    </Button>
+              ) : selectedTeam ? (
+              <div className={cn(
+                "grid gap-3 xl:items-start",
+                selectedTeam.github_installation_id
+                  ? "xl:grid-cols-[minmax(720px,1fr)_minmax(480px,0.72fr)]"
+                  : "xl:grid-cols-1"
+              )}>
+                <div className="space-y-3">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(260px,420px)_minmax(220px,380px)]">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Repository</Label>
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={selectedTeamRepoName}
+                          onValueChange={(repoFullName) => {
+                            const repo = githubRepos.find(item => item.full_name === repoFullName);
+                            if (repo) handleSelectRepo(repo.full_name, repo.url);
+                          }}
+                          disabled={!isAdmin || !selectedTeam.github_installation_id || reposLoading || repoSelectLoading}
+                        >
+                          <SelectTrigger className="h-10 bg-background/50 border-border/50">
+                            <SelectValue placeholder={reposLoading ? "Loading repositories..." : "Select a repository"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {selectedTeamRepoName && !githubRepos.some(repo => repo.full_name === selectedTeamRepoName) && (
+                              <SelectItem value={selectedTeamRepoName}>{selectedTeamRepoName}</SelectItem>
+                            )}
+                            {githubRepos.map(repo => (
+                              <SelectItem key={repo.full_name} value={repo.full_name}>
+                                {repo.full_name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {isAdmin && (
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-10 w-10 shrink-0"
+                            onClick={() => selectedTeam.github_installation_id && openRepoPickerForTeam(selectedTeam.id)}
+                            disabled={!selectedTeam.github_installation_id || reposLoading}
+                            title="Refresh repositories"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${reposLoading ? "animate-spin" : ""}`} />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Branch</Label>
+                      <Select
+                        value={selectedGithubBranch}
+                        onValueChange={setSelectedGithubBranch}
+                        disabled={!selectedTeam.github_repo || selectedTeam.github_branches.length === 0}
+                      >
+                        <SelectTrigger className="h-10 bg-background/50 border-border/50">
+                          <SelectValue placeholder="Select branch" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {selectedTeam.github_branches.map(branch => (
+                            <SelectItem key={branch} value={branch}>{branch}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                )}
-              </div>
-            ) : (
-              <div className="border-2 border-dashed border-border/50 rounded-lg p-8 flex flex-col items-center gap-4">
-                <Github className="h-10 w-10 text-muted-foreground" />
-                <div className="text-center space-y-1">
-                  <p className="font-medium">No repository connected</p>
-                  <p className="text-sm text-muted-foreground">
-                    {selectedTeam?.github_installation_id
-                      ? "GitHub access is ready. Choose one repository for this team to scan."
-                      : "Connect GitHub to choose a repository for branch-based scanning."}
-                  </p>
+
+                  {selectedTeam.github_repo && (
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline" className="h-9 gap-2 rounded-md bg-muted/30 px-4 text-sm font-normal border-border/50">
+                        <Github className="h-3.5 w-3.5" />
+                        <a href={selectedTeam.github_repo} target="_blank" rel="noopener noreferrer" className="hover:text-primary">
+                          {selectedTeamRepoName}
+                        </a>
+                        <ExternalLink className="h-3 w-3" />
+                      </Badge>
+                      <Badge variant="outline" className="h-9 gap-2 rounded-md bg-muted/30 px-4 text-sm font-normal border-border/50">
+                        <Lock className="h-3.5 w-3.5" />
+                        {selectedTeamRepo?.private ? "Private" : "Public"}
+                      </Badge>
+                      <Badge variant="outline" className="h-9 gap-2 rounded-md bg-muted/30 px-4 text-sm font-normal border-border/50">
+                        <GitBranch className="h-3.5 w-3.5" />
+                        {selectedTeam.github_branches.length} branches synced
+                      </Badge>
+                      <Badge variant="outline" className="h-9 gap-2 rounded-md bg-muted/30 px-4 text-sm font-normal border-border/50">
+                        <GitBranch className="h-3.5 w-3.5" />
+                        Default branch: <span className="font-medium">{selectedTeam.github_branches[0] ?? "main"}</span>
+                      </Badge>
+                      <Badge variant="outline" className="h-9 gap-1.5 rounded-md bg-muted/30 px-3 text-sm font-normal border-border/50">
+                        <span>☆</span>
+                        0
+                      </Badge>
+                      <Badge variant="outline" className="h-9 gap-1.5 rounded-md bg-muted/30 px-3 text-sm font-normal border-border/50">
+                        <GitBranch className="h-3.5 w-3.5" />
+                        0
+                      </Badge>
+                    </div>
+                  )}
+                  <div className="flex w-full items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm text-blue-200">
+                    <Info className="h-4 w-4 shrink-0 text-blue-300" />
+                    <p className="whitespace-nowrap">
+                      Team members can browse branches, choose supported files, and start scans from the selected repository and branch.
+                    </p>
+                  </div>
                 </div>
-                {isAdmin && (
-                  <Button
-                    onClick={() => {
-                      if (selectedTeam?.github_installation_id) {
-                        openRepoPickerForTeam(selectedTeam.id);
-                      } else {
-                        handleGithubOAuth();
-                      }
-                    }}
-                    disabled={githubAuthLoading || reposLoading}
-                    className="bg-primary hover:bg-primary/90 gap-2"
-                  >
-                    {githubAuthLoading || reposLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                    {selectedTeam?.github_installation_id ? "Choose Repository" : "Connect with GitHub"}
-                  </Button>
-                )}
+
+                <div className={cn(
+                  "w-full rounded-lg border border-border/50 bg-muted/15 px-5 py-6 text-center",
+                  !selectedTeam.github_installation_id && "mx-auto max-w-2xl"
+                )}>
+                  <p className="mb-4 text-sm text-muted-foreground">
+                    {selectedTeam.github_installation_id
+                      ? "GitHub is connected. Refresh repositories if you changed app access."
+                      : "Connect your GitHub account to import repositories."}
+                  </p>
+                  {isAdmin && (
+                    <div className={cn(
+                      "grid gap-3",
+                      selectedTeam.github_installation_id
+                        ? "sm:grid-cols-[minmax(0,1fr)_minmax(0,0.75fr)]"
+                        : "mx-auto max-w-sm"
+                    )}>
+                      <Button className="w-full gap-2" onClick={handleGithubOAuth} disabled={githubAuthLoading}>
+                        {githubAuthLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                        {selectedTeam.github_installation_id ? "Reconnect GitHub" : "Connect GitHub"}
+                      </Button>
+                      {selectedTeam.github_installation_id && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
+                          onClick={handleDisconnectGithub}
+                          disabled={actionLoading}
+                        >
+                          <Unplug className="h-4 w-4" />
+                          Disconnect GitHub
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                    <Lock className="h-3.5 w-3.5 text-amber-400" />
+                    We never store your GitHub credentials.
+                  </div>
+                </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
+              ) : null}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Branch File Explorer */}
-        {selectedTeam && selectedTeam.github_repo && (
+        {canManageRepo && selectedTeam && selectedTeam.github_repo && (
           <BranchFileExplorer
             team={selectedTeam}
             currentUserRole={currentUserRole}
+            selectedBranch={selectedGithubBranch}
+            onSelectedBranchChange={setSelectedGithubBranch}
             currentUserBranches={
               selectedTeam.members.find(m => m.user_id === user?.id)?.branches ?? null
             }

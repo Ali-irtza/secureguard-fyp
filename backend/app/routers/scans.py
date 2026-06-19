@@ -31,6 +31,7 @@ from app.services.scans.personal_scan_persistence_service import (
     save_scan_success,
 )
 from app.services.project_files.file_service import save_scanned_sources_zip
+from app.services.teams.team_service import link_project_to_team
 
 router = APIRouter()
 
@@ -156,6 +157,8 @@ async def start_scan(
     Fetches files from GitHub and scans them, saving results to Supabase.
     """
     start_time = time.time()
+    scan_id = None
+    link_project_to_team(team_id, body.project_id, current_user.id, supabase)
     files_dict = await scanner_service.fetch_selected_code_hybrid(
         team_id,
         body.branch,
@@ -164,47 +167,46 @@ async def start_scan(
         supabase
     )
     save_scanned_sources_zip(body.project_id, current_user.id, files_dict, supabase)
+    scan_id = create_scan_started(
+        supabase,
+        current_user.id,
+        body.project_id,
+        files_dict,
+        "github",
+    )
     try:
         result = await scanner_service.run_vulnerability_scanner(files_dict)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
             raise
         duration = int(time.time() - start_time)
-        create_failed_scan_record(
-            supabase,
-            current_user.id,
-            body.project_id,
-            {"project_name": body.project_name, "scan_type": "github", "branch": body.branch, "duration_secs": duration},
-            str(exc.detail),
-        )
+        if scan_id:
+            mark_scan_failed(supabase, scan_id, str(exc.detail))
         raise
     except Exception as exc:
         duration = int(time.time() - start_time)
-        create_failed_scan_record(
-            supabase,
-            current_user.id,
-            body.project_id,
-            {"project_name": body.project_name, "scan_type": "github", "branch": body.branch, "duration_secs": duration},
-            str(exc),
-        )
+        if scan_id:
+            mark_scan_failed(supabase, scan_id, str(exc))
         raise
     duration = int(time.time() - start_time)
 
-    # Save to database
     try:
-        scan_data = {
-            **result,
-            "project_name": body.project_name,
-            "scan_type": "github",
-            "branch": body.branch,
-            "duration_secs": duration,
-        }
-        scan_id = create_scan_record(supabase, current_user.id, body.project_id, scan_data)
-        save_vulnerabilities(supabase, scan_id, result["vulnerabilities"])
+        persisted = save_scan_success(
+            supabase,
+            current_user.id,
+            body.project_id,
+            scan_id,
+            files_dict,
+            result,
+            duration,
+        )
         result["scan_id"] = scan_id
+        result["scan_persistence"] = persisted
     except Exception as e:
         print(f"[scans] Failed to save scan to DB: {e}")
-        result["scan_id"] = None
+        if scan_id:
+            mark_scan_failed(supabase, scan_id, str(e))
+        raise
 
     return ScanResponse(**result)
 

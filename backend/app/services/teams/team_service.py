@@ -1,6 +1,6 @@
+from datetime import datetime
 from fastapi import HTTPException, status
 from supabase import Client
-from datetime import datetime
 from app.models.teams import (
     TeamResponse,
     TeamListResponse,
@@ -17,6 +17,8 @@ from app.models.teams import (
 
 
 EMPTY_SEVERITY_COUNTS = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+SEVERITY_WEIGHTS = {"critical": 10, "high": 6, "medium": 3, "low": 1}
+MAX_WEIGHTED_RISK = 150
 
 
 def _is_missing_table_error(exc: Exception) -> bool:
@@ -25,15 +27,14 @@ def _is_missing_table_error(exc: Exception) -> bool:
 
 
 def _calculate_health_score(counts: dict[str, int]) -> int:
-    raw_score = (
-        100
-        - counts.get("critical", 0) * 2.0
-        - counts.get("high", 0) * 1.0
-        - counts.get("medium", 0) * 0.5
-        - counts.get("low", 0) * 0.25
+    weighted_risk = (
+        counts.get("critical", 0) * SEVERITY_WEIGHTS["critical"]
+        + counts.get("high", 0) * SEVERITY_WEIGHTS["high"]
+        + counts.get("medium", 0) * SEVERITY_WEIGHTS["medium"]
+        + counts.get("low", 0) * SEVERITY_WEIGHTS["low"]
     )
-    clamped = max(0, min(100, raw_score))
-    return int(clamped + 0.5)
+    risk_percent = min(100, round((weighted_risk / MAX_WEIGHTED_RISK) * 100))
+    return max(0, 100 - risk_percent)
 
 
 def _initials(name: str) -> str:
@@ -59,120 +60,79 @@ def _display_date(value: str | None) -> str:
     return f"{parsed.strftime('%b')} {parsed.day}"
 
 
-def _scan_date(scan: dict) -> str:
+def _scan_date(scan: dict) -> str | None:
     return scan.get("completed_at") or scan.get("started_at") or scan.get("created_at")
 
 
-def _project_name(scan: dict, projects_by_id: dict[str, dict]) -> str:
-    project = projects_by_id.get(scan.get("project_id") or "")
-    return (
-        scan.get("project_name")
-        or (project.get("name") if project else None)
-        or scan.get("file_name")
-        or scan.get("branch")
-        or "Project"
-    )
-
-
-def _title_for_critical(vuln: dict) -> str:
-    label = vuln.get("cwe_id") or vuln.get("type") or vuln.get("cwe_name") or "Critical Issue"
-    line = vuln.get("line_number")
-    return f"{label} at line {line}" if line else label
-
-
-def _fetch_vulnerabilities_for_scans(scan_ids: list[str], supabase: Client) -> list[dict]:
-    if not scan_ids:
+def _member_branches(member: dict) -> list[str]:
+    assigned_branch = member.get("assigned_branch")
+    if not assigned_branch:
         return []
-    result = (
-        supabase.table("vulnerabilities")
-        .select("id,scan_id,severity,cwe_id,cwe_name,type,line_number,file_path,description,created_at")
-        .in_("scan_id", scan_ids)
-        .execute()
-    )
-    return result.data or []
+    if isinstance(assigned_branch, list):
+        return [branch for branch in assigned_branch if branch]
+    return [assigned_branch]
 
 
-def _counts_by_scan(vulnerabilities: list[dict]) -> dict[str, dict[str, int]]:
-    counts: dict[str, dict[str, int]] = {}
-    for vuln in vulnerabilities:
-        scan_id = vuln.get("scan_id")
-        if not scan_id:
-            continue
-        severity = str(vuln.get("severity") or "low").lower()
-        safe_severity = severity if severity in EMPTY_SEVERITY_COUNTS else "low"
-        counts.setdefault(scan_id, EMPTY_SEVERITY_COUNTS.copy())
-        counts[scan_id][safe_severity] += 1
-    return counts
-
-
-def _sum_counts(vulnerabilities: list[dict]) -> dict[str, int]:
-    counts = EMPTY_SEVERITY_COUNTS.copy()
-    for vuln in vulnerabilities:
-        severity = str(vuln.get("severity") or "low").lower()
-        counts[severity if severity in counts else "low"] += 1
-    return counts
-
-def require_admin(team_id: str, user_id: str, supabase: Client) -> None:
-    """Raises 403 if the user is not a team admin."""
-    result = (
-        supabase.table("team_members")
-        .select("role")
-        .eq("team_id", team_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
-    if not result.data or result.data["role"] != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only team admins can perform this action",
+def _profile_map(user_ids: list[str], supabase: Client) -> dict[str, dict]:
+    ids = list({user_id for user_id in user_ids if user_id})
+    if not ids:
+        return {}
+    try:
+        result = (
+            supabase.table("profiles")
+            .select("user_id, full_name, avatar_url, email")
+            .in_("user_id", ids)
+            .execute()
         )
-
-def require_member(team_id: str, user_id: str, supabase: Client) -> dict:
-    """Raises 403 if the user is not a member of the team."""
-    result = (
-        supabase.table("team_members")
-        .select("*")
-        .eq("team_id", team_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not a member of this team",
+        return {profile["user_id"]: profile for profile in (result.data or [])}
+    except Exception:
+        result = (
+            supabase.table("profiles")
+            .select("id, full_name, avatar_url, email")
+            .in_("id", ids)
+            .execute()
         )
-    return result.data
+        return {
+            profile["id"]: {
+                **profile,
+                "user_id": profile["id"],
+            }
+            for profile in (result.data or [])
+        }
+
+
+def _member_response(member: dict, profile: dict | None) -> TeamMemberResponse:
+    profile = profile or {}
+    return TeamMemberResponse(
+        id=member["team_member_id"],
+        user_id=member["user_id"],
+        role=TeamRole(member["assigned_role"]),
+        branches=_member_branches(member),
+        joined_at=member["joined_at"],
+        profile=MemberProfile(
+            id=member["user_id"],
+            full_name=profile.get("full_name"),
+            avatar_url=profile.get("avatar_url"),
+            email=profile.get("email"),
+        ),
+    )
+
 
 def build_team_response(team: dict, members: list, current_user_id: str) -> TeamResponse:
-    """Assembles a TeamResponse from raw DB rows."""
     current_user_role = TeamRole.viewer
-    for m in members:
-        if m["user_id"] == current_user_id:
-            current_user_role = TeamRole(m["role"])
+    for member in members:
+        if member["user_id"] == current_user_id:
+            current_user_role = TeamRole(member["assigned_role"])
             break
 
     member_responses = [
-        TeamMemberResponse(
-            id=m["id"],
-            user_id=m["user_id"],
-            role=TeamRole(m["role"]),
-            branches=m.get("branches"),
-            joined_at=m["created_at"],
-            profile=MemberProfile(
-                id=m["user_id"],
-                full_name=m.get("profiles", {}).get("full_name") if m.get("profiles") else None,
-                avatar_url=m.get("profiles", {}).get("avatar_url") if m.get("profiles") else None,
-                email=m.get("email"),
-            ),
-        )
-        for m in members
+        _member_response(member, member.get("profile"))
+        for member in members
     ]
 
     return TeamResponse(
-        id=team["id"],
-        name=team["name"],
+        id=team["team_id"],
+        name=team["team_name"],
         github_repo=team.get("github_repo"),
         github_branches=team.get("github_branches") or [],
         github_installation_id=team.get("github_installation_id"),
@@ -184,215 +144,385 @@ def build_team_response(team: dict, members: list, current_user_id: str) -> Team
         members=member_responses,
     )
 
+
 def fetch_members_for_team(team_id: str, supabase: Client) -> list:
-    """
-    Fetches members for a single team and enriches with profile data.
-    Used by create/update/get operations that work on one team at a time.
-    """
-    members_result = (
+    result = (
         supabase.table("team_members")
         .select("*")
         .eq("team_id", team_id)
+        .eq("status", "active")
+        .order("joined_at")
         .execute()
     )
-    members = members_result.data or []
-    if not members:
-        return []
-
-    user_ids = [m["user_id"] for m in members]
-    profiles_result = (
-        supabase.table("profiles")
-        .select("id, full_name, avatar_url")
-        .in_("id", user_ids)
-        .execute()
-    )
-    profiles_map = {p["id"]: p for p in (profiles_result.data or [])}
-
-    for m in members:
-        m["profiles"] = profiles_map.get(m["user_id"], {})
-
+    members = result.data or []
+    profiles = _profile_map([member["user_id"] for member in members], supabase)
+    for member in members:
+        member["profile"] = profiles.get(member["user_id"], {})
     return members
 
-def fetch_members_for_teams(team_ids: list[str], supabase: Client) -> dict[str, list]:
-    """
-    Fetches members for multiple teams in exactly 2 DB round trips:
-      1. All team_members rows for all team_ids at once
-      2. All profiles for all unique user_ids at once
 
-    Returns a dict keyed by team_id → list of enriched member dicts.
-    This replaces the previous N×2 sequential queries in list_user_teams.
-    """
+def fetch_members_for_teams(team_ids: list[str], supabase: Client) -> dict[str, list]:
     if not team_ids:
         return {}
 
-    members_result = (
+    result = (
         supabase.table("team_members")
         .select("*")
         .in_("team_id", team_ids)
+        .eq("status", "active")
+        .order("joined_at")
         .execute()
     )
-    all_members = members_result.data or []
-
-    if not all_members:
-        return {tid: [] for tid in team_ids}
-
-    # Batch-fetch all profiles in one query
-    user_ids = list({m["user_id"] for m in all_members})
-    profiles_result = (
-        supabase.table("profiles")
-        .select("id, full_name, avatar_url")
-        .in_("id", user_ids)
-        .execute()
-    )
-    profiles_map = {p["id"]: p for p in (profiles_result.data or [])}
-
-    # Attach profile to each member row
-    for m in all_members:
-        m["profiles"] = profiles_map.get(m["user_id"], {})
-
-    # Group by team_id
-    by_team: dict[str, list] = {tid: [] for tid in team_ids}
-    for m in all_members:
-        tid = m["team_id"]
-        if tid in by_team:
-            by_team[tid].append(m)
-
+    all_members = result.data or []
+    profiles = _profile_map([member["user_id"] for member in all_members], supabase)
+    by_team = {team_id: [] for team_id in team_ids}
+    for member in all_members:
+        member["profile"] = profiles.get(member["user_id"], {})
+        by_team.setdefault(member["team_id"], []).append(member)
     return by_team
 
-def list_user_teams(user_id: str, supabase: Client) -> TeamListResponse:
-    """
-    Returns all teams the user belongs to.
 
-    Query plan (was N×2+2 sequential calls, now always 3 total):
-      1. team_members  → get team_ids for this user
-      2. teams         → fetch all those teams in one query
-      3. team_members  → fetch ALL members for ALL teams in one query
-         + profiles    → fetch ALL profiles for ALL members in one query
-         (steps 3+4 handled by fetch_members_for_teams)
-    """
+def require_member(team_id: str, user_id: str, supabase: Client) -> dict:
+    result = (
+        supabase.table("team_members")
+        .select("*")
+        .eq("team_id", team_id)
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    member = (result.data or [None])[0]
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not a member of this team",
+        )
+    return {
+        "id": member["team_member_id"],
+        "team_id": member["team_id"],
+        "user_id": member["user_id"],
+        "role": member["assigned_role"],
+        "branches": _member_branches(member),
+        "raw": member,
+    }
+
+
+def require_admin(team_id: str, user_id: str, supabase: Client) -> None:
+    member = require_member(team_id, user_id, supabase)
+    if member["role"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only team admins can perform this action",
+        )
+
+
+def link_project_to_team(team_id: str, project_id: str, user_id: str, supabase: Client) -> None:
+    member = require_member(team_id, user_id, supabase)
+    if member["role"] == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewers cannot link projects to a team scan.",
+        )
+
+    project_result = (
+        supabase.table("projects")
+        .select("project_id, user_id, project_type")
+        .eq("project_id", project_id)
+        .limit(1)
+        .execute()
+    )
+    project = (project_result.data or [None])[0]
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    if project.get("user_id") != user_id and member["role"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the project owner or a team admin can link this project to the team.",
+        )
+
+    if project.get("project_type") != "team":
+        supabase.table("projects").update({"project_type": "team"}).eq("project_id", project_id).execute()
+
+    team_update = (
+        supabase.table("team")
+        .update({"project_id": project_id})
+        .eq("team_id", team_id)
+        .execute()
+    )
+    if not team_update.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+
+def list_user_teams(user_id: str, supabase: Client) -> TeamListResponse:
     try:
         memberships = (
             supabase.table("team_members")
             .select("team_id")
             .eq("user_id", user_id)
+            .eq("status", "active")
             .execute()
         )
     except Exception as exc:
         if _is_missing_table_error(exc):
             return TeamListResponse(teams=[])
         raise
-    team_ids = [m["team_id"] for m in (memberships.data or [])]
 
+    team_ids = [membership["team_id"] for membership in (memberships.data or [])]
     if not team_ids:
         return TeamListResponse(teams=[])
 
     teams_result = (
-        supabase.table("teams")
+        supabase.table("team")
         .select("*")
-        .in_("id", team_ids)
+        .in_("team_id", team_ids)
+        .order("created_at", desc=True)
         .execute()
     )
     teams = teams_result.data or []
-
-    # Single batched fetch for all members + profiles across all teams
     members_by_team = fetch_members_for_teams(team_ids, supabase)
+    return TeamListResponse(
+        teams=[
+            build_team_response(team, members_by_team.get(team["team_id"], []), user_id)
+            for team in teams
+        ]
+    )
 
-    team_responses = [
-        build_team_response(team, members_by_team.get(team["id"], []), user_id)
-        for team in teams
-    ]
-
-    return TeamListResponse(teams=team_responses)
 
 def create_new_team(name: str, user_id: str, supabase: Client) -> TeamResponse:
-    """Creates a team and makes creator admin."""
     team_result = (
-        supabase.table("teams")
-        .insert({"name": name, "created_by": user_id})
+        supabase.table("team")
+        .insert({"team_name": name, "created_by": user_id})
         .execute()
     )
     team = team_result.data[0]
 
-    supabase.table("team_members").insert({
-        "team_id": team["id"],
-        "user_id": user_id,
-        "role":    "admin",
-    }).execute()
+    supabase.table("team_members").insert(
+        {
+            "team_id": team["team_id"],
+            "user_id": user_id,
+            "assigned_role": "admin",
+            "status": "active",
+        }
+    ).execute()
 
-    members = fetch_members_for_team(team["id"], supabase)
+    members = fetch_members_for_team(team["team_id"], supabase)
     return build_team_response(team, members, user_id)
 
-def get_team_by_id(team_id: str, user_id: str, supabase: Client) -> TeamResponse:
-    """Returns a single team by ID."""
-    require_member(team_id, user_id, supabase)
 
+def get_team_by_id(team_id: str, user_id: str, supabase: Client) -> TeamResponse:
+    require_member(team_id, user_id, supabase)
     team_result = (
-        supabase.table("teams")
+        supabase.table("team")
         .select("*")
-        .eq("id", team_id)
-        .single()
+        .eq("team_id", team_id)
+        .limit(1)
         .execute()
     )
-    if not team_result.data:
+    team = (team_result.data or [None])[0]
+    if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
     members = fetch_members_for_team(team_id, supabase)
-    return build_team_response(team_result.data, members, user_id)
+    return build_team_response(team, members, user_id)
+
 
 def update_team_details(team_id: str, user_id: str, name: str | None, github_repo: str | None, supabase: Client) -> TeamResponse:
-    """Partial update for a team."""
     require_admin(team_id, user_id, supabase)
 
     updates = {}
-    if name is not None: updates["name"] = name
-    if github_repo is not None: updates["github_repo"] = github_repo
-
+    if name is not None:
+        updates["team_name"] = name
+    if github_repo is not None:
+        updates["github_repo"] = github_repo or None
+        if not github_repo:
+            updates["github_branches"] = []
+            updates["github_installation_id"] = None
     if not updates:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No fields provided to update",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided to update")
 
     team_result = (
-        supabase.table("teams")
+        supabase.table("team")
         .update(updates)
-        .eq("id", team_id)
+        .eq("team_id", team_id)
         .execute()
     )
-    if not team_result.data:
+    team = (team_result.data or [None])[0]
+    if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
     members = fetch_members_for_team(team_id, supabase)
-    return build_team_response(team_result.data[0], members, user_id)
+    return build_team_response(team, members, user_id)
+
 
 def delete_team_by_id(team_id: str, user_id: str, supabase: Client) -> None:
-    """Permanently deletes a team."""
     require_admin(team_id, user_id, supabase)
-    supabase.table("teams").delete().eq("id", team_id).execute()
+    supabase.table("team").delete().eq("team_id", team_id).execute()
+
+
+def _project_name(project: dict | None) -> str:
+    if not project:
+        return "Team Project"
+    return project.get("project_name") or project.get("name") or "Team Project"
+
+
+def _scan_counts(scans: list[dict], supabase: Client) -> dict[str, dict[str, int]]:
+    scan_ids = [scan["scan_id"] for scan in scans if scan.get("scan_id")]
+    if not scan_ids:
+        return {}
+    result = (
+        supabase.table("scan_results")
+        .select("scan_id, critical_count, high_count, medium_count, low_count")
+        .in_("scan_id", scan_ids)
+        .execute()
+    )
+    return {
+        row["scan_id"]: {
+            "critical": row.get("critical_count") or 0,
+            "high": row.get("high_count") or 0,
+            "medium": row.get("medium_count") or 0,
+            "low": row.get("low_count") or 0,
+        }
+        for row in (result.data or [])
+    }
+
+
+def _project_ids_for_team(team: dict | None, members: list[dict], supabase: Client) -> tuple[dict[str, dict], list[str]]:
+    if not team:
+        return {}, []
+
+    member_ids = [member["user_id"] for member in members if member.get("user_id")]
+    projects_by_id: dict[str, dict] = {}
+
+    if team.get("project_id"):
+        linked_project = (
+            supabase.table("projects")
+            .select("*")
+            .eq("project_id", team["project_id"])
+            .execute()
+        )
+        for project in linked_project.data or []:
+            projects_by_id[project["project_id"]] = project
+
+    team_projects = (
+        supabase.table("projects")
+        .select("*")
+        .eq("project_type", "team")
+        .execute()
+    )
+    for project in team_projects.data or []:
+        if project.get("project_id") in projects_by_id:
+            continue
+        if project.get("user_id") in member_ids:
+            projects_by_id[project["project_id"]] = project
+            continue
+        if project.get("team_id") == team.get("team_id") or project.get("created_by") == team.get("team_id"):
+            projects_by_id[project["project_id"]] = project
+            continue
+        if team.get("github_repo") and project.get("github_repo") == team.get("github_repo") and project.get("user_id") in member_ids:
+            projects_by_id[project["project_id"]] = project
+
+    if team.get("github_repo") and member_ids:
+        repo_projects = (
+            supabase.table("projects")
+            .select("*")
+            .eq("github_repo", team["github_repo"])
+            .in_("user_id", member_ids)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        for project in repo_projects.data or []:
+            project_name = str(project.get("project_name") or "").lower()
+            if project.get("project_type") == "team" or "team" in project_name:
+                projects_by_id[project["project_id"]] = project
+
+    return projects_by_id, list(projects_by_id.keys())
+
+
+def _team_alerts(
+    team_id: str,
+    project_by_id: dict[str, dict],
+    scans: list[dict],
+    counts_by_scan: dict[str, dict[str, int]],
+    profile_by_user: dict[str, dict],
+    supabase: Client,
+) -> list[TeamDashboardCriticalAlert]:
+    scan_by_id = {scan["scan_id"]: scan for scan in scans if scan.get("scan_id")}
+    scan_ids = list(scan_by_id.keys())
+    alerts: list[TeamDashboardCriticalAlert] = []
+
+    if scan_ids:
+        try:
+            alert_rows = (
+                supabase.table("alerts")
+                .select("id, scan_id, team_id, user_id, message, status, created_at")
+                .in_("scan_id", scan_ids)
+                .execute()
+            )
+            for alert in alert_rows.data or []:
+                if alert.get("team_id") and alert.get("team_id") != team_id:
+                    continue
+                if alert.get("status") not in {None, "open"}:
+                    continue
+                scan = scan_by_id.get(alert.get("scan_id") or "")
+                project = project_by_id.get((scan or {}).get("project_id") or "")
+                profile = profile_by_user.get(alert.get("user_id") or (scan or {}).get("user_id") or "", {})
+                created_at = _parse_datetime(alert.get("created_at")) or datetime.now()
+                alerts.append(
+                    TeamDashboardCriticalAlert(
+                        id=alert.get("id") or f"alert-{alert.get('scan_id')}",
+                        title=alert.get("message") or "Critical issue detected",
+                        project=_project_name(project),
+                        timeAgo=_display_date(alert.get("created_at")),
+                        createdAt=created_at,
+                        memberName=profile.get("full_name") or profile.get("email"),
+                        branch=None,
+                    )
+                )
+        except Exception:
+            alerts = []
+
+    if alerts:
+        return sorted(alerts, key=lambda alert: alert.createdAt, reverse=True)[:10]
+
+    for scan in scans:
+        counts = counts_by_scan.get(scan.get("scan_id") or "", EMPTY_SEVERITY_COUNTS)
+        if counts.get("critical", 0) <= 0:
+            continue
+        project = project_by_id.get(scan.get("project_id") or "")
+        profile = profile_by_user.get(scan.get("user_id") or "", {})
+        created_at = _parse_datetime(_scan_date(scan)) or datetime.now()
+        alerts.append(
+            TeamDashboardCriticalAlert(
+                id=f"scan-critical-{scan['scan_id']}",
+                title=f"{counts['critical']} critical issue{counts['critical'] == 1 and '' or 's'}",
+                project=_project_name(project),
+                timeAgo=_display_date(_scan_date(scan)),
+                createdAt=created_at,
+                memberName=profile.get("full_name") or profile.get("email"),
+                branch=None,
+            )
+        )
+    return sorted(alerts, key=lambda alert: alert.createdAt, reverse=True)[:10]
 
 
 def get_team_dashboard(team_id: str, user_id: str, supabase: Client) -> TeamDashboardResponse:
-    """Returns all dashboard data for one team, scoped through team projects."""
     require_member(team_id, user_id, supabase)
-
-    members = fetch_members_for_team(team_id, supabase)
-    member_user_ids = [member["user_id"] for member in members]
-
-    projects_result = (
-        supabase.table("projects")
-        .select("id,name")
+    team_result = (
+        supabase.table("team")
+        .select("*")
         .eq("team_id", team_id)
-        .eq("type", "team")
+        .limit(1)
         .execute()
     )
-    projects = projects_result.data or []
-    project_ids = [project["id"] for project in projects]
-    projects_by_id = {project["id"]: project for project in projects}
-
-    scans: list[dict] = []
+    team = (team_result.data or [None])[0]
+    members = fetch_members_for_team(team_id, supabase)
+    project_by_id, project_ids = _project_ids_for_team(team, members, supabase)
+    scans = []
     if project_ids:
         scans_result = (
-            supabase.table("scans")
+            supabase.table("scan")
             .select("*")
             .in_("project_id", project_ids)
             .order("created_at", desc=True)
@@ -400,94 +530,88 @@ def get_team_dashboard(team_id: str, user_id: str, supabase: Client) -> TeamDash
         )
         scans = scans_result.data or []
 
-    completed_scans = [scan for scan in scans if scan.get("status") == "completed"]
-    completed_scan_ids = [scan["id"] for scan in completed_scans]
-    all_scan_ids = [scan["id"] for scan in scans]
-    completed_vulnerabilities = _fetch_vulnerabilities_for_scans(completed_scan_ids, supabase)
-    all_vulnerabilities = _fetch_vulnerabilities_for_scans(all_scan_ids, supabase)
-    severity_by_scan = _counts_by_scan(all_vulnerabilities)
-    completed_counts = _sum_counts(completed_vulnerabilities)
+    counts_by_scan = _scan_counts(scans, supabase)
+    completed_scans = [scan for scan in scans if scan.get("completion_status") == "completed"]
+    completed_counts = EMPTY_SEVERITY_COUNTS.copy()
+    for scan in completed_scans:
+        counts = counts_by_scan.get(scan["scan_id"], EMPTY_SEVERITY_COUNTS)
+        for severity in completed_counts:
+            completed_counts[severity] += counts.get(severity, 0)
 
-    profile_names = {
-        member["user_id"]: (
-            member.get("profiles", {}).get("full_name")
-            if member.get("profiles")
-            else None
-        )
+    member_completed_counts: dict[str, dict[str, int]] = {}
+    member_last_scan: dict[str, datetime] = {}
+    for scan in completed_scans:
+        scan_user_id = scan.get("user_id")
+        if not scan_user_id:
+            continue
+        member_counts = member_completed_counts.setdefault(scan_user_id, EMPTY_SEVERITY_COUNTS.copy())
+        counts = counts_by_scan.get(scan["scan_id"], EMPTY_SEVERITY_COUNTS)
+        for severity in member_counts:
+            member_counts[severity] += counts.get(severity, 0)
+        scan_date = _parse_datetime(_scan_date(scan))
+        if scan_date and (scan_user_id not in member_last_scan or scan_date > member_last_scan[scan_user_id]):
+            member_last_scan[scan_user_id] = scan_date
+
+    profile_by_user = {
+        member["user_id"]: member.get("profile") or {}
         for member in members
     }
 
-    scans_by_user: dict[str, list[dict]] = {member_id: [] for member_id in member_user_ids}
-    for scan in scans:
-        scan_user_id = scan.get("user_id")
-        if scan_user_id in scans_by_user:
-            scans_by_user[scan_user_id].append(scan)
-
-    dashboard_members: list[TeamDashboardMember] = []
+    dashboard_members = []
     for member in members:
-        member_id = member["user_id"]
-        assigned_branches = member.get("branches") or member.get("branch") or []
-        if isinstance(assigned_branches, str):
-            assigned_branches = [assigned_branches]
-        member_scans = scans_by_user.get(member_id, [])
-        latest_scan = member_scans[0] if member_scans else None
-        member_completed_scan_ids = {
-            scan["id"] for scan in member_scans if scan.get("status") == "completed"
-        }
-        member_vulnerabilities = [
-            vuln for vuln in all_vulnerabilities if vuln.get("scan_id") in member_completed_scan_ids
-        ]
-        member_counts = _sum_counts(member_vulnerabilities)
-        display_name = profile_names.get(member_id) or member.get("email") or "Team Member"
-        branch_label = ", ".join(assigned_branches) if assigned_branches else (latest_scan or {}).get("branch") or "Unassigned"
+        profile = member.get("profile") or {}
+        name = profile.get("full_name") or profile.get("email") or "Team Member"
+        branches = _member_branches(member)
         dashboard_members.append(
             TeamDashboardMember(
-                userId=member_id,
-                name=display_name,
-                initials=_initials(display_name),
-                role=TeamRole(member["role"]),
-                branches=assigned_branches,
-                branch=branch_label,
-                healthScore=_calculate_health_score(member_counts) if member_completed_scan_ids else None,
-                lastScanAt=_parse_datetime(_scan_date(latest_scan)) if latest_scan else None,
+                userId=member["user_id"],
+                name=name,
+                initials=_initials(name),
+                role=TeamRole(member["assigned_role"]),
+                branches=branches,
+                branch=", ".join(branches) if branches else "All team branches" if member["assigned_role"] == "admin" else "Unassigned",
+                healthScore=_calculate_health_score(member_completed_counts[member["user_id"]]) if member["user_id"] in member_completed_counts else None,
+                lastScanAt=member_last_scan[member["user_id"]] if member["user_id"] in member_last_scan else None,
             )
         )
 
-    recent_scans = [
-        TeamDashboardScan(
-            id=scan["id"],
-            projectName=_project_name(scan, projects_by_id),
-            date=_parse_datetime(_scan_date(scan)) or _parse_datetime(scan.get("created_at")),
-            status=scan.get("status") or "failed",
-            branch=scan.get("branch"),
-            memberId=scan.get("user_id"),
-            memberName=profile_names.get(scan.get("user_id")) or "Team Member",
-            vulnerabilities=severity_by_scan.get(scan["id"], EMPTY_SEVERITY_COUNTS.copy()),
+    recent_scans = []
+    for scan in scans[:50]:
+        date = _parse_datetime(_scan_date(scan))
+        if not date:
+            continue
+        project = project_by_id.get(scan.get("project_id") or "")
+        profile = profile_by_user.get(scan.get("user_id") or "", {})
+        recent_scans.append(
+            TeamDashboardScan(
+                id=scan["scan_id"],
+                projectName=_project_name(project),
+                date=date,
+                status=scan.get("completion_status") or "failed",
+                branch=None,
+                memberId=scan.get("user_id"),
+                memberName=profile.get("full_name") or profile.get("email") or "Team Member",
+                vulnerabilities=counts_by_scan.get(scan["scan_id"], EMPTY_SEVERITY_COUNTS.copy()),
+            )
         )
-        for scan in scans[:50]
-        if _parse_datetime(_scan_date(scan)) or _parse_datetime(scan.get("created_at"))
-    ]
 
     trend_by_date: dict[str, dict[str, int]] = {}
     trend_order: dict[str, datetime] = {}
-    completed_scan_map = {scan["id"]: scan for scan in completed_scans}
-    for vuln in completed_vulnerabilities:
-        severity = str(vuln.get("severity") or "low").lower()
-        if severity not in {"critical", "high", "medium"}:
-            continue
-        scan = completed_scan_map.get(vuln.get("scan_id"))
-        if not scan:
-            continue
-        date_label = _display_date(_scan_date(scan))
+    for scan in completed_scans:
+        date_value = _scan_date(scan)
+        date_label = _display_date(date_value)
         trend_by_date.setdefault(date_label, {"critical": 0, "high": 0, "medium": 0})
-        trend_by_date[date_label][severity] += 1
-        parsed_scan_date = _parse_datetime(_scan_date(scan))
-        if parsed_scan_date and date_label not in trend_order:
-            trend_order[date_label] = parsed_scan_date
+        counts = counts_by_scan.get(scan["scan_id"], EMPTY_SEVERITY_COUNTS)
+        trend_by_date[date_label]["critical"] += counts.get("critical", 0)
+        trend_by_date[date_label]["high"] += counts.get("high", 0)
+        trend_by_date[date_label]["medium"] += counts.get("medium", 0)
+        parsed = _parse_datetime(date_value)
+        if parsed:
+            trend_order[date_label] = parsed
 
     sorted_dates = sorted(
         trend_by_date.keys(),
-        key=lambda label: trend_order[label].isoformat() if label in trend_order else "",
+        key=lambda label: trend_order[label].timestamp() if label in trend_order else 0,
     )
     vulnerability_trend = [
         TeamDashboardTrendPoint(
@@ -499,39 +623,14 @@ def get_team_dashboard(team_id: str, user_id: str, supabase: Client) -> TeamDash
         for date in sorted_dates[-7:]
     ]
 
-    critical_alerts: list[TeamDashboardCriticalAlert] = []
-    scan_lookup = {scan["id"]: scan for scan in scans}
-    for vuln in sorted(
-        [v for v in all_vulnerabilities if str(v.get("severity") or "").lower() == "critical"],
-        key=lambda item: item.get("created_at") or "",
-        reverse=True,
-    ):
-        scan = scan_lookup.get(vuln.get("scan_id"))
-        if not scan:
-            continue
-        created_at = _parse_datetime(vuln.get("created_at")) or _parse_datetime(_scan_date(scan))
-        if not created_at:
-            continue
-        critical_alerts.append(
-            TeamDashboardCriticalAlert(
-                id=vuln["id"],
-                title=_title_for_critical(vuln),
-                project=_project_name(scan, projects_by_id),
-                timeAgo=created_at.isoformat(),
-                createdAt=created_at,
-                memberName=profile_names.get(scan.get("user_id")) or "Team Member",
-                branch=scan.get("branch"),
-            )
-        )
-
     return TeamDashboardResponse(
         metrics=TeamDashboardMetrics(
-            totalScans=len(completed_scans),
+            totalScans=len(scans),
             criticalVulns=completed_counts["critical"],
             healthScore=_calculate_health_score(completed_counts),
         ),
         members=dashboard_members,
         recentScans=recent_scans,
         vulnerabilityTrend=vulnerability_trend,
-        criticalAlerts=critical_alerts,
+        criticalAlerts=_team_alerts(team_id, project_by_id, scans, counts_by_scan, profile_by_user, supabase),
     )

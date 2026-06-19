@@ -49,8 +49,8 @@ const Reports = () => {
   }, []);
 
   const filteredReports = useMemo(() => {
-    if (reportTypeFilter === "team") return [];
-    return reports;
+    if (reportTypeFilter === "all") return reports;
+    return reports.filter((report) => (report.type ?? "personal") === reportTypeFilter);
   }, [reports, reportTypeFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredReports.length / REPORTS_PER_PAGE));
@@ -71,10 +71,10 @@ const Reports = () => {
     return [
       { label: "Total Reports", value: String(filteredReports.length), icon: FileText },
       { label: "This Month", value: String(filteredReports.filter((r) => isThisMonth(r.created_at)).length), icon: Calendar },
-      { label: "Team Reports", value: "0", icon: Users },
+      { label: "Team Reports", value: String(reports.filter((r) => r.type === "team").length), icon: Users },
       { label: "Stored Files", value: String(filteredReports.filter((r) => r.file_path || r.scan_id).length), icon: FileBarChart },
     ];
-  }, [filteredReports]);
+  }, [filteredReports, reports]);
 
   const handleDownload = async (report: ReportItem, format: "pdf" | "csv") => {
     setBusyReportDownloadId(report.id);
@@ -177,7 +177,7 @@ const Reports = () => {
                 </h3>
                 <p className="text-sm text-muted-foreground mb-4">
                   {reportTypeFilter === "team"
-                    ? "Team report generation is disabled until teams are configured."
+                    ? "Team reports from teams you belong to will appear here."
                     : "Complete a scan or generate a report from an existing project."}
                 </p>
               </div>

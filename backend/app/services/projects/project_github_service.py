@@ -43,6 +43,10 @@ from app.services.teams.github_service import (
 
 GITHUB_API = "https://api.github.com"
 C_CPP_EXTENSIONS = (".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx")
+ZIP_NO_SOURCE_MESSAGE = (
+    "This ZIP does not contain any C or C++ source files. "
+    "Please upload a ZIP with .c, .cpp, .h, .hpp, .cc, .cxx, or .hxx files."
+)
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -184,6 +188,63 @@ async def _fetch_blob_content_pat(
     return file_path, ""
 
 
+async def _fetch_blob_bytes(
+    client: httpx.AsyncClient,
+    owner: str,
+    repo: str,
+    file_path: str,
+    branch: str,
+    headers: dict,
+) -> tuple[str, bytes]:
+    """Fetches a single file's raw bytes via the GitHub Contents API."""
+    resp = await client.get(
+        f"{GITHUB_API}/repos/{owner}/{repo}/contents/{file_path}",
+        headers=headers,
+        params={"ref": branch},
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        if data.get("encoding") == "base64" and "content" in data:
+            raw = data["content"].replace("\n", "")
+            return file_path, base64.b64decode(raw)
+    return file_path, b""
+
+
+def _add_source_or_zip_content(files_content: Dict[str, str], file_path: str, content: bytes) -> None:
+    if file_path.lower().endswith(".zip"):
+        extracted = 0
+        try:
+            with zipfile.ZipFile(io.BytesIO(content), "r") as archive:
+                for entry in archive.infolist():
+                    if entry.is_dir():
+                        continue
+                    inner_path = entry.filename.replace("\\", "/").lstrip("/")
+                    if (
+                        not inner_path
+                        or inner_path.startswith("../")
+                        or "/../" in inner_path
+                        or not inner_path.lower().endswith(C_CPP_EXTENSIONS)
+                    ):
+                        continue
+                    with archive.open(entry) as file_obj:
+                        extracted_path = f"{file_path}/{inner_path}"
+                        files_content[extracted_path] = file_obj.read().decode("utf-8", errors="replace")
+                        extracted += 1
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid ZIP archive: {file_path}",
+            )
+        if extracted == 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=ZIP_NO_SOURCE_MESSAGE,
+            )
+        return
+
+    files_content[file_path] = content.decode("utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # OAuth / GitHub App flow  (mirrors teams github_service)
 # ---------------------------------------------------------------------------
@@ -203,6 +264,10 @@ def generate_github_authorize_url(
         )
 
     require_owner(project_id, user_id, supabase)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Project-level GitHub installation storage is disabled. Use Personal Scan GitHub import.",
+    )
 
     csrf_token = secrets.token_urlsafe(32)
     # state encodes "project:{project_id}:{csrf}" so the callback can route
@@ -250,38 +315,8 @@ async def process_github_callback(
             )
         return RedirectResponse(f"{settings.frontend_base_url.rstrip('/')}/new-scan?github_error=no_installation")
 
-    if not installation_id:
-        return RedirectResponse(f"{frontend_project_base_url}?github_error=missing_params")
-
-    try:
-        # state = "project:{project_id}:{csrf_token}"
-        prefix, project_id, csrf_token = state.split(":", 2)
-        if prefix != "project":
-            raise ValueError("not a project callback")
-    except ValueError:
-        return RedirectResponse(f"{frontend_project_base_url}?github_error=invalid_state")
-
-    project_result = (
-        supabase.table("projects")
-        .select("github_oauth_token")
-        .eq("id", project_id)
-        .single()
-        .execute()
-    )
-    if not project_result.data:
-        return RedirectResponse(f"{frontend_project_base_url}?github_error=project_not_found")
-
-    stored = project_result.data.get("github_oauth_token", "")
-    if stored != f"pending:{csrf_token}":
-        return RedirectResponse(f"{frontend_project_base_url}?github_error=csrf_mismatch")
-
-    supabase.table("projects").update({
-        "github_installation_id": installation_id,
-        "github_oauth_token":     None,
-    }).eq("id", project_id).execute()
-
     return RedirectResponse(
-        f"{frontend_project_base_url}/{project_id}?github_connected=true"
+        f"{frontend_project_base_url}?github_error=project_installation_storage_disabled"
     )
 
 
@@ -293,6 +328,10 @@ async def fetch_installation_repos(
     Lists repositories accessible via the stored installation token.
     """
     require_owner(project_id, user_id, supabase)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Project-level GitHub installation storage is disabled. Use Personal Scan GitHub import.",
+    )
 
     project_result = (
         supabase.table("projects")
@@ -361,6 +400,10 @@ async def select_installation_repo(
     the installation token (no PAT needed).
     """
     require_owner(project_id, user_id, supabase)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Project-level GitHub installation storage is disabled. Use Personal Scan GitHub import.",
+    )
 
     if not repo_full_name:
         raise HTTPException(
@@ -439,6 +482,10 @@ async def sync_branches(
     No PAT needed — mirrors teams sync_branches exactly.
     """
     require_owner(project_id, user_id, supabase)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Project-level GitHub installation storage is disabled. Use Personal Scan GitHub import.",
+    )
 
     project_result = (
         supabase.table("projects")
@@ -522,6 +569,11 @@ def _get_project_installation_token_sync(project_id: str, supabase: Client) -> t
     Returns (repo_full_name, installation_id) for a personal project.
     Raises 400 if not connected or App not installed.
     """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Project-level GitHub installation storage is disabled. Use Personal Scan GitHub import.",
+    )
+
     result = (
         supabase.table("projects")
         .select("github_repo, github_installation_id")
@@ -851,16 +903,15 @@ async def fetch_selected_code_with_pat(
     files_content: Dict[str, str] = {}
 
     if len(selected_files) < 50:
-        # Concurrent blob API — best for small selections
         async with httpx.AsyncClient(timeout=30.0) as client:
             tasks = [
-                _fetch_blob_content_pat(client, owner, repo, path, branch, headers)
+                _fetch_blob_bytes(client, owner, repo, path, branch, headers)
                 for path in selected_files
             ]
             results = await asyncio.gather(*tasks)
             for file_path, content in results:
                 if content:
-                    files_content[file_path] = content
+                    _add_source_or_zip_content(files_content, file_path, content)
     else:
         # Zipball approach — one download, extract in memory
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -891,7 +942,7 @@ async def fetch_selected_code_with_pat(
                 actual_path = parts[1]
                 if actual_path in selected_set:
                     with zf.open(entry) as f:
-                        files_content[actual_path] = f.read().decode("utf-8", errors="replace")
+                        _add_source_or_zip_content(files_content, actual_path, f.read())
 
     return files_content
 
@@ -926,16 +977,17 @@ async def fetch_selected_code_oauth(
     }
     files_content: Dict[str, str] = {}
 
+    owner, repo = repo_full_name.split("/", 1)
     if len(selected_files) < 50:
         async with httpx.AsyncClient(timeout=30.0) as client:
             tasks = [
-                _fetch_blob_content_pat(client, *repo_full_name.split("/", 1), path, branch, headers)
+                _fetch_blob_bytes(client, owner, repo, path, branch, headers)
                 for path in selected_files
             ]
             results = await asyncio.gather(*tasks)
             for file_path, content in results:
                 if content:
-                    files_content[file_path] = content
+                    _add_source_or_zip_content(files_content, file_path, content)
     else:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             resp = await client.get(
@@ -959,7 +1011,7 @@ async def fetch_selected_code_oauth(
                 actual_path = parts[1]
                 if actual_path in selected_set:
                     with zf.open(entry) as f:
-                        files_content[actual_path] = f.read().decode("utf-8", errors="replace")
+                        _add_source_or_zip_content(files_content, actual_path, f.read())
 
     return files_content
 
@@ -1128,17 +1180,17 @@ async def fetch_selected_code_runtime(
     }
     files_content: Dict[str, str] = {}
 
+    owner, repo = repo_full_name.split("/", 1)
     if len(selected_files) < 50:
-        owner, repo = repo_full_name.split("/", 1)
         async with httpx.AsyncClient(timeout=30.0) as client:
             tasks = [
-                _fetch_blob_content_pat(client, owner, repo, file_path, branch, headers)
+                _fetch_blob_bytes(client, owner, repo, file_path, branch, headers)
                 for file_path in selected_files
             ]
             results = await asyncio.gather(*tasks)
         for file_path, content in results:
             if content:
-                files_content[file_path] = content
+                _add_source_or_zip_content(files_content, file_path, content)
         return files_content
 
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -1163,5 +1215,5 @@ async def fetch_selected_code_runtime(
             actual_path = parts[1]
             if actual_path in selected_set:
                 with archive.open(entry) as file_obj:
-                    files_content[actual_path] = file_obj.read().decode("utf-8", errors="replace")
+                    _add_source_or_zip_content(files_content, actual_path, file_obj.read())
     return files_content

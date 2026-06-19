@@ -151,6 +151,7 @@ export interface ReportItem {
   scan_id: string | null;
   user_id: string;
   name: string;
+  type?: "personal" | "team";
   format: "pdf" | "csv";
   status: "pending" | "completed" | "failed";
   file_path: string | null;

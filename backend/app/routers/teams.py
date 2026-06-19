@@ -12,6 +12,7 @@ from app.models.teams import (
     TeamResponse,
     TeamListResponse,
     TeamMemberResponse,
+    AttachGithubInstallationRequest,
     GithubAuthorizeResponse,
     BranchFilesResponse,
     FileContentResponse,
@@ -125,6 +126,20 @@ async def list_github_repos(
 ):
     return await github_service.fetch_installation_repos(team_id, current_user.id, supabase)
 
+@router.post("/{team_id}/github/installation", response_model=TeamResponse)
+async def attach_github_installation(
+    team_id: str,
+    body: AttachGithubInstallationRequest,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    return await github_service.attach_installation_to_team(
+        team_id,
+        body.installation_id,
+        current_user.id,
+        supabase,
+    )
+
 @router.post("/{team_id}/github/select-repo", response_model=TeamResponse)
 async def select_github_repo(
     team_id: str,
@@ -148,6 +163,15 @@ async def invite_member(
     supabase: Client = Depends(get_supabase),
 ):
     return member_service.invite_user_to_team(team_id, body.email, body.role.value, current_user.id, supabase)
+
+
+@router.post("/{team_id}/members/accept", response_model=TeamMemberResponse)
+async def accept_invite(
+    team_id: str,
+    current_user=Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    return member_service.accept_team_invite(team_id, current_user.id, supabase)
 
 @router.patch("/{team_id}/members/{member_user_id}", response_model=TeamMemberResponse)
 async def update_member(

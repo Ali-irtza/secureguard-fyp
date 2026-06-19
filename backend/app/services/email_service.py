@@ -21,27 +21,30 @@ def send_team_invite_email(
     inviter_name: str,
     role: str,
     frontend_base_url: str,
+    team_id: str,
 ) -> bool:
     if not is_email_configured():
         print("[email] SMTP not configured; skipped team invite email")
         return False
 
     app_url = frontend_base_url.rstrip("/")
-    subject = f"You were added to {team_name} on SecureGuard"
+    accept_url = f"{app_url}/team?invite_team_id={team_id}"
+    subject = f"Invitation to join {team_name} on SecureGuard"
     plain_body = (
-        f"{inviter_name} added you to the SecureGuard team \"{team_name}\" as {role}.\n\n"
-        f"Open SecureGuard to view the team:\n{app_url}/team\n"
+        f"{inviter_name} invited you to join the SecureGuard team \"{team_name}\" as {role}.\n\n"
+        f"Accept the invitation here:\n{accept_url}\n"
     )
     html_body = f"""
     <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111827">
-      <h2 style="margin:0 0 12px">You were added to a SecureGuard team</h2>
-      <p>{escape(inviter_name)} added you to <strong>{escape(team_name)}</strong> as <strong>{escape(role)}</strong>.</p>
+      <h2 style="margin:0 0 12px">You were invited to a SecureGuard team</h2>
+      <p>{escape(inviter_name)} invited you to join <strong>{escape(team_name)}</strong> as <strong>{escape(role)}</strong>.</p>
       <p>
-        <a href="{escape(app_url)}/team"
+        <a href="{escape(accept_url)}"
            style="display:inline-block;background:#10b981;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:6px">
-          Open SecureGuard
+          Accept invitation
         </a>
       </p>
+      <p style="font-size:12px;color:#6b7280">If the button does not work, copy this link into your browser: {escape(accept_url)}</p>
     </div>
     """
 

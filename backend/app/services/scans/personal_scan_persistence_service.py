@@ -16,11 +16,12 @@ from app.services.scans.report_storage_service import build_pdf_report
 ARTIFACT_BUCKET = "scan-artifacts"
 REPORT_TTL_DAYS = 5
 SEVERITY_PENALTIES = {
-    "critical": 20,
-    "high": 10,
-    "medium": 5,
-    "low": 2,
+    "critical": 10,
+    "high": 6,
+    "medium": 3,
+    "low": 1,
 }
+MAX_WEIGHTED_RISK = 150
 
 
 def _now_iso() -> str:
@@ -88,13 +89,14 @@ def _normalized_vulnerabilities(vulnerabilities: list[dict]) -> list[dict]:
 
 
 def _health_score(counts: dict[str, int]) -> int:
-    penalty = (
+    weighted_risk = (
         counts["critical"] * SEVERITY_PENALTIES["critical"]
         + counts["high"] * SEVERITY_PENALTIES["high"]
         + counts["medium"] * SEVERITY_PENALTIES["medium"]
         + counts["low"] * SEVERITY_PENALTIES["low"]
     )
-    return max(0, 100 - penalty)
+    risk_percent = min(100, round((weighted_risk / MAX_WEIGHTED_RISK) * 100))
+    return max(0, 100 - risk_percent)
 
 
 def _risk_level(counts: dict[str, int]) -> str:
@@ -251,6 +253,58 @@ def _upload_bytes(supabase: Client, storage_path: str, content: bytes, content_t
 
 def _download_bytes(supabase: Client, storage_path: str) -> bytes:
     return supabase.storage.from_(ARTIFACT_BUCKET).download(storage_path)
+
+
+def _report_result_column(report_format: str) -> str:
+    return "report_csv_path" if report_format == "csv" else "report_pdf_path"
+
+
+def _default_report_storage_path(user_id: str, scan_id: str, report_id: str, report_format: str) -> str:
+    fmt = report_format if report_format in {"pdf", "csv"} else "pdf"
+    return f"users/{user_id}/scans/{scan_id}/reports/{report_id}.{fmt}"
+
+
+def _storage_object_exists(supabase: Client, storage_path: str) -> bool:
+    try:
+        _download_bytes(supabase, storage_path)
+        return True
+    except Exception:
+        return False
+
+
+def _recover_report_storage_path(supabase: Client, report: dict) -> str | None:
+    existing_path = report.get("report_storage_path")
+    if existing_path:
+        return existing_path
+
+    scan_id = report.get("scan_id")
+    user_id = report.get("user_id")
+    report_id = report.get("report_id")
+    fmt = report.get("report_format") or "pdf"
+    if not scan_id or not user_id or not report_id:
+        return None
+
+    result_row = _result_row_for_scan(supabase, scan_id)
+    result_column = _report_result_column(fmt)
+    result_path = result_row.get(result_column) if result_row else None
+    if result_path:
+        storage_path = result_path
+    else:
+        storage_path = _default_report_storage_path(user_id, scan_id, report_id, fmt)
+        if not _storage_object_exists(supabase, storage_path):
+            return None
+
+    supabase.table("reports").update(
+        {
+            "report_storage_path": storage_path,
+            "updated_at": _now_iso(),
+        }
+    ).eq("report_id", report_id).eq("user_id", user_id).execute()
+
+    if result_row and not result_row.get(result_column):
+        supabase.table("scan_results").update({result_column: storage_path}).eq("scan_id", scan_id).execute()
+
+    return storage_path
 
 
 def _build_result_json(
@@ -574,14 +628,12 @@ def get_scan_detail_new(supabase: Client, scan_id: str, user_id: str) -> dict:
         supabase.table("scan")
         .select("*")
         .eq("scan_id", scan_id)
-        .eq("user_id", user_id)
         .limit(1)
         .execute()
     )
-    scan_rows = scan_result.data or []
-    if not scan_rows:
+    scan = (scan_result.data or [None])[0]
+    if not _can_access_scan_project(supabase, user_id, scan):
         raise ValueError("Scan not found.")
-    scan = scan_rows[0]
     result_row = _result_row_for_scan(supabase, scan_id)
     result_payload = None
     if result_row and result_row.get("result_json_path"):
@@ -734,6 +786,46 @@ def _ensure_scan_report_metadata(supabase: Client, user_id: str, scan_id: str, p
     return (inserted.data or [None])[0]
 
 
+def _team_id_for_project(supabase: Client, project_id: str) -> str | None:
+    try:
+        result = (
+            supabase.table("team")
+            .select("team_id")
+            .eq("project_id", project_id)
+            .limit(1)
+            .execute()
+        )
+        row = (result.data or [None])[0]
+        return row.get("team_id") if row else None
+    except Exception:
+        return None
+
+
+def _create_critical_alert(
+    supabase: Client,
+    user_id: str,
+    project_id: str,
+    scan_id: str,
+    project_name: str | None,
+    critical_count: int,
+) -> None:
+    if critical_count <= 0:
+        return
+    try:
+        supabase.table("alerts").insert(
+            {
+                "user_id": user_id,
+                "scan_id": scan_id,
+                "team_id": _team_id_for_project(supabase, project_id),
+                "status": "open",
+                "message": f"{critical_count} critical issue{'' if critical_count == 1 else 's'} in {project_name or 'Scan'}",
+            }
+        ).execute()
+    except Exception:
+        # Some deployments have not created the alert workflow table yet.
+        return
+
+
 def save_scan_success(
     supabase: Client,
     user_id: str,
@@ -794,6 +886,7 @@ def save_scan_success(
 
     _update_project_health_score(supabase, project_id, health_score)
     _ensure_scan_report_metadata(supabase, user_id, scan_id, project.get("project_name"))
+    _create_critical_alert(supabase, user_id, project_id, scan_id, project.get("project_name"), counts["critical"])
 
     return {
         "scan_id": scan_id,
@@ -807,11 +900,13 @@ def save_scan_success(
 
 
 def _report_to_response(row: dict, scan_row: dict | None = None) -> dict:
+    project_type = (scan_row or {}).get("project_type")
     return {
         "id": row.get("report_id"),
         "scan_id": row.get("scan_id"),
         "user_id": row.get("user_id"),
         "name": row.get("report_name"),
+        "type": "team" if project_type == "team" else "personal",
         "format": row.get("report_format"),
         "status": "completed" if row.get("report_status") == "completed" else row.get("report_status"),
         "file_path": row.get("report_storage_path"),
@@ -820,6 +915,60 @@ def _report_to_response(row: dict, scan_row: dict | None = None) -> dict:
         "updated_at": row.get("updated_at"),
         "scans": scan_row,
     }
+
+
+def _active_team_ids_for_user(supabase: Client, user_id: str) -> list[str]:
+    result = (
+        supabase.table("team_members")
+        .select("team_id")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .execute()
+    )
+    return [row["team_id"] for row in result.data or [] if row.get("team_id")]
+
+
+def _team_project_ids_for_user(supabase: Client, user_id: str) -> set[str]:
+    team_ids = _active_team_ids_for_user(supabase, user_id)
+    if not team_ids:
+        return set()
+
+    teams_result = (
+        supabase.table("team")
+        .select("team_id, project_id")
+        .in_("team_id", team_ids)
+        .execute()
+    )
+    project_ids = {row["project_id"] for row in teams_result.data or [] if row.get("project_id")}
+
+    members_result = (
+        supabase.table("team_members")
+        .select("user_id")
+        .in_("team_id", team_ids)
+        .eq("status", "active")
+        .execute()
+    )
+    member_ids = list({row["user_id"] for row in members_result.data or [] if row.get("user_id")})
+    if member_ids:
+        projects_result = (
+            supabase.table("projects")
+            .select("project_id")
+            .eq("project_type", "team")
+            .in_("user_id", member_ids)
+            .execute()
+        )
+        project_ids.update(row["project_id"] for row in projects_result.data or [] if row.get("project_id"))
+
+    return project_ids
+
+
+def _can_access_scan_project(supabase: Client, user_id: str, scan: dict | None) -> bool:
+    if not scan:
+        return False
+    if scan.get("user_id") == user_id:
+        return True
+    project_id = scan.get("project_id")
+    return bool(project_id and project_id in _team_project_ids_for_user(supabase, user_id))
 
 
 def _backfill_missing_report_metadata(supabase: Client, user_id: str) -> None:
@@ -862,6 +1011,7 @@ def _backfill_missing_report_metadata(supabase: Client, user_id: str) -> None:
 
 
 def list_on_demand_reports(supabase: Client, user_id: str) -> list[dict]:
+    visible_project_ids = _team_project_ids_for_user(supabase, user_id)
     result = (
         supabase.table("reports")
         .select("*")
@@ -869,8 +1019,8 @@ def list_on_demand_reports(supabase: Client, user_id: str) -> list[dict]:
         .order("created_at", desc=True)
         .execute()
     )
-    reports = result.data or []
-    if not reports:
+    reports_by_id = {row["report_id"]: row for row in result.data or [] if row.get("report_id")}
+    if not reports_by_id:
         _backfill_missing_report_metadata(supabase, user_id)
         result = (
             supabase.table("reports")
@@ -879,7 +1029,29 @@ def list_on_demand_reports(supabase: Client, user_id: str) -> list[dict]:
             .order("created_at", desc=True)
             .execute()
         )
-        reports = result.data or []
+        reports_by_id = {row["report_id"]: row for row in result.data or [] if row.get("report_id")}
+
+    if visible_project_ids:
+        team_scans = (
+            supabase.table("scan")
+            .select("scan_id")
+            .in_("project_id", list(visible_project_ids))
+            .execute()
+        )
+        team_scan_ids = [row["scan_id"] for row in team_scans.data or [] if row.get("scan_id")]
+        if team_scan_ids:
+            team_reports = (
+                supabase.table("reports")
+                .select("*")
+                .in_("scan_id", team_scan_ids)
+                .order("created_at", desc=True)
+                .execute()
+            )
+            for row in team_reports.data or []:
+                if row.get("report_id"):
+                    reports_by_id[row["report_id"]] = row
+
+    reports = sorted(reports_by_id.values(), key=lambda row: row.get("created_at") or "", reverse=True)
     scan_ids = [row["scan_id"] for row in reports if row.get("scan_id")]
     scans_by_id = {}
     if scan_ids:
@@ -888,11 +1060,15 @@ def list_on_demand_reports(supabase: Client, user_id: str) -> list[dict]:
     project_ids = list({scan.get("project_id") for scan in scans_by_id.values() if scan.get("project_id")})
     projects_by_id = {}
     if project_ids:
-        project_result = supabase.table("projects").select("project_id,project_name").in_("project_id", project_ids).execute()
+        project_result = supabase.table("projects").select("project_id,project_name,project_type").in_("project_id", project_ids).execute()
         projects_by_id = {row["project_id"]: row for row in project_result.data or []}
 
     response = []
     for row in reports:
+        if not row.get("report_storage_path"):
+            recovered_path = _recover_report_storage_path(supabase, row)
+            if recovered_path:
+                row["report_storage_path"] = recovered_path
         scan = scans_by_id.get(row.get("scan_id"))
         scan_view = None
         if scan:
@@ -900,6 +1076,7 @@ def list_on_demand_reports(supabase: Client, user_id: str) -> list[dict]:
             project = projects_by_id.get(scan.get("project_id"))
             if project:
                 scan_view["project_name"] = project.get("project_name")
+                scan_view["project_type"] = project.get("project_type")
         response.append(_report_to_response(row, scan_view))
     return response
 
@@ -1006,11 +1183,20 @@ def get_on_demand_report(supabase: Client, report_id: str, user_id: str) -> dict
         supabase.table("reports")
         .select("*")
         .eq("report_id", report_id)
-        .eq("user_id", user_id)
         .single()
         .execute()
     )
     if not result.data:
+        raise ValueError("Report not found.")
+    scan_result = (
+        supabase.table("scan")
+        .select("*")
+        .eq("scan_id", result.data["scan_id"])
+        .limit(1)
+        .execute()
+    )
+    scan = (scan_result.data or [None])[0]
+    if result.data.get("user_id") != user_id and not _can_access_scan_project(supabase, user_id, scan):
         raise ValueError("Report not found.")
     return result.data
 
@@ -1023,6 +1209,10 @@ def download_on_demand_report(supabase: Client, report_id: str, user_id: str, re
         raise ValueError("Report format must be pdf or csv.")
 
     result_row = _result_row_for_scan(supabase, report["scan_id"])
+    if not storage_path:
+        storage_path = _recover_report_storage_path(supabase, report)
+        if storage_path:
+            report["report_storage_path"] = storage_path
     if result_row and result_row.get("result_json_path"):
         result_payload = _load_result_json(supabase, result_row["result_json_path"])
         if fmt == "pdf":
@@ -1034,7 +1224,8 @@ def download_on_demand_report(supabase: Client, report_id: str, user_id: str, re
             content_type = "text/csv; charset=utf-8"
             result_column = "report_csv_path"
 
-        storage_path = f"users/{user_id}/scans/{report['scan_id']}/reports/{report_id}.{fmt}"
+        owner_id = report.get("user_id") or user_id
+        storage_path = f"users/{owner_id}/scans/{report['scan_id']}/reports/{report_id}.{fmt}"
         _upload_bytes(supabase, storage_path, content, content_type)
         expires_at = (datetime.now(timezone.utc) + timedelta(days=REPORT_TTL_DAYS)).isoformat()
         (
@@ -1048,7 +1239,6 @@ def download_on_demand_report(supabase: Client, report_id: str, user_id: str, re
                 }
             )
             .eq("report_id", report_id)
-            .eq("user_id", user_id)
             .execute()
         )
         (
@@ -1081,7 +1271,8 @@ def download_corrected_code_zip(supabase: Client, report_id: str, user_id: str) 
     if result.data.get("result_json_path"):
         result_payload = _load_result_json(supabase, result.data["result_json_path"])
         content = _build_code_zip_from_result(result_payload)
-        storage_path = result.data.get("corrected_code_zip_path") or f"users/{user_id}/scans/{report['scan_id']}/corrected_code.zip"
+        owner_id = report.get("user_id") or user_id
+        storage_path = result.data.get("corrected_code_zip_path") or f"users/{owner_id}/scans/{report['scan_id']}/corrected_code.zip"
         _upload_bytes(supabase, storage_path, content, "application/zip")
         (
             supabase.table("scan_results")
@@ -1100,13 +1291,13 @@ def download_corrected_code_zip(supabase: Client, report_id: str, user_id: str) 
 def build_scan_pdf_for_user(supabase: Client, scan_id: str, user_id: str) -> bytes:
     scan_result = (
         supabase.table("scan")
-        .select("scan_id")
+        .select("*")
         .eq("scan_id", scan_id)
-        .eq("user_id", user_id)
         .limit(1)
         .execute()
     )
-    if not scan_result.data:
+    scan = (scan_result.data or [None])[0]
+    if not _can_access_scan_project(supabase, user_id, scan):
         raise ValueError("Scan not found.")
     result_row = _result_row_for_scan(supabase, scan_id)
     if not result_row or not result_row.get("result_json_path"):
@@ -1116,6 +1307,8 @@ def build_scan_pdf_for_user(supabase: Client, scan_id: str, user_id: str) -> byt
 
 def delete_on_demand_report(supabase: Client, report_id: str, user_id: str) -> str:
     report = get_on_demand_report(supabase, report_id, user_id)
+    if report.get("user_id") != user_id:
+        raise ValueError("Only the report owner can delete this report.")
     storage_path = report.get("report_storage_path")
     if storage_path:
         supabase.storage.from_(ARTIFACT_BUCKET).remove([storage_path])

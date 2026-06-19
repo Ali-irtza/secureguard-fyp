@@ -17,6 +17,7 @@ from app.models.project_files import (
     ProjectSourceFile,
     ProjectSourceFilesResponse,
 )
+from app.services.teams.team_service import require_member
 
 STORAGE_BUCKET = "project-files"
 SIGNED_URL_EXPIRY_SECONDS = 3600
@@ -89,6 +90,18 @@ def _require_project(project_id: str, user_id: str, supabase: Client) -> dict:
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if result.data["user_id"] != user_id:
+        if result.data.get("project_type") == "team":
+            team_result = (
+                supabase.table("team")
+                .select("team_id")
+                .eq("project_id", project_id)
+                .limit(1)
+                .execute()
+            )
+            team = (team_result.data or [None])[0]
+            if team:
+                require_member(team["team_id"], user_id, supabase)
+                return result.data
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not own this project")
     return result.data
 
