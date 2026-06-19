@@ -69,6 +69,39 @@ def extract_json_object(text: str) -> dict:
         return {}
 
 
+def extract_partial_json_string(text: str, key: str) -> str:
+    """Decode a JSON string value while its closing quote may not exist yet."""
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*"', text)
+    if not match:
+        return ""
+    value = text[match.end():]
+    escaped = False
+    output: list[str] = []
+    escape_map = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\", "/": "/"}
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if escaped:
+            if char == "u" and index + 4 < len(value):
+                codepoint = value[index + 1:index + 5]
+                try:
+                    output.append(chr(int(codepoint, 16)))
+                    index += 4
+                except ValueError:
+                    pass
+            else:
+                output.append(escape_map.get(char, char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            break
+        else:
+            output.append(char)
+        index += 1
+    return "".join(output)
+
+
 def first_sentence(text: str) -> str:
     text = " ".join(str(text or "").split())
     if not text:
@@ -634,6 +667,36 @@ def generate_corrected_code_for_file(state: AnalyzerState, vulnerabilities: list
     return corrected_code, response
 
 
+def iter_corrected_code_events(state: AnalyzerState, vulnerabilities: list[dict], source_code: str):
+    stream = iter_model_response(
+        prepare_code_prompt({**state, "vulnerabilities": vulnerabilities}),
+        f"Generate corrected {state['language']} source code. Ensure none of the listed CWE issues remain:\n\n```{state['language'].lower()}\n{source_code}\n```",
+        required_key="corrected_code",
+    )
+    response = ""
+    last_snapshot = ""
+    while True:
+        try:
+            event = next(stream)
+            if event.get("event") != "model_delta":
+                continue
+            response += event.get("text", "")
+            snapshot = extract_partial_json_string(response, "corrected_code")
+            if snapshot != last_snapshot:
+                last_snapshot = snapshot
+                yield {"event": "correction_delta", "corrected_code": snapshot}
+        except StopIteration as done:
+            final_response, error = done.value or ("", "Security model did not return a response.")
+            corrected_code = extract_json_object(final_response).get("corrected_code", "")
+            yield {
+                "event": "_correction_complete",
+                "corrected_code": corrected_code or source_code,
+                "response": final_response,
+                "error": error,
+            }
+            return
+
+
 def static_analyzer_node(state: AnalyzerState) -> AnalyzerState:
     findings = analyze_file(state["file_path"])
     original_code = Path(state["file_path"]).read_text(encoding="utf-8", errors="replace")
@@ -889,11 +952,23 @@ def run_analysis(file_name: str, source_code: str) -> dict:
         for chunk_output, chunk in zip(chunk_outputs, chunks):
             chunk_vulns = chunk_output["vulnerabilities"]
             if chunk_vulns:
-                corrected_chunk, _ = generate_corrected_code_for_file(
-                    state,
-                    chunk_vulns,
-                    chunk.get("display_code", chunk.get("content", "")),
-                )
+                corrected_chunk = ""
+                correction_error = ""
+                source_chunk = chunk.get("display_code", chunk.get("content", ""))
+                for correction_event in iter_corrected_code_events(state, chunk_vulns, source_chunk):
+                    if correction_event.get("event") == "correction_delta":
+                        yield {
+                            **correction_event,
+                            "file_path": file_name,
+                            "chunk_index": chunk["index"],
+                        }
+                    elif correction_event.get("event") == "_correction_complete":
+                        corrected_chunk = correction_event.get("corrected_code", source_chunk)
+                        correction_error = correction_event.get("error", "")
+                if correction_error:
+                    if "timeout" in correction_error.lower():
+                        raise TimeoutError(correction_error)
+                    raise RuntimeError(correction_error)
             else:
                 corrected_chunk = chunk.get("display_code", chunk.get("content", ""))
             chunk_output["corrected_code"] = corrected_chunk
@@ -1040,11 +1115,23 @@ def iter_analysis_events(file_name: str, source_code: str):
             }
             chunk_vulns = chunk_output["vulnerabilities"]
             if chunk_vulns:
-                corrected_chunk, _ = generate_corrected_code_for_file(
-                    state,
-                    chunk_vulns,
-                    chunk.get("display_code", chunk.get("content", "")),
-                )
+                corrected_chunk = ""
+                correction_error = ""
+                source_chunk = chunk.get("display_code", chunk.get("content", ""))
+                for correction_event in iter_corrected_code_events(state, chunk_vulns, source_chunk):
+                    if correction_event.get("event") == "correction_delta":
+                        yield {
+                            **correction_event,
+                            "file_path": file_name,
+                            "chunk_index": chunk["index"],
+                        }
+                    elif correction_event.get("event") == "_correction_complete":
+                        corrected_chunk = correction_event.get("corrected_code", source_chunk)
+                        correction_error = correction_event.get("error", "")
+                if correction_error:
+                    if "timeout" in correction_error.lower():
+                        raise TimeoutError(correction_error)
+                    raise RuntimeError(correction_error)
             else:
                 corrected_chunk = chunk.get("display_code", chunk.get("content", ""))
             chunk_output["corrected_code"] = corrected_chunk

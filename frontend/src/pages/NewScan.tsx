@@ -1042,17 +1042,11 @@ const NewScan = () => {
       case "correction_started":
         addLog(event.message, "info");
         break;
+      case "correction_delta":
+        updateCorrectedChunk(event.file_path, event.chunk_index, event.corrected_code);
+        break;
       case "correction_result":
-        {
-          const lines = event.corrected_code.split(/\r?\n/);
-          updateCorrectedChunk(event.file_path, event.chunk_index, "");
-          lines.forEach((_line, index) => {
-            const timer = window.setTimeout(() => {
-              updateCorrectedChunk(event.file_path, event.chunk_index, lines.slice(0, index + 1).join("\n"));
-            }, Math.min(index * 18, 900));
-            correctionTimersRef.current.push(timer);
-          });
-        }
+        updateCorrectedChunk(event.file_path, event.chunk_index, event.corrected_code);
         addLog(`Corrected code streamed for ${event.file_path}: chunk ${event.chunk_index}`, "success");
         break;
       case "scan_result":

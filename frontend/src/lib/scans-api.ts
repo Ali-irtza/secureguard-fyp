@@ -185,6 +185,7 @@ export type ScanStreamEvent =
   | { event: "model_delta"; file_path: string; chunk_index: number; text: string }
   | { event: "chunk_result"; file_path: string; chunk: ChunkOutput }
   | { event: "correction_started"; file_path: string; chunk_index: number; message: string }
+  | { event: "correction_delta"; file_path: string; chunk_index: number; corrected_code: string }
   | { event: "correction_result"; file_path: string; chunk_index: number; corrected_code: string }
   | { event: "scan_result"; result: ScanResult }
   | { event: "error"; status_code?: number; message: string };
