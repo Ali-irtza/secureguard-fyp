@@ -66,7 +66,9 @@ export const GlobalScanActivityToast = () => {
   const openActiveScan = () => {
     if (activity.status !== "running") return;
     navigate(activity.activePath ?? "/new-scan?resumeScan=1");
-    window.dispatchEvent(new CustomEvent("secureguard:resume-scan-view"));
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("secureguard:resume-scan-view"));
+    }, 0);
   };
   const cancelActiveScan = async () => {
     window.dispatchEvent(new CustomEvent("secureguard:cancel-active-scan"));

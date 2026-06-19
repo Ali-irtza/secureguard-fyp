@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment, type Dispatch, type SetStateAction } from "react";
 import { useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -88,6 +88,54 @@ import {
 import { cn } from "@/lib/utils";
 import { CodeViewer } from "@/components/scan/CodeViewer";
 import { ScanningProgress } from "@/components/scan/ScanningProgress";
+
+const LIVE_SCAN_STATE_KEY = "secureguard.liveScanView";
+const LIVE_SCAN_STATE_EVENT = "secureguard:live-scan-state";
+
+const readLiveScanField = <T,>(field: string, fallback: T): T => {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(LIVE_SCAN_STATE_KEY) || "{}")[field];
+    return value === undefined ? fallback : value as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const useLiveScanState = <T,>(field: string, initialValue: T): [T, Dispatch<SetStateAction<T>>] => {
+  const [value, setValue] = useState<T>(() => readLiveScanField(field, initialValue));
+
+  useEffect(() => {
+    const sync = (event: Event) => {
+      const detail = (event as CustomEvent<{ field: string; value: T }>).detail;
+      if (detail?.field === field) setValue(detail.value);
+    };
+    window.addEventListener(LIVE_SCAN_STATE_EVENT, sync);
+    return () => window.removeEventListener(LIVE_SCAN_STATE_EVENT, sync);
+  }, [field]);
+
+  const update = useCallback<Dispatch<SetStateAction<T>>>((nextValue) => {
+    // Persist before asking React to render. Scan requests intentionally keep
+    // running after this page unmounts, and React may ignore an updater queued
+    // for an unmounted component. Writing here preserves streamed/final data so
+    // reopening the scan restores vulnerabilities and corrected code.
+    const current = readLiveScanField(field, initialValue);
+    const resolved = typeof nextValue === "function"
+      ? (nextValue as (previous: T) => T)(current)
+      : nextValue;
+    try {
+      const stored = JSON.parse(window.sessionStorage.getItem(LIVE_SCAN_STATE_KEY) || "{}");
+      window.sessionStorage.setItem(LIVE_SCAN_STATE_KEY, JSON.stringify({ ...stored, [field]: resolved }));
+    } catch {
+      // The in-memory state still works if browser storage is unavailable.
+    }
+    setValue(resolved);
+    window.dispatchEvent(new CustomEvent(LIVE_SCAN_STATE_EVENT, { detail: { field, value: resolved } }));
+  }, [field, initialValue]);
+
+  return [value, update];
+};
+
+const clearLiveScanState = () => window.sessionStorage.removeItem(LIVE_SCAN_STATE_KEY);
 import { FileUploadArea } from "@/components/scan/FileUploadArea";
 import { toast } from "sonner";
 import { addLocalNotification, getNotificationPreferences } from "@/lib/notifications";
@@ -322,9 +370,9 @@ const NewScan = () => {
   const [searchParams] = useSearchParams();
   const autoStartRef = useRef(false);
   const [activeTab, setActiveTab] = useState("upload");
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanComplete, setScanComplete] = useState(false);
-  const [showLiveScan, setShowLiveScan] = useState(true);
+  const [isScanning, setIsScanning] = useLiveScanState("isScanning", false);
+  const [scanComplete, setScanComplete] = useLiveScanState("scanComplete", false);
+  const [showLiveScan, setShowLiveScan] = useLiveScanState("showLiveScan", true);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [fileContent, setFileContent] = useState<string>("");
@@ -719,10 +767,10 @@ const NewScan = () => {
   }, [activeTab, branch, isTeamMode, selectedApiTeam?.github_repo, selectedApiTeam?.github_branches, selectedApiTeam?.id]);
    
   // Scanning state
-  const [currentPhase, setCurrentPhase] = useState(0);
-  const [currentLine, setCurrentLine] = useState(0);
-  const [codeLines, setCodeLines] = useState<CodeLine[]>([]);
-  const [stats, setStats] = useState({
+  const [currentPhase, setCurrentPhase] = useLiveScanState("currentPhase", 0);
+  const [currentLine, setCurrentLine] = useLiveScanState("currentLine", 0);
+  const [codeLines, setCodeLines] = useLiveScanState<CodeLine[]>("codeLines", []);
+  const [stats, setStats] = useLiveScanState("stats", {
     linesScanned: 0,
     totalLines: 0,
     vulnerabilitiesFound: 0,
@@ -739,12 +787,12 @@ const NewScan = () => {
   const correctionTimersRef = useRef<number[]>([]);
 
   // New scan result state
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanResult, setScanResult] = useLiveScanState<ScanResult | null>("scanResult", null);
   const [selectedVulnerability, setSelectedVulnerability] = useState<VulnerabilityDetail | null>(null);
   const [branchFiles, setBranchFiles] = useState<string[]>([]);
-  const [scanError, setScanError] = useState<string>("");
-  const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
-  const [streamingChunks, setStreamingChunks] = useState<ChunkOutput[]>([]);
+  const [scanError, setScanError] = useLiveScanState<string>("scanError", "");
+  const [thinkingSteps, setThinkingSteps] = useLiveScanState<string[]>("thinkingSteps", []);
+  const [streamingChunks, setStreamingChunks] = useLiveScanState<ChunkOutput[]>("streamingChunks", []);
   const displayedChunks = streamingChunks.length ? streamingChunks : scanResult?.chunk_outputs ?? [];
   const openChunkItems = displayedChunks.map((chunk) => `${chunk.file_path}-${chunk.chunk_index}`);
 
@@ -1151,9 +1199,16 @@ const NewScan = () => {
     };
   });
 
+  useEffect(() => {
+    if (searchParams.get("resumeScan") === "1") {
+      setShowLiveScan(true);
+    }
+  }, [searchParams, setShowLiveScan]);
+
   const handleStartScan = async () => {
     const isAutoRescan = searchParams.get("autoStart") === "1";
     let globalScanActivityId: string | null = null;
+    clearLiveScanState();
     scanAbortRef.current = false;
     scanAbortControllerRef.current = new AbortController();
     scanStartedAtRef.current = Date.now();
@@ -1783,6 +1838,7 @@ const NewScan = () => {
       vulnerabilitiesFound: 0,
       elapsedTime: 0,
     });
+    clearLiveScanState();
   };
 
   const githubReady = isTeamMode
